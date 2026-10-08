@@ -1,0 +1,9 @@
+// Copyright 2026 Alessandro Masat
+// SPDX-License-Identifier: Apache-2.0
+
+// tools/nvrtc/shim_include/type_traits — see cstddef in this directory for the
+// rationale (libcu++ re-export shim, NVRTC-safe substitute for the real
+// libstdc++ header).
+#pragma once
+#include <cuda/std/type_traits>
+namespace std { using namespace ::cuda::std; }

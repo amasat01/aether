@@ -1,0 +1,22 @@
+# aether docs — doxygen warning allowlist.
+#
+# tests/docs/check_docs.sh requires every warning `doxygen` emits over
+# aether/aether/** to be EXACTLY one of the lines below, after normalizing
+# the WARN_LOGFILE path to be relative to the repo root (i.e. stripping
+# everything through and including the checkout's own root directory, so
+# an entry reads "aether/<path>:<line>: warning: ..." regardless of where
+# the tree is checked out). A warning not in this set = RED (a new/regressed
+# warning). An allowlist line with no matching warning is NOT itself a
+# failure (the gate is a subset check, "warnings ⊆ allowlist") — but
+# re-mint this file by hand if a fix below lands.
+#
+# Each entry is preceded by a one-line reason. Blank lines and '#' lines
+# are ignored by the matcher.
+#
+# Previously allowlisted here (doxygen 1.9.1's `requires`-own-line parse
+# confusion at the bundle loader and `aether::math::fma`, and its inability
+# to resolve the enclosing scope for the `std::numeric_limits<BandedReal>`
+# specialization): all three are now silenced at the source with a
+# doc-only `\cond`/`\endcond` guard around the affected declaration (no
+# behavioural change — see the guarded blocks in LoadStore.h, math.h and
+# BandedLimits.h), so no entries remain.

@@ -1,0 +1,50 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+#
+# CPU-only CI: the C++ (CPP_MODE) arms, debug and release. The CUDA arms
+# need an actual GPU runner and a CUDA toolchain; GitHub-hosted `ubuntu-latest`
+# has neither, so they are NOT wired here. They belong on a self-hosted GPU
+# runner when one exists.
+
+name: CI
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-cpp:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        debug_mode: ["ON", "OFF"]
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v7
+
+      # C++23 (aether's cxx_std_23 requirement): ubuntu-latest (24.04) carries
+      # gcc-13 as its default toolchain major; installed explicitly so the
+      # compiler version is pinned rather than whatever "latest" resolves to.
+      # OpenMP (find_package(OpenMP REQUIRED)) ships with g++, no extra package.
+      - run: sudo apt-get update && sudo apt-get install -y g++-13
+
+      # Same variables the Makefile's cpp arm configures with
+      # (AETHER_CPP_MODE=ON), plus AETHER_WARN_AS_ERR=ON.
+      - run: |
+          cmake -B build \
+            -DFETCHCONTENT_QUIET=ON \
+            -DAETHER_BUILD_TESTS=ON \
+            -DAETHER_WARN_AS_ERR=ON \
+            -DAETHER_DEBUG_MODE=${{ matrix.debug_mode }} \
+            -DAETHER_CPP_MODE=ON .
+
+      - run: cmake --build build -j"$(nproc)"
+
+      # Never the binary bare — check_gate.sh is the suite-integrity gate
+      # (manifest-backed, not a vacuous pass/fail count). Same command the
+      # Makefile's `test` target runs.
+      - run: tests/check_gate.sh cpp build/tests/aether_tests

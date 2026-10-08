@@ -1,0 +1,32 @@
+# Host-only payload manifest — committed, sorted, one path per line, same
+# discipline as payload_headers.txt (and the test-count manifests): a
+# manifest, not a directory walk.
+#
+# These headers are sealed into the SAME payload as payload_headers.txt's
+# NVRTC-clean set, but are a SEPARATE section: never claimed NVRTC-clean,
+# never handed to an NVRTC compile at all (`Payload.device_headers` excludes
+# every name listed here; only `Payload.headers`/`Payload.serve()`, the HOST
+# `-I` path, carries them). Growing this manifest does not touch the NVRTC
+# gate (`aether/tools/rtc_seal_check.py`, `aether_dsc._rtc_check
+# .manifest_paths`) at all — a wholly separate list, checked by nothing but
+# "does this file exist under the aether root being sealed".
+#
+# Ground truth: the real dependency closure of
+# `aether/math/detail/HostVectorMath.h` under `-DAETHER_HOST_VECTOR_MATH`,
+# measured via a real `g++ -MD` build of a hawk-emitted host
+# kernel (`osc_step`-shaped) with hawk's own host flags
+# (`hawk.compile.toolchain.host_flags()`) against a real aether checkout —
+# not a directory walk. `HostVectorMathRoute.h` (already in
+# payload_headers.txt) `#include`s `HostVectorMath.h` only when
+# `AETHER_HOST_VECTOR_MATH` is defined and the pass is not `__CUDACC__`, so
+# NVRTC never reaches these headers through any real include chain either;
+# the exclusion here is belt-and-braces, not a response to an NVRTC failure
+# ever observed.
+aether/backend/cpu/simd/math/PacketArcTrig.h
+aether/backend/cpu/simd/math/PacketExpLog.h
+aether/backend/cpu/simd/math/PacketHyperbolic.h
+aether/backend/cpu/simd/math/PacketMathCore.h
+aether/backend/cpu/simd/math/PacketMisc.h
+aether/backend/cpu/simd/math/PacketRounding.h
+aether/backend/cpu/simd/math/PacketSinCos.h
+aether/math/detail/HostVectorMath.h

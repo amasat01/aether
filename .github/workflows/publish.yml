@@ -1,0 +1,159 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+#
+# Publish aether-dsc to PyPI through a Trusted Publisher (PyPI pending
+# publisher: owner amasat01, GitHub environment "pypi"). No tokens, no
+# secrets.
+#
+# Trigger: pushing a tag `v*` builds, checks, tests AND publishes.
+# `workflow_dispatch` builds, checks and tests but never publishes.
+#
+# aether-dsc is pure Python (setuptools) — one sdist + one py3-none-any
+# wheel — but its payload is NOT source: `python -m aether_dsc.seal` must
+# run before the build, sealing THIS checkout's aether headers (manifest
+# `aether_dsc/payload_headers.txt`) plus the sibling eagle checkout's
+# `plugin/gref_layout.h` / `plugin/gref_abi.h` into a digest-named blob
+# under `aether_dsc/_payload/` (gitignored dev-time output — a wheel built
+# without sealing first ships with no payload and fails at import). Sealing
+# also runs the NVRTC-clean gate over every device-reachable header, so the
+# job needs `cuda-bindings` + `nvidia-cuda-nvrtc-cu12` + `nvidia-cuda-cccl-cu12`
+# from PyPI (a GitHub runner has no CUDA toolkit, so the CCCL `cuda/std`
+# headers the gate compiles against come from the pip wheel too) — NVRTC
+# only compiles (to PTX), so this needs no GPU and no driver.
+#
+# Release order across the family: raptor-core and aether-dsc publish FIRST
+# (hawk depends on aether-dsc) — see CONTRIBUTING.md "Releasing".
+
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: aether
+
+      # The sibling eagle checkout `seal()` reads plugin/gref_layout.h and
+      # plugin/gref_abi.h from (host path only — NVRTC itself is served an
+      # alias). Default branch: the tag being published is aether's, not
+      # eagle's. eagle is a public repository, so the default GITHUB_TOKEN
+      # reads it; no secret is involved.
+      - uses: actions/checkout@v7
+        with:
+          repository: amasat01/eagle
+          path: eagle
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --quiet build "cuda-bindings" "nvidia-cuda-nvrtc-cu12" "nvidia-cuda-cccl-cu12"
+
+      - name: Seal this checkout's AETHER payload (NVRTC-clean gate included)
+        run: cd aether/dsc && python -m aether_dsc.seal
+
+      - run: cd aether/dsc && python -m build --outdir ../../dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aether-dsc-dist
+          path: dist/
+
+  check:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aether-dsc-dist
+          path: dist
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet "twine>=6" packaging
+      - run: python -m twine check --strict dist/*
+      - name: tag == version guard
+        if: github.ref_type == 'tag'
+        run: |
+          python - <<'EOF'
+          import glob, os
+          from packaging.utils import parse_wheel_filename
+          whl = glob.glob("dist/*.whl")[0]
+          _, version, _, _ = parse_wheel_filename(os.path.basename(whl))
+          tag = os.environ["GITHUB_REF_NAME"]
+          assert tag.startswith("v"), f"tag {tag!r} does not start with 'v'"
+          want = tag[1:]
+          got = str(version)
+          assert got == want, f"tag v{want} != package version {got} ({whl})"
+          print(f"OK: tag v{want} == package version {got}")
+          EOF
+      - name: The wheel carries a sealed payload, not readable aether source
+        run: |
+          python -m pip install --quiet dist/*.whl
+          python - <<'EOF'
+          import aether_dsc, pathlib
+          p = aether_dsc.payload()
+          assert p.headers, "sealed payload is empty"
+          src = pathlib.Path(aether_dsc.__file__).parent
+          for name in ("aether/typedefs.h",):
+              f = src / name
+              assert not f.exists(), f"wheel ships readable source {f}"
+          print(f"OK: sealed payload digest={p.digest[:16]}... headers={len(p.headers)}")
+          EOF
+
+  test-wheel:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aether-dsc-dist
+          path: dist
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Fresh venv, install the released wheel, pip check, import smoke
+        run: |
+          python -m venv venv
+          . venv/bin/activate
+          pip install --quiet --no-index --find-links dist aether-dsc
+          pip check
+          python - <<'EOF'
+          import aether_dsc
+          p = aether_dsc.payload()
+          assert p.headers and p.digest
+          with p.serve() as include_root:
+              assert (include_root / "aether" / "typedefs.h").exists()
+          print(f"OK: {len(p.headers)} headers, digest={p.digest[:16]}...")
+          EOF
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [check, test-wheel]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/aether-dsc
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aether-dsc-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          packages-dir: dist/

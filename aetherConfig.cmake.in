@@ -1,0 +1,18 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+
+@PACKAGE_INIT@
+
+# aether rules FTZ/fast-math (and any other per-consumer accuracy invariant)
+# per-harness, not per-package: this file carries no FATAL_ERROR build-flag
+# gate.
+
+# A CUDA-mode install hands the CUDA headers to C++ consumers through
+# CUDA::toolkit, so that target must exist before the exported one is read.
+if (NOT @AETHER_CPP_MODE@)
+  include(CMakeFindDependencyMacro)
+  find_dependency(CUDAToolkit)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+check_required_components("@PROJECT_NAME@")

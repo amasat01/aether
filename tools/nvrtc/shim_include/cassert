@@ -1,0 +1,9 @@
+// Copyright 2026 Alessandro Masat
+// SPDX-License-Identifier: Apache-2.0
+
+// tools/nvrtc/shim_include/cassert — see cstddef in this directory for the
+// rationale. Unlike the other shims, cuda/std/cassert defines the plain
+// (non-namespaced) `assert` macro directly, so no ::std re-export is
+// needed or possible here.
+#pragma once
+#include <cuda/std/cassert>

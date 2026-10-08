@@ -1,0 +1,8 @@
+// NVRTC profile shim: NVRTC (parsed by __CUDACC_RTC__) has no host
+// C++ standard library, so aether's payload headers reach <type_traits> through
+// this shim instead: the CCCL wheel's device-usable cuda::std::type_traits,
+// re-exported into ::std so aether's ordinary `std::` spellings resolve
+// unchanged. Served only under NVRTC (payload name "rtc/type_traits");
+// nvcc and g++ TUs use the real system <type_traits> and never see this file.
+#include <cuda/std/type_traits>
+namespace std { using namespace cuda::std; }

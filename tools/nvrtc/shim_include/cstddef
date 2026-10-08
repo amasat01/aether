@@ -1,0 +1,18 @@
+// Copyright 2026 Alessandro Masat
+// SPDX-License-Identifier: Apache-2.0
+
+// tools/nvrtc/shim_include/cstddef — NVRTC-safe substitute for libstdc++'s
+// <cstddef>. See tools/nvrtc/README.md for why this exists: NVRTC ships no
+// C++ standard library at all (confirmed via nvrtc.h's own doc comment —
+// it "provides builtin definitions of std::move/std::forward/
+// std::initializer_list" ONLY), and pointing --include-path at a REAL
+// glibc/libstdc++ tree does not work either (libstdc++ headers need GNU
+// compiler builtin macros like __SIZE_TYPE__ that NVRTC's frontend never
+// defines — confirmed by experiment, not a missing-path problem). The CUDA
+// toolkit's own libcu++ (<cuda/std/...>) is NVRTC-safe by design (it
+// branches on _CCCL_COMPILER(NVRTC) internally); this shim just makes the
+// bare header name resolve and re-exports its symbols into ::std so
+// aether's own unqualified std:: usage keeps working unmodified.
+#pragma once
+#include <cuda/std/cstddef>
+namespace std { using namespace ::cuda::std; }

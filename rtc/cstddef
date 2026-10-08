@@ -1,0 +1,8 @@
+// NVRTC profile shim: NVRTC (parsed by __CUDACC_RTC__) has no host
+// C++ standard library, so aether's payload headers reach <cstddef> through
+// this shim instead: the CCCL wheel's device-usable cuda::std::cstddef,
+// re-exported into ::std so aether's ordinary `std::` spellings resolve
+// unchanged. Served only under NVRTC (payload name "rtc/cstddef");
+// nvcc and g++ TUs use the real system <cstddef> and never see this file.
+#include <cuda/std/cstddef>
+namespace std { using namespace cuda::std; }

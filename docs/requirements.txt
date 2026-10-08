@@ -1,0 +1,21 @@
+# docs/requirements.txt — pins the Sphinx toolchain `docs/Makefile` /
+# tests/docs/check_docs.sh build against. Versions match what is actually
+# installed in the dev environment (verified via `python3 -m pip show
+# <pkg>`) — pin here rather than letting a future install drift
+# under the wrong `sphinx-build` on PATH (a user-site
+# `~/.local/bin/sphinx-build` shadows this one with an older Sphinx;
+# invoke via `python3 -m sphinx` instead of the bare `sphinx-build`
+# command). `doxygen` itself is a system binary, not a pip package.
+Sphinx==8.2.3
+sphinx-book-theme==1.2.0
+myst-nb==1.4.0
+breathe==4.36.0
+sphinx-design==0.7.0
+sphinx-copybutton==0.5.2
+sphinx-autodoc-typehints==3.5.2
+# Local notebook execution (`make nbexec`) only — CI never executes
+# notebooks (nb_execution_mode = "off" in conf.py), but these are listed
+# here rather than in a second file since this is the one requirements
+# file `docs.yml` installs from.
+nbval==0.11.0
+ipykernel==7.2.0

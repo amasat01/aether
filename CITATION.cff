@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use aether, please cite it using the metadata below."
+type: software
+title: "aether"
+abstract: "Header-only C++23/CUDA numerics core: typed tensor views, expression templates, a dual-mode (GPU or CPU) evaluator, device-legal scalar math and banded emulated double precision."
+authors:
+  - family-names: "Masat"
+    given-names: "Alessandro"
+version: "0.2.0"
+date-released: "2026-10-02"
+license: Apache-2.0
+repository-code: "https://github.com/amasat01/aether"
+# doi: "10.5281/zenodo.XXXXXXX"   # filled in after the first Zenodo archive of the tagged release
+keywords:
+  - CUDA
+  - GPU
+  - header-only
+  - expression templates
+  - emulated double precision

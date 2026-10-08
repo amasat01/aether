@@ -1,0 +1,63 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+#
+# Builds the Sphinx+Doxygen/breathe docs site and deploys it to GitHub
+# Pages on push to main. Tutorial/example notebooks are executed LOCALLY
+# (`make -C docs nbexec`) and committed WITH their outputs — this workflow
+# only checks they were (`make nbcheck`), it never executes them itself
+# (conf.py sets `nb_execution_mode = "off"`), so no GPU/CUDA toolchain is
+# needed here. Does not touch ci.yml's build/test jobs.
+
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r docs/requirements.txt
+
+      # Refuses to proceed unless every tutorial/example notebook cell
+      # already ran clean — notebooks are executed locally, not in CI.
+      - run: make -C docs nbcheck
+
+      # doxygen (breathe's XML source) + sphinx -W --keep-going: 0 warnings.
+      - run: make -C docs strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

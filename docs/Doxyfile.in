@@ -1,0 +1,72 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+
+# docs/Doxyfile.in — aether Doxygen configuration.
+#
+# Deliberately MINIMAL: every option Doxygen does not see here falls back to
+# its own built-in default. `make docs`/`make html` runs `doxygen` first
+# (this file, XML only consumed by breathe) and then Sphinx, which renders
+# the C++ API reference as breathe pages under docs/content/api/ instead of
+# linking the raw Doxygen HTML. See docs/overview.md for the folder map
+# this points at.
+
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "aether"
+PROJECT_BRIEF          = "GPU-accelerated header-only tensor/expression-template core (RAPTOR family protocol spine consumer)"
+OUTPUT_DIRECTORY       = _doxybuild
+CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
+
+# aether is header-only C++23; CUDA sources use the .h/.cu extensions this
+# repo actually uses (see tests/CMakeLists.txt's own glob).
+INPUT                  = ../aether ./overview.md
+FILE_PATTERNS          = *.h *.cu *.md
+RECURSIVE               = YES
+EXTENSION_MAPPING       = cu=c++
+
+USE_MDFILE_AS_MAINPAGE = overview.md
+MARKDOWN_SUPPORT       = YES
+
+# Only the AETHER_-prefixed macro surface is the documented API
+# vocabulary; extraction stays conservative (documented entities only —
+# "pointers not prose" applies to the overview page, not a mandate to
+# extract everything undocumented).
+EXTRACT_ALL             = NO
+EXTRACT_PRIVATE         = NO
+EXTRACT_STATIC          = NO
+HIDE_UNDOC_MEMBERS      = YES
+HIDE_UNDOC_CLASSES      = YES
+
+GENERATE_HTML           = NO
+GENERATE_LATEX          = NO
+GENERATE_XML            = YES
+XML_PROGRAMLISTING      = NO
+
+QUIET                   = YES
+WARN_IF_UNDOCUMENTED    = NO
+# The docs gate (tests/docs/check_docs.sh) passes WARN_LOGFILE in the environment; without this line doxygen
+# wrote warnings to stderr and the allowlist arm compared against an EMPTY log (a vacuous pass).
+WARN_LOGFILE            = $(WARN_LOGFILE)
+
+# Without macro expansion, doxygen's C++ parser sees the bare,
+# unexpanded `AETHER_*` qualifier macros (macros.h) in front of every
+# declaration and regularly loses sync — the single largest source of the
+# warning-pass baseline (';'-parse confusion, un-matchable file/class
+# members, "documented symbol not declared"). Expanding ONLY these to their
+# AETHER_CPP_MODE (host-only, doc-build) shape — matching the host-only
+# examples the Sphinx pages cite — fixes the root cause instead of chasing
+# each symptom. `AETHER_GRID_CONSTANT`/`AETHER_FORCEINLINE` expand to their
+# host-side spelling for the same reason.
+ENABLE_PREPROCESSING    = YES
+MACRO_EXPANSION         = YES
+EXPAND_ONLY_PREDEF      = YES
+PREDEFINED              = AETHER_DEVICE(x)= \
+                           AETHER_HOST(x)= \
+                           AETHER_DEVICEANDHOST(x)= \
+                           AETHER_DEVICEHOST(x)= \
+                           AETHER_NOINLINE(x)= \
+                           AETHER_KERNEL(x)= \
+                           AETHER_GRID_CONSTANT(x)=const \
+                           AETHER_SHARED(x)= \
+                           AETHER_FORCEINLINE(x)=inline \
+                           AETHER_MATH_HOST_ABI=

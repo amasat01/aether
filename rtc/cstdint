@@ -1,0 +1,15 @@
+// NVRTC profile shim: NVRTC (parsed by __CUDACC_RTC__) has no host
+// C++ standard library, so aether's payload headers reach <cstdint> through
+// this shim instead: the CCCL wheel's device-usable cuda::std::cstdint,
+// re-exported into ::std so aether's ordinary `std::` spellings resolve
+// unchanged. Served only under NVRTC (payload name "rtc/cstdint");
+// nvcc and g++ TUs use the real system <cstdint> and never see this file.
+//
+// SIZE_MAX is additionally defined here: CCCL's cuda/std/cstdint omits it
+// under RTC (measured), and aether/layout/Extents.h's `dyn` sentinel
+// needs it.
+#include <cuda/std/cstdint>
+namespace std { using namespace cuda::std; }
+#ifndef SIZE_MAX
+#define SIZE_MAX (~(size_t)0)
+#endif

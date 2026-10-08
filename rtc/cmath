@@ -1,0 +1,8 @@
+// NVRTC profile shim: NVRTC (parsed by __CUDACC_RTC__) has no host
+// C++ standard library, so aether's payload headers reach <cmath> through
+// this shim instead: the CCCL wheel's device-usable cuda::std::cmath,
+// re-exported into ::std so aether's ordinary `std::` spellings resolve
+// unchanged. Served only under NVRTC (payload name "rtc/cmath");
+// nvcc and g++ TUs use the real system <cmath> and never see this file.
+#include <cuda/std/cmath>
+namespace std { using namespace cuda::std; }

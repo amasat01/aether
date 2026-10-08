@@ -1,0 +1,77 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# DIST name vs IMPORT name (mirrors raptor's "raptor-core" / hawk's
+# "raptor-hawk"). The import name stays flat
+# (`import aether_dsc`).
+name = "aether-dsc"
+# Tracks aether's own version (aether/version.h: `constexpr version()`) —
+# aether-dsc ships a SEALED payload of that exact checkout, so a version skew
+# between the two would silently claim a payload speaks for a different
+# aether than it does.
+version = "0.2.0"
+description = "aether-dsc — the sealed AETHER header payload: opaque, digest-named, no readable source in the wheel"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Alessandro Masat" }]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+]
+# Zero runtime dependencies: unpacking the sealed blob uses only the
+# standard library (zlib/tarfile/hashlib). `seal()`'s own NVRTC-clean gate
+# needs cuda-bindings, but only when actually SEALING (`python -m aether_dsc.seal`,
+# a dev-time-only operation) — never at import time or at payload()/serve()
+# time, which is every ordinary consumer's path.
+dependencies = []
+
+[project.optional-dependencies]
+# seal() itself needs no extra package (cuda-bindings is a dev/CI-time
+# tool this repo's own env already carries); this dependency is what a
+# ratifying gate imports to run `python -m aether_dsc.seal`.
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/amasat01/aether"
+Documentation = "https://amasat01.github.io/aether/"
+Repository = "https://github.com/amasat01/aether"
+
+[tool.setuptools]
+# aether/LICENSE + aether/NOTICE, copied here (setuptools' license-files glob
+# must resolve inside this project directory -- it cannot reach "../LICENSE"
+# the way `readme`'s single-file path can): the wheel/sdist must carry what
+# `license = { text = "Apache-2.0" }` above claims, not just assert it.
+license-files = ["LICENSE", "NOTICE"]
+
+[tool.setuptools.packages.find]
+include = ["aether_dsc*"]
+
+[tool.setuptools.package-data]
+# The sealed blob(s) ship AS DATA, not source — `python -m aether_dsc.seal`
+# writes them under `aether_dsc/_payload/`. `payload_headers.txt` is the
+# NVRTC-clean manifest: it used to live under the aether repo's own
+# `tools/`, reached via a `sys.path` mutation `aether_dsc._seal_impl` no
+# longer makes — the manifest ships INSIDE the package instead, so a wheel
+# install (no `tools/` beside it) can still seal/verify against it.
+# `payload_headers_host.txt` is its host-only sibling (never NVRTC-clean,
+# never gated by the NVRTC-clean check) — shipped for the same reason: a
+# wheel-only install can still re-seal against a real aether checkout.
+aether_dsc = ["py.typed", "_payload/*.bin", "payload_headers.txt",
+             "payload_headers_host.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Makes `import aether_dsc` work against the checked-out tree without an
+# install — this repo root, prepended to sys.path before collection (mirrors
+# raptor's/hawk's own pyproject convention).
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"

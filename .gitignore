@@ -1,0 +1,13 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+
+build*/
+*.o
+__pycache__/
+.cache/
+docs/_doxybuild/
+docs/_build/
+*.egg-info/
+
+# Sphinx autosummary output (regenerated on every build)
+docs/content/python/generated/

@@ -1,0 +1,8 @@
+// NVRTC profile shim: NVRTC (parsed by __CUDACC_RTC__) has no host
+// C++ standard library, so aether's payload headers reach <concepts> through
+// this shim instead: the CCCL wheel's device-usable cuda::std::concepts,
+// re-exported into ::std so aether's ordinary `std::` spellings resolve
+// unchanged. Served only under NVRTC (payload name "rtc/concepts");
+// nvcc and g++ TUs use the real system <concepts> and never see this file.
+#include <cuda/std/concepts>
+namespace std { using namespace cuda::std; }

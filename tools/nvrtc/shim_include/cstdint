@@ -1,0 +1,19 @@
+// Copyright 2026 Alessandro Masat
+// SPDX-License-Identifier: Apache-2.0
+
+// tools/nvrtc/shim_include/cstdint — see cstddef in this directory for the
+// rationale. Extra wrinkle found by experiment: this toolkit's libcu++
+// cstdint (cuda/std/detail/libcxx/include/cstdint, via
+// cuda/std/__cuda/cstdint_prelude.h) never defines SIZE_MAX/PTRDIFF_MAX on
+// its _CCCL_COMPILER(NVRTC) branch — a real upstream gap, not aether's or
+// this shim's bug — so aether/layout/Extents.h's
+// `inline constexpr std::size_t dyn = SIZE_MAX;` fails without this patch.
+#pragma once
+#include <cuda/std/cstdint>
+namespace std { using namespace ::cuda::std; }
+#ifndef SIZE_MAX
+#define SIZE_MAX 0xFFFFFFFFFFFFFFFFULL
+#endif
+#ifndef PTRDIFF_MAX
+#define PTRDIFF_MAX 0x7FFFFFFFFFFFFFFFLL
+#endif

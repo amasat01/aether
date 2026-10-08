@@ -1,0 +1,69 @@
+# NVRTC-clean payload manifest — committed, sorted, one path per line, same
+# discipline as tests/expected_tests_*.txt: a manifest, not a count, so a
+# same-commit swap cannot pass silently.
+#
+# Every aether header listed here is claimed NVRTC-clean (the seven rtc/
+# shims, AETHER_BITCOPY, no offsetof-in-constant-expression) and
+# `tools/rtc_seal_check.py` gates that claim on every run. This is the
+# ground-truth closure measured for `benchmarks._hawk_arm.grav_body` (hawk
+# repo) via a real `nvcc -MD` build — not a directory walk: measured,
+# ~28 other aether headers (aether/accum/, aether/banded/,
+# aether/chunk/, aether/interop/, aether/residency/, aether/backend/,
+# aether/err/, aether/dtype/Format.h, some aether/view/Make*.h) reach std
+# headers the rtc/ shim set does not cover (<algorithm>, <cstring>,
+# <stdexcept>, DLPack's own includes) — profiling them is deliberately out
+# of scope here; the manifest grows deliberately, one committed line at a
+# time, exactly like the test-count manifests: add a path, run this
+# script, commit the diff.
+#
+# `aether/aether.h` (the umbrella) is deliberately not listed: it
+# transitively includes every one of the ~28 excluded headers, so it is
+# not yet part of the payload either.
+aether/device.h
+aether/device/Device.h
+aether/dtype/DType.h
+aether/dtype/Fetch.h
+aether/dtype/WorkingType.h
+aether/dtype/dlpack.h
+aether/expr/Assign.h
+aether/expr/Expression.h
+aether/expr/Operations.h
+aether/expr/Reduce.h
+aether/expr/nodes/Arithmetic.h
+aether/expr/nodes/Constant.h
+aether/expr/nodes/Elementwise.h
+aether/expr/nodes/Geometric.h
+aether/expr/nodes/Inverse.h
+aether/expr/nodes/Product.h
+aether/expr/nodes/Quaternion.h
+aether/expr/nodes/Structural.h
+aether/index/BundleIndex.h
+aether/index/Offset.h
+aether/index/SampleIndex.h
+aether/layout/Extents.h
+aether/layout/Layout.h
+aether/layout/detail/Carray.h
+aether/macros.h
+aether/math/detail/BandedFwd.h
+aether/math/detail/BoundedTrig.h
+aether/math/detail/HostVectorMathRoute.h
+aether/math/detail/MathDispatch.h
+aether/math/detail/MathDispatchUndef.h
+aether/math/explog.h
+aether/math/hyperbolic.h
+aether/math/invtrig.h
+aether/math/math.h
+aether/math/root.h
+aether/math/round.h
+aether/math/special.h
+aether/math/trig.h
+aether/random/detail/Backend.h
+aether/random/detail/Philox.h
+aether/typedefs.h
+aether/view/Item.h
+aether/view/Reshape.h
+aether/view/RuntimeView.h
+aether/view/TableHandle.h
+aether/view/TableView.h
+aether/view/View.h
+aether/view/WorkView.h
