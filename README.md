@@ -12,6 +12,8 @@ CPU threads (OpenMP), and <code>a + b + c</code> becomes one loop with no tempor
   <a href="https://github.com/amasat01/aether/actions/workflows/ci.yml"><img src="https://github.com/amasat01/aether/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://amasat01.github.io/aether/"><img src="https://github.com/amasat01/aether/actions/workflows/docs.yml/badge.svg" alt="Docs"></a>
   <a href="https://github.com/amasat01/aether/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <a href="https://pypi.org/project/aether-dsc/"><img src="https://img.shields.io/pypi/v/aether-dsc.svg" alt="PyPI"></a>
+  <a href="https://doi.org/10.5281/zenodo.23250238"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23250238.svg" alt="DOI"></a>
 </p>
 
 <p align="center">
@@ -95,6 +97,6 @@ CMake, as above. From a clone, `pip install ./aether/dsc` builds it (Python 3.9 
 
 Apache-2.0 (see [`LICENSE`](https://github.com/amasat01/aether/blob/main/LICENSE) and
 [`NOTICE`](https://github.com/amasat01/aether/blob/main/NOTICE)) · cite via "Cite this repository"
-(`CITATION.cff`; each tagged release is archived on Zenodo with its own DOI once the first one exists) · built to
+(`CITATION.cff`; every tagged release is archived on Zenodo: [doi:10.5281/zenodo.23250238](https://doi.org/10.5281/zenodo.23250238)) · built to
 make GPU computing accessible on modest hardware, for research and education. Collaboration is the point, and a
 citation is the currency — get in touch.
