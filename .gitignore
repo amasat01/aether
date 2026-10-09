@@ -11,3 +11,6 @@ docs/_build/
 
 # Sphinx autosummary output (regenerated on every build)
 docs/content/python/generated/
+
+# sealed at build time by `python -m aether_dsc.seal` (see dsc/README.md)
+dsc/aether_dsc/_payload/
