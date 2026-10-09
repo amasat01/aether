@@ -14,7 +14,7 @@ family are unchanged. Accuracy stays inside the faithful bar; the packet-math
 corpora gain the exp overflow/underflow/subnormal edges and log near 1 and
 below the normal range.
 
-`aether-dsc` 0.2.1: `payload()` is safe under free-threaded CPython: concurrent first calls
+`aether-dsc` 0.2.1 (2026-10-09): `payload()` is safe under free-threaded CPython: concurrent first calls
 return one `Payload` object (the cache fill is now under a lock). README gains a
 Threading section.
 
