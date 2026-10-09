@@ -31,6 +31,8 @@ goes through :func:`seal`; see :mod:`aether_dsc.seal`'s module docstring.
 """
 from __future__ import annotations
 
+import threading
+
 from ._core import Payload, PAYLOAD_DIR, _unpack, digest_of
 # Imported from `_seal_impl`, deliberately NOT from `.seal`:
 # `aether_dsc/seal.py` is `python -m aether_dsc.seal`'s CLI file, and
@@ -48,9 +50,10 @@ __all__ = ["Payload", "seal", "payload", "version", "PAYLOAD_DIR"]
 #: `constexpr version()`), because a sealed payload speaks for exactly one
 #: aether checkout and a version skew between the two would silently claim
 #: otherwise.
-version = "0.2.0"
+version = "0.2.1"
 
 _PAYLOAD_CACHE: Payload | None = None
+_PAYLOAD_LOCK = threading.Lock()
 
 
 def payload() -> Payload:
@@ -66,6 +69,14 @@ def payload() -> Payload:
     `$HAWK_AETHER_INCLUDE`: a caller that wants "seal if there is no
     blob" asks for it explicitly, `payload()` never guesses.
     """
+    cached = _PAYLOAD_CACHE
+    if cached is not None:
+        return cached
+    with _PAYLOAD_LOCK:
+        return _payload_locked()
+
+
+def _payload_locked() -> Payload:
     global _PAYLOAD_CACHE
     if _PAYLOAD_CACHE is not None:
         return _PAYLOAD_CACHE
@@ -96,4 +107,5 @@ def _reset_payload_cache() -> None:
     freshly written blob in a test's tmp `_payload/` dir) is picked up
     without restarting the process."""
     global _PAYLOAD_CACHE
-    _PAYLOAD_CACHE = None
+    with _PAYLOAD_LOCK:
+        _PAYLOAD_CACHE = None

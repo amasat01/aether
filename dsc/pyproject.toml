@@ -14,7 +14,7 @@ name = "aether-dsc"
 # aether-dsc ships a SEALED payload of that exact checkout, so a version skew
 # between the two would silently claim a payload speaks for a different
 # aether than it does.
-version = "0.2.0"
+version = "0.2.1"
 description = "aether-dsc — the sealed AETHER header payload: opaque, digest-named, no readable source in the wheel"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -67,6 +67,9 @@ aether_dsc = ["py.typed", "_payload/*.bin", "payload_headers.txt",
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "ft: free-threading rows (raptor.conformance.freethreading) -- skip on a GIL build; select with -m ft on 3.13t/3.14t.",
+]
 # Makes `import aether_dsc` work against the checked-out tree without an
 # install — this repo root, prepended to sys.path before collection (mirrors
 # raptor's/hawk's own pyproject convention).
