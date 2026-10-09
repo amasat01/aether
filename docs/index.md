@@ -14,19 +14,9 @@ OpenMP threads or CUDA threads. It is the numerics base layer the
 [eagle](https://amasat01.github.io/eagle/) execution runtime and the
 [hawk](https://amasat01.github.io/hawk/) code generator build on.
 
-```{image} _static/ecosystem/ecosystem_aether_light.svg
-:alt: The RAPTOR family: hawk (write it), eagle (run it), aether (the C++/CUDA numerics underneath) and raptor (the shared contract); you are looking at aether.
-:class: only-light
-:align: center
+```{raw} html
+:file: _static/ecosystem/ecosystem_cards_aether.html
 ```
-
-```{image} _static/ecosystem/ecosystem_aether_dark.svg
-:alt: The RAPTOR family: hawk (write it), eagle (run it), aether (the C++/CUDA numerics underneath) and raptor (the shared contract); you are looking at aether.
-:class: only-dark
-:align: center
-```
-
-[aether](https://amasat01.github.io/aether/) · [hawk](https://amasat01.github.io/hawk/) · [eagle](https://amasat01.github.io/eagle/) · [raptor](https://amasat01.github.io/raptor/) · [the family](https://amasat01.github.io/)
 
 ## 30 seconds
 
