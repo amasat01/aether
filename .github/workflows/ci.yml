@@ -23,6 +23,13 @@ jobs:
     env:
       CC: gcc-13
       CXX: g++-13
+      # ccache: CMake reads the *_COMPILER_LAUNCHER variables, also under scikit-build-core
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_COMPILERCHECK: content
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CMAKE_CUDA_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v7
 
@@ -30,7 +37,16 @@ jobs:
       # gcc-13 as its default toolchain major; installed explicitly so the
       # compiler version is pinned rather than whatever "latest" resolves to.
       # OpenMP (find_package(OpenMP REQUIRED)) ships with g++, no extra package.
-      - run: sudo apt-get update && sudo apt-get install -y g++-13
+      - run: sudo apt-get update && sudo apt-get install -y g++-13 ccache
+
+      # compiled objects persist across runs; one cache per job and architecture
+      - uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-test-cpp-${{ matrix.debug_mode }}-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-test-cpp-${{ matrix.debug_mode }}-
+      - run: ccache -z
 
       # Same variables the Makefile's cpp arm configures with
       # (AETHER_CPP_MODE=ON), plus AETHER_WARN_AS_ERR=ON.
@@ -48,3 +64,5 @@ jobs:
       # (manifest-backed, not a vacuous pass/fail count). Same command the
       # Makefile's `test` target runs.
       - run: tests/check_gate.sh cpp build/tests/aether_tests
+      - if: always()
+        run: ccache -s

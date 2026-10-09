@@ -56,6 +56,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: aether/dsc/pyproject.toml
 
       - run: python -m pip install --quiet build "cuda-bindings" "nvidia-cuda-nvrtc-cu12" "nvidia-cuda-cccl-cu12"
 
@@ -67,6 +69,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: aether-dsc-dist
+          retention-days: 7
           path: dist/
 
   check:
