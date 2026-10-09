@@ -115,10 +115,18 @@ const std::vector<UnaryCase>& unaryCases()
         const auto unit = concat(corpus(-1.0, 1.0, false, 60000, 28), corpus(1e-20, 1.0, true, 10000, 29, false));
         const auto hyp = concat(concat(corpus(-30, 30, false, 60000, 30), corpus(1e-20, 1, true, 10000, 31, false)),
             corpus(-712, 712, false, 10000, 32, false));
-        const auto logs = concat(corpus(1e-310, 1e308, true, 60000, 5), corpus(0.5, 2.0, false, 40000, 6, false));
+        // log: the whole range, a dense band around 1 (the table-driven path hands
+        // |x - 1| < 1/16 to the double-double path, so both sides of that seam
+        // are scored) and the subnormals down to 5e-324.
+        const auto logs = concat(concat(corpus(1e-310, 1e308, true, 60000, 5), corpus(0.5, 2.0, false, 40000, 6, false)),
+            concat(corpus(0.9, 1.1, false, 20000, 51, false), corpus(5e-324, 2.3e-308, true, 20000, 52, false)));
+        // exp: the whole range plus the overflow edge (709.78), the underflow edge (-745.13),
+        // the subnormal results between -708.4 and -745.13 and the table-path seam at +-700.
+        const auto exps = concat(concat(corpus(-750, 750, false, 80000, 1), corpus(709.0, 710.5, false, 10000, 53, false)),
+            concat(corpus(-746.0, -708.0, false, 20000, 54, false), corpus(-701.0, 701.0, false, 10000, 55, false)));
         const auto rnd = concat(corpus(-1e6, 1e6, false, 40000, 37), corpus(-4, 4, false, 20000, 38, false));
         std::vector<UnaryCase> c = {
-            { kExp, "exp", [](double x) { return std::exp(x); }, 1, corpus(-750, 750, false, 80000, 1) },
+            { kExp, "exp", [](double x) { return std::exp(x); }, 1, exps },
             { kExp2, "exp2", [](double x) { return std::exp2(x); }, 1, corpus(-1100, 1100, false, 80000, 2) },
             { kExp10, "exp10", [](double x) { return std::pow(10.0, x); }, 1, corpus(-330, 330, false, 80000, 3) },
             { kExpm1, "expm1", [](double x) { return std::expm1(x); }, 1,

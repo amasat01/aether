@@ -1,2 +1,8 @@
 aether
 Copyright 2026 Alessandro Masat
+
+The table-driven exp and log in aether/backend/cpu/simd/math/PacketExpLog.h
+follow the algorithms of ARM optimized-routines
+(https://github.com/ARM-software/optimized-routines, math/exp.c and math/log.c),
+Copyright (c) Arm Limited, MIT OR Apache-2.0 WITH LLVM-exception. The lookup
+tables in PacketExpLogTables.h were regenerated for aether.

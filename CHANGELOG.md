@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Host SIMD `packetExp` and `packetLog` use table-driven algorithms: a 128-entry
+2^(i/128) table (exp) or (1/c, log c) table (log), a short polynomial, no
+division, the table read by a gather (`PacketExpLog.h`, tables in
+`PacketExpLogTables.h`). The scheme follows ARM's optimized-routines
+(MIT OR Apache-2.0 WITH LLVM-exception; see `NOTICE`). Lanes outside the fast
+path (exp: |x| >= 700 or NaN; log: x <= 0, subnormal, inf, NaN, |x - 1| < 1/16)
+and `log` without a hardware FMA keep the double-double scheme, so special
+values, subnormal results and the pow/exp2/exp10/expm1/log2/log10/log1p
+family are unchanged. Accuracy stays inside the faithful bar; the packet-math
+corpora gain the exp overflow/underflow/subnormal edges and log near 1 and
+below the normal range.
+
 ## 0.2.0 (first public release)
 
 `AETHER_CUDA_ARCHS` picks the CUDA architectures when `CMAKE_CUDA_ARCHITECTURES`

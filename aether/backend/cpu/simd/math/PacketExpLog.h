@@ -24,9 +24,22 @@
  * also in double-double, so the amplification by |y*log x| does not turn
  * into lost ULPs.
  *
+ * `exp` and `log` themselves (the two entry points that need no extended
+ * precision) take a faster, table-driven route: a 128-entry table of
+ * 2^(i/128) (exp) or of (1/c, log c) (log), a degree-5 / degree-7
+ * polynomial on the short remainder, no division, the table read by a
+ * gather. The scheme is the one of ARM's optimized-routines
+ * (https://github.com/ARM-software/optimized-routines, math/exp.c and
+ * math/log.c, MIT OR Apache-2.0 WITH LLVM-exception); see NOTICE. Lanes the
+ * fast path does not cover (|x| >= 700, NaN for exp; subnormal, <= 0,
+ * infinite, NaN and |x - 1| < 1/16 for log) are redone by the double-double
+ * scheme above, so every special value keeps its former result. `log` needs
+ * a true FMA (exact z/c - 1) and keeps the double-double scheme without one.
+ *
  * Accuracy (vs glibc `std::`, every width): see `PacketMath.h`.
  */
 
+#include "aether/backend/cpu/simd/math/PacketExpLogTables.h"
 #include "aether/backend/cpu/simd/math/PacketMathCore.h"
 
 #pragma GCC diagnostic push
@@ -111,10 +124,60 @@ AETHER_PM_INLINE D expCore(D hi, D lo)
     return (ph * pow2(n1)) * pow2(n2);
 }
 
+/// Double-double `exp` (full range, NaN, over/underflow, subnormal results).
+template<class D>
+AETHER_PM_INLINE D vexpSlow(D x)
+{
+    return select(isnan(x), x, expCore(x, bc<D>(0.0)));
+}
+
+/// Table read: lane i of the result is `base[idx[i]]` (a hardware gather
+/// where the target has one).
+template<class D>
+AETHER_PM_INLINE LaneMask<D> gather64(const std::uint64_t* base, LaneMask<D> idx)
+{
+    if constexpr (kScalar<D>) {
+        return static_cast<std::int64_t>(base[idx]);
+    }
+#if defined(__AVX512F__)
+    else if constexpr (std::is_same_v<D, __m512d>) {
+        return (LaneMask<D>)_mm512_i64gather_epi64((__m512i)idx, static_cast<const void*>(base), 8);
+    }
+#endif
+#if defined(__AVX2__)
+    else if constexpr (std::is_same_v<D, __m256d>) {
+        return (LaneMask<D>)_mm256_i64gather_epi64(reinterpret_cast<const long long*>(base), (__m256i)idx, 8);
+    }
+#endif
+    else {
+        LaneMask<D> r = {};
+        for (std::size_t i = 0; i < Lanes<D>::width; ++i)
+            r[i] = static_cast<std::int64_t>(base[idx[i]]);
+        return r;
+    }
+}
+
+/// Table-driven exp for |x| < 700: x = (k/128) ln2 + r, |r| <= ln2/256,
+/// exp(x) = 2^(k/128) (1 + tail_i + p(r)) with the 2^(i/128) table.
 template<class D>
 AETHER_PM_INLINE D vexp(D x)
 {
-    return select(isnan(x), x, expCore(x, bc<D>(0.0)));
+    const D shift = bc<D>(0x1.8p52);
+    D kd = x * bc<D>(0x1.71547652b82fep0 * 128.0) + shift;
+    const LaneMask<D> ki = bits(kd);
+    kd = kd - shift;
+    const D r = (x + kd * bc<D>(-0x1.62e42fefa0000p-8)) + kd * bc<D>(-0x1.cf79abc9e3b3ap-47);
+    const LaneMask<D> idx = (ki & 127) << 1;
+    const D tail = fromBits<D>(gather64<D>(kExpTab, idx));
+    const D scale = fromBits<D>(gather64<D>(kExpTab, idx + 1) + (ki << 45));
+    const D r2 = r * r;
+    const D tmp = ((tail + r) + r2 * (bc<D>(0x1.ffffffffffdbdp-2) + r * bc<D>(0x1.555555555543cp-3)))
+        + (r2 * r2) * (bc<D>(0x1.55555cf172b91p-5) + r * bc<D>(0x1.1111167a4d017p-7));
+    const D res = fma(scale, tmp, scale);
+    const auto bad = ~lt(abs(x), bc<D>(700.0)); // |x| >= 700, inf, NaN
+    if (any<D>(bad))
+        return select(bad, vexpSlow(x), res);
+    return res;
 }
 
 /// exp(x * (cHi + cLo)) with the product carried in double-double.
@@ -239,12 +302,45 @@ AETHER_PM_INLINE D logSpecials(D x, D r)
     return select(isnan(x), x, r);
 }
 
+/// Double-double `log` (every input).
 template<class D>
-AETHER_PM_INLINE D vlog(D x)
+AETHER_PM_INLINE D vlogSlow(D x)
 {
     D h, l;
     logDD(x, h, l);
     return logSpecials(x, h);
+}
+
+/// Table-driven log: x = 2^k z, z in [0.6875, 1.375) in cell i with
+/// c_i ~ z; log x = k ln2 + log c_i + log1p(z/c_i - 1), z/c_i - 1 exact
+/// (FMA), its log1p a degree-7 polynomial, the sum kept as hi + lo.
+template<class D>
+AETHER_PM_INLINE D vlog(D x)
+{
+#if defined(__FMA__) || defined(__AVX512F__)
+    const LaneMask<D> ix = bits(x);
+    const LaneMask<D> tmp = ix - ibc<D>(0x3fe6000000000000LL);
+    const LaneMask<D> idx = (srl<D>(tmp, 45) & 127) << 1;
+    const LaneMask<D> k = tmp >> 52; // arithmetic: the exponent of x relative to z
+    const D kd = fromBits<D>(k + bits(bc<D>(kRoundMagic))) - bc<D>(kRoundMagic);
+    const D z = fromBits<D>(ix - (tmp & ibc<D>(static_cast<std::int64_t>(0xfff0000000000000ULL))));
+    const D invc = fromBits<D>(gather64<D>(kLogTab, idx));
+    const D logc = fromBits<D>(gather64<D>(kLogTab, idx + 1));
+    const D r = fma(z, invc, bc<D>(-1.0));
+    const D w = kd * bc<D>(0x1.62e42fefa3800p-1) + logc; // kd * ln2hi exact
+    const D hi = w + r;
+    const D lo = ((w - hi) + r) + kd * bc<D>(0x1.ef35793c76730p-45);
+    const D r2 = r * r;
+    const D p = bc<D>(1.0 / 3.0) + r * bc<D>(-0.25) + r2 * (bc<D>(0.2) + r * bc<D>(-1.0 / 6.0) + r2 * bc<D>(1.0 / 7.0));
+    const D res = ((lo + r2 * bc<D>(-0.5)) + (r * r2) * p) + hi;
+    const auto bad = ~(ge(x, bc<D>(0x1p-1022)) & le(x, bc<D>(1.7976931348623157e308)))
+        | lt(abs(x - bc<D>(1.0)), bc<D>(0x1p-4)); // <= 0, subnormal, inf, NaN, near 1
+    if (any<D>(bad))
+        return select(bad, vlogSlow(x), res);
+    return res;
+#else
+    return vlogSlow(x);
+#endif
 }
 
 /// log(x) * (cHi + cLo), product in double-double.

@@ -24,6 +24,7 @@
 # ever observed.
 aether/backend/cpu/simd/math/PacketArcTrig.h
 aether/backend/cpu/simd/math/PacketExpLog.h
+aether/backend/cpu/simd/math/PacketExpLogTables.h
 aether/backend/cpu/simd/math/PacketHyperbolic.h
 aether/backend/cpu/simd/math/PacketMathCore.h
 aether/backend/cpu/simd/math/PacketMisc.h
