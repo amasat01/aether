@@ -161,7 +161,8 @@ TEST_F(BundleBitIdentityTest, QuatSandwichChainViaBundlesMatchesScalarAssignment
     // LoadStore.h` gives a bundle-specific overload — compose over the
     // materialized `DeviceBundle` operands through the generic bundleGet
     // fallback (that header's docstring).
-    std::vector<double> qBuf(4 * kN), vBuf(3 * kN);
+    // Slack of one bundle width: the unmasked tail bundleGet reads kW lanes of the last component.
+    std::vector<double> qBuf(4 * kN + kW, 0.0), vBuf(3 * kN + kW, 0.0);
     for (std::size_t idx = 0; idx < kN; ++idx) {
         for (std::size_t d = 0; d < 4; ++d)
             qBuf[d * kN + idx] = static_cast<double>(idx) * 0.31 + static_cast<double>(d) * 0.07 + 0.3;

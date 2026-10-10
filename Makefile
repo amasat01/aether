@@ -100,6 +100,18 @@ remint: configure
 	tests/check_gate.sh $(if $(filter ON,$(cpp)),cpp,cuda) $(builddir)/tests/aether_tests --remint
 
 
+# Local pre-release sanitizer gate (CUDA mode, GPU $(san_gpu)). Rows: compute-sanitizer memcheck /
+# racecheck / synccheck and valgrind, each THROUGH tests/check_gate.sh via an exec wrapper
+# (listing + run + manifest + tool exit in one command), initcheck triage-only, then the
+# device canaries must go red. Prints its log dir; record it with the suppressed count in the
+# release ledger. Needs a CUDA-mode build (cpp=OFF). The CPP_MODE sanitizer leg is CI's
+# `sanitize-cpp` job (-DAETHER_SANITIZERS=address,undefined).
+san_gpu ?= 1
+.PHONY: sanitize-gate
+sanitize-gate: configure
+	$(mkcmd) aether_tests aether_canary_cu
+	CUDA_VISIBLE_DEVICES=$(san_gpu) tests/sanitize/sanitize_gate.sh $(builddir)
+
 # Full-corpus faithful-rounding gate for the CPU packet math
 # (aether/backend/cpu/simd/math/): >= 2^20 inputs per function scored at every
 # width against a 128-bit mpmath reference. The corpus is regenerated (needs

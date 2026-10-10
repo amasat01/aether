@@ -5,10 +5,17 @@
 # over the already-built `aether_tests` binary via the python driver.
 # Only registered when AETHER_BUILD_SANITIZE=ON (root CMakeLists.txt).
 #
-# WIRING ONLY: this target is REGISTERED, never RUN automatically — no
-# sanitizer run is part of any gate here.
+# The target is run by the sanitizer gate; see README.md in this directory.
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+# The driver pins the gtest count to the mode manifest (a run that executed a different
+# set than the manifest is RED, exit 2).
+if(AETHER_CPP_MODE)
+  set(_aether_san_mode cpp)
+else()
+  set(_aether_san_mode cuda)
+endif()
 
 add_custom_target(sanitize
     COMMAND ${Python3_EXECUTABLE}
@@ -18,6 +25,7 @@ add_custom_target(sanitize
             --suppressions ${CMAKE_CURRENT_SOURCE_DIR}/suppressions
             --log-dir ${CMAKE_BINARY_DIR}/sanitize
             --project-name AETHER
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/../expected_tests_${_aether_san_mode}.txt
             $<$<BOOL:${AETHER_SANITIZE_MINIMAL}>:--minimal>
             $<$<BOOL:${AETHER_SANITIZE_FAIL_ON_REACHABLE}>:--fail-on-reachable>
     DEPENDS aether_tests

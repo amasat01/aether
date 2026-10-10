@@ -180,8 +180,12 @@ inline long long ulpDistance(double got, double want)
     if (std::isnan(got) || std::isnan(want))
         return std::numeric_limits<long long>::max();
     long long a = monotone(got), b = monotone(want);
-    long long d = a > b ? a - b : b - a;
-    return d < 0 ? std::numeric_limits<long long>::max() : d;
+    const unsigned long long ua = static_cast<unsigned long long>(a);
+    const unsigned long long ub = static_cast<unsigned long long>(b);
+    const unsigned long long d = a > b ? ua - ub : ub - ua;
+    return d > static_cast<unsigned long long>(std::numeric_limits<long long>::max())
+        ? std::numeric_limits<long long>::max()
+        : static_cast<long long>(d);
 }
 
 // =========================================================================

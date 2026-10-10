@@ -242,3 +242,8 @@ target_compile_options(
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -O3 -Wsign-compare -ftemplate-backtrace-limit=100>
 )
 endif()
+
+# Sanitizer flags (empty AETHER_SANITIZERS = no-op) go LAST so their -O1 follows the -O3 above;
+# the host/device canaries are built in the same configure. See sanitize/README.md.
+include(${CMAKE_CURRENT_SOURCE_DIR}/sanitize/sanitizers.cmake)
+aether_apply_sanitizers(aether_tests)

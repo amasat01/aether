@@ -180,6 +180,25 @@ TEST_F(AtomicOrBoolTest, SingleSlot_AllWritersTrue_ResultTrue)
     cudaFree(devT);
 }
 
+TEST_F(AtomicOrBoolTest, OneByteAllocation_StaysInBounds)
+{
+    /* A 1-byte allocation holds a single slot: the store must not widen to
+     * the surrounding 32-bit word (out of bounds under compute-sanitizer). */
+    unsigned char host = 0;
+    unsigned char* devT;
+    ASSERT_EQ(cudaMalloc(&devT, 1), cudaSuccess);
+    cudaMemcpy(devT, &host, 1, cudaMemcpyHostToDevice);
+
+    orBoolRaceSingleKernel<<<4, 256>>>(
+        makeRaceView(reinterpret_cast<bool*>(devT), 1), true, 1024);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(&host, devT, 1, cudaMemcpyDeviceToHost);
+    EXPECT_EQ(host, 1);
+
+    cudaFree(devT);
+}
+
 TEST_F(AtomicOrBoolTest, SingleSlot_AllWritersFalse_ResultFalse)
 {
     /* val=false should be a no-op — slot stays at its initial value. */

@@ -69,16 +69,19 @@ AETHER_DEVICEHOST() inline double minAbsReal_(double* address, double val)
 }
 
 /** @brief Monotone OR-store of `true` into a one-byte `bool` slot at
- *         `address`. */
+ *         `address`.
+ *
+ *  Invariant: the only operation is an idempotent set-to-1, performed as a
+ *  byte-granular store (`ST.U8`), so it never touches a neighbouring byte and
+ *  stays inside a one-byte allocation. The result is visible at the kernel
+ *  boundary. A future need to clear a slot or read it back within a kernel
+ *  must switch the slot type to 32 bits and use a word atomic. */
 AETHER_DEVICEHOST() inline void orBool_(bool* address, bool val)
 {
     if (!val)
         return;
 #if defined(__CUDA_ARCH__)
-    const std::uintptr_t a = reinterpret_cast<std::uintptr_t>(address);
-    auto* word              = reinterpret_cast<unsigned int*>(a & ~std::uintptr_t{ 3 });
-    const unsigned int byteShift = (a & std::uintptr_t{ 3 }) * 8u;
-    atomicOr(word, 1u << byteShift);
+    *reinterpret_cast<volatile unsigned char*>(address) = 1;
 #else
     auto* atomicP = reinterpret_cast<std::atomic<unsigned char>*>(address);
     atomicP->store(static_cast<unsigned char>(1), std::memory_order_relaxed);

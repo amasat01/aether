@@ -8,8 +8,11 @@ option(AETHER_DEBUG_MODE "Whether to compile with debug features" OFF)
 option(AETHER_WARN_AS_ERR "Whether to promote compilation warnings to errors" OFF)
 option(AETHER_CPP_MODE "Whether to build aether as a pure C++ Package. Default is CUDA/C++" OFF)
 
-# The `sanitize` custom target (tests/sanitize/). WIRING ONLY — OFF by
-# default, never turned on by any gate here.
+# The `sanitize` custom target (tests/sanitize/). OFF by default; the
+# sanitizer gate turns it on.
+# Sanitizer build of the test targets (tests/sanitize/README.md): a -fsanitize= list such as
+# `address,undefined`. Empty (default) changes nothing.
+set(AETHER_SANITIZERS "" CACHE STRING "-fsanitize= list applied to the test targets and canaries (empty = off)")
 option(AETHER_BUILD_SANITIZE "Register the \`sanitize\` custom target (valgrind/compute-sanitizer wrapper)" OFF)
 set(AETHER_SANITIZE_TOOL "both" CACHE STRING "Which sanitizer(s) the sanitize target runs: valgrind|computesan|both")
 option(AETHER_SANITIZE_MINIMAL "Run the sanitize target with AETHER_TEST_MINIMAL=1 (currently a no-op, no aether test reads it)" OFF)
@@ -115,10 +118,10 @@ endif()
 
 if (AETHER_CPP_MODE)
   message(STATUS "> Configuring aether in C++ only mode")
-  project(aether VERSION 0.2.0 LANGUAGES CXX)
+  project(aether VERSION 0.2.1 LANGUAGES CXX)
 else()
   message(STATUS "> Configuring aether in CUDA/C++ mode")
-  project(aether VERSION 0.2.0 LANGUAGES CUDA CXX)
+  project(aether VERSION 0.2.1 LANGUAGES CUDA CXX)
 endif()
 
 include(GNUInstallDirs)
@@ -266,7 +269,7 @@ if (AETHER_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# The `sanitize` custom target (WIRING ONLY — see tests/sanitize/
+# The `sanitize` custom target (see tests/sanitize/
 # README.md). A separate gate from AETHER_BUILD_TESTS's own block above
 # because it needs the aether_tests TARGET to already exist
 # ($<TARGET_FILE:aether_tests>, tests/sanitize/CMakeLists.txt).

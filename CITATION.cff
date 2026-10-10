@@ -6,7 +6,7 @@ abstract: "Header-only C++23/CUDA numerics core: typed tensor views, expression 
 authors:
   - family-names: "Masat"
     given-names: "Alessandro"
-version: "0.2.0"
+version: "0.2.1"
 date-released: "2026-10-08"
 license: Apache-2.0
 repository-code: "https://github.com/amasat01/aether"

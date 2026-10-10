@@ -50,7 +50,7 @@ __all__ = ["Payload", "seal", "payload", "version", "PAYLOAD_DIR"]
 #: `constexpr version()`), because a sealed payload speaks for exactly one
 #: aether checkout and a version skew between the two would silently claim
 #: otherwise.
-version = "0.2.1"
+version = "0.2.2"
 
 _PAYLOAD_CACHE: Payload | None = None
 _PAYLOAD_LOCK = threading.Lock()

@@ -1,54 +1,54 @@
-# aether sanitize step
+# aether sanitize
 
-Wraps `aether_tests` under valgrind (+ NVIDIA compute-sanitizer when CUDA is
-available) and prints a consolidated, human-readable report.
+Wraps `aether_tests` under valgrind and NVIDIA compute-sanitizer, and gates the suite under
+ASan/UBSan. Three entry points, one finding policy.
 
-**WIRING ONLY:** this target is registered so `make sanitize` exists; no
-sanitizer sweep has been RUN as part of any gate here.
-
-## Run it
+## Commands
 
 ```bash
-# From the aether repo root, configured with -DAETHER_BUILD_SANITIZE=ON
-cmake --build build --target sanitize                      # full mode, valgrind + compute-sanitizer
-cmake --build build --target sanitize -- AETHER_SANITIZE_MINIMAL=ON
+# 1. Report driver (valgrind + compute-sanitizer, human-readable); build with -DAETHER_BUILD_SANITIZE=ON
+cmake --build build --target sanitize
+#    exit 0 clean | 1 findings | 2 RED: no valgrind XML, no compute-sanitizer "ERROR SUMMARY",
+#    target exit status not 0/77, or gtest count != tests/expected_tests_<mode>.txt
+
+# 2. Local pre-release gate: CUDA mode, GPU via CUDA_VISIBLE_DEVICES (default 1)
+make sanitize-gate            # or: tests/sanitize/sanitize_gate.sh build
+#    memcheck / racecheck / synccheck / valgrind each THROUGH tests/check_gate.sh
+#    (tests/sanitize/make_wrapper.sh writes the exec wrapper); initcheck is triage-only;
+#    then the canaries must go red. Prints its log dir: record it + the suppressed count.
+
+# 3. Host sanitizer build (the CI `sanitize-cpp` job)
+cmake -B build -DAETHER_BUILD_TESTS=ON -DAETHER_CPP_MODE=ON -DAETHER_SANITIZERS=address,undefined .
+cmake --build build -j
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+  LSAN_OPTIONS=suppressions=$PWD/tests/sanitize/lsan.supp \
+  tests/check_gate.sh cpp build/tests/aether_tests
 ```
 
-or reconfigure with `-DAETHER_SANITIZE_TOOL=valgrind` / `computesan` to
-restrict which tool runs.
+## Finding policy
 
-Artifacts land in `<build>/sanitize/`:
-- `valgrind.xml`, `valgrind.stdout.log`, `valgrind.stderr.log`
-- `computesan.{memcheck,initcheck,racecheck,synccheck}.log`
+- RED: any valgrind non-leak error with a frame in our code; any definite or indirect leak not
+  matched by an owned entry; any compute-sanitizer memcheck / racecheck / synccheck error.
+- Triage (class C): initcheck errors; uninitialised values whose origin is a device scratch buffer.
+- Noise: still-reachable (warning); possibly-lost whose whole stack is third-party.
+- Suppressions (`suppressions/*.supp`): one scenario per entry, header
+  `# owner:<repo> · why: · evidence: · added:`, a `fun:`/`obj:` anchor, never a
+  `Memcheck:Leak` entry covering definite/indirect. The report prints the suppressed count;
+  growth without a new owned entry is a finding.
 
-## Reading the report
+## Canaries (non-vacuity)
 
-Five categories are summarised per valgrind run:
-- **errors** — invalid reads/writes, uninitialised values. Always fail.
-- **leak definitely / indirectly / possibly** — real leaks. Always fail.
-- **leak still-reachable** — benign (OpenMP TLS, CUDA driver globals). Shown
-  as a warning by default; pass `--fail-on-reachable` to escalate.
+| Binary | Mode | Must produce |
+|---|---|---|
+| `aether_canary` (`canary.cpp`, built when `AETHER_SANITIZERS` is set) | `heap-oob` | ASan heap-buffer-overflow |
+| | `leak` | LeakSanitizer report (`detect_leaks=1`) |
+| | `uninit` | UBSan invalid `bool` load (ASan fill pattern; true uninit = valgrind) |
+| | `shift-ub` | UBSan shift exponent (`halt_on_error=1` for non-zero exit) |
+| `aether_canary_cu` (`canary.cu`, CUDA mode) | `dev-oob` | memcheck >= 1 error (word-widened atomic on a 1-byte allocation) |
+| | `dev-race` | racecheck >= 1 hazard (shared write-write, no `__syncthreads`) |
 
-Compute-sanitizer is run in four modes; each produces its own error count
-and (when failing) a short stack excerpt lifted from the log.
+## Minimal mode
 
-## Adding suppressions
-
-Drop new `.supp` files into `suppressions/`. Anything matching `*.supp` is
-picked up automatically. Valgrind's own `--gen-suppressions=all` output can
-be pasted directly; keep one scenario per file so future debugging is easy.
-The two generic suppression files here (CUDA driver globals, OpenMP/glibc
-TLS machinery) suppress third-party libraries aether links against, not
-aether code.
-
-## Minimal mode — wired, one consumer so far
-
-The driver sets `AETHER_TEST_MINIMAL=1` when invoked with `--minimal`; the
-free function `aether_tests::isMinimalMode()` in
-`tests/banded/minimal_mode.h` reads it, and the Banded-core batteries are
-its first consumer (`tests/test_BandCell8_common.h`; only the BULK arms
-consult it, never the enumerated corpora, see the header's own doc
-comment). `--minimal` is accepted and forwarded (parity with the driver's
-CLI) and now shrinks whatever batteries have opted in. Wire the helper
-into other expensive aether tests as they land; do not wire it
-speculatively ahead of a genuinely expensive test needing it.
+`--minimal` sets `AETHER_TEST_MINIMAL=1`; `aether_tests::isMinimalMode()` in
+`tests/banded/minimal_mode.h` reads it and the Banded-core batteries' BULK arms consult it
+(`tests/test_BandCell8_common.h`).

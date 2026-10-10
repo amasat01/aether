@@ -131,6 +131,28 @@ AETHER_PM_INLINE D vexpSlow(D x)
     return select(isnan(x), x, expCore(x, bc<D>(0.0)));
 }
 
+/// Modular 64-bit lane arithmetic on bit patterns, done in the unsigned lane
+/// type so wrap-around is defined (no signed overflow); bit-identical to the
+/// two's-complement result.
+template<class D>
+AETHER_PM_INLINE LaneMask<D> uadd(LaneMask<D> a, LaneMask<D> b)
+{
+    using U = typename Lanes<D>::U;
+    return (LaneMask<D>)((U)a + (U)b);
+}
+template<class D>
+AETHER_PM_INLINE LaneMask<D> usub(LaneMask<D> a, LaneMask<D> b)
+{
+    using U = typename Lanes<D>::U;
+    return (LaneMask<D>)((U)a - (U)b);
+}
+template<class D>
+AETHER_PM_INLINE LaneMask<D> ushl(LaneMask<D> a, int n)
+{
+    using U = typename Lanes<D>::U;
+    return (LaneMask<D>)((U)a << n);
+}
+
 /// Table read: lane i of the result is `base[idx[i]]` (a hardware gather
 /// where the target has one).
 template<class D>
@@ -169,7 +191,7 @@ AETHER_PM_INLINE D vexp(D x)
     const D r = (x + kd * bc<D>(-0x1.62e42fefa0000p-8)) + kd * bc<D>(-0x1.cf79abc9e3b3ap-47);
     const LaneMask<D> idx = (ki & 127) << 1;
     const D tail = fromBits<D>(gather64<D>(kExpTab, idx));
-    const D scale = fromBits<D>(gather64<D>(kExpTab, idx + 1) + (ki << 45));
+    const D scale = fromBits<D>(uadd<D>(gather64<D>(kExpTab, idx + 1), ushl<D>(ki, 45)));
     const D r2 = r * r;
     const D tmp = ((tail + r) + r2 * (bc<D>(0x1.ffffffffffdbdp-2) + r * bc<D>(0x1.555555555543cp-3)))
         + (r2 * r2) * (bc<D>(0x1.55555cf172b91p-5) + r * bc<D>(0x1.1111167a4d017p-7));
@@ -319,11 +341,11 @@ AETHER_PM_INLINE D vlog(D x)
 {
 #if defined(__FMA__) || defined(__AVX512F__)
     const LaneMask<D> ix = bits(x);
-    const LaneMask<D> tmp = ix - ibc<D>(0x3fe6000000000000LL);
+    const LaneMask<D> tmp = usub<D>(ix, ibc<D>(0x3fe6000000000000LL));
     const LaneMask<D> idx = (srl<D>(tmp, 45) & 127) << 1;
     const LaneMask<D> k = tmp >> 52; // arithmetic: the exponent of x relative to z
     const D kd = fromBits<D>(k + bits(bc<D>(kRoundMagic))) - bc<D>(kRoundMagic);
-    const D z = fromBits<D>(ix - (tmp & ibc<D>(static_cast<std::int64_t>(0xfff0000000000000ULL))));
+    const D z = fromBits<D>(usub<D>(ix, tmp & ibc<D>(static_cast<std::int64_t>(0xfff0000000000000ULL))));
     const D invc = fromBits<D>(gather64<D>(kLogTab, idx));
     const D logc = fromBits<D>(gather64<D>(kLogTab, idx + 1));
     const D r = fma(z, invc, bc<D>(-1.0));

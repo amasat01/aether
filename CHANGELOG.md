@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (C++ library 0.2.1, `aether-dsc` 0.2.2)
+
+`orBool` on the device is a one-byte store (`ST.U8`) instead of a 32-bit word
+`atomicOr`, which read and wrote the three bytes around the slot and ran out of
+bounds on a one-byte allocation. The operation is an idempotent set-to-1, so a
+plain byte store is correct and race-free; the invariant is documented at the
+function.
+
+Host SIMD `packetExp` and `packetLog` do their exponent-field arithmetic in
+unsigned lanes: the signed form overflowed (undefined behaviour) for large
+arguments. Results are bit-identical.
+
+A sanitizer gate keeps memory and undefined-behaviour defects out: a CI job runs
+the CPU suite under AddressSanitizer and UndefinedBehaviorSanitizer, and
+`make sanitize-gate` runs the CUDA suite under compute-sanitizer (memcheck,
+racecheck, synccheck, initcheck) and valgrind. Planted canaries must trip every
+tool, so a gate that stops instrumenting goes red (`tests/sanitize/README.md`).
+
+## 0.2.1 (`aether-dsc` 0.2.1)
 
 Host SIMD `packetExp` and `packetLog` use table-driven algorithms: a 128-entry
 2^(i/128) table (exp) or (1/c, log c) table (log), a short polynomial, no
