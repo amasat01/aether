@@ -55,3 +55,15 @@ applied to ``v = (1, 0, 0)``, which must land on ``(0, 1, 0)``:
 
 Note the ``EXPECT_NEAR`` with an explicit tolerance rather than an exact
 comparison, for exactly the reassociation reason above.
+
+Worked example
+--------------
+
+A runnable notebook walks through a 90° rotation, with plots:
+:doc:`examples/quaternion_rotation`.
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+
+   examples/quaternion_rotation

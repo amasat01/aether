@@ -64,3 +64,16 @@ SAME stream, element for element:
 default-seed free function) and ``fr::Generator(fr::DEFAULT_SEED).normal<
 double,3>(0.5, 2.0)`` (the same seed spelled out explicitly) are exactly
 the same call underneath.
+
+Worked example
+--------------
+
+A runnable notebook fills an array with normal draws, proves reproducibility, and
+visualizes the stream:
+:doc:`examples/random_numbers`.
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+
+   examples/random_numbers

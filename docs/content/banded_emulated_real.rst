@@ -116,3 +116,10 @@ from a plain ``double`` — ``aether::banded::BandedReal::fromDouble(x)`` —
 rather than from a raw stored word the way this cross-checked test does;
 see the umbrella header's own worked example
 (``aether/banded/banded.h``) for that shorter path.
+
+Worked example
+--------------
+
+A runnable notebook computes ``1/3`` with ``BandedReal``, compares to native
+``double``, and visualizes the limb representation:
+:doc:`examples/banded_emulated_double`.

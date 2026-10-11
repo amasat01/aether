@@ -119,22 +119,8 @@ content/examples
 :caption: Explanation
 :hidden:
 
-content/views_and_items
-content/expression_templates
-content/host_vs_device
-content/memory_ownership
-content/interop
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Explanation: advanced
-:hidden:
-
-content/multi_device_residency
-content/cpu_simd
-content/banded_emulated_real
-content/accumulation
+content/concepts
+content/advanced
 ```
 
 ```{toctree}
@@ -144,6 +130,7 @@ content/accumulation
 
 content/api/api_reference
 content/python/aether_dsc
+content/glossary
 ```
 
 ```{toctree}
