@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.3 (C++ library 0.2.1, `aether-dsc` 0.2.3)
+
+Host vector math (`AETHER_HOST_VECTOR_MATH`): no masked vector variants on the
+GCC releases that miscompile masked calls. GCC 13.1-13.3 and 14.1-14.2
+if-convert a conditional call of a function with masked (inbranch) vector
+variants using the inverted mask, so a loop such as
+`r[i] = c[i] > lim ? a[i] : aether::math::tanh(b[i]) + 0.1` evaluated the lanes
+that should be inactive and returned wrong results. The bug is fixed upstream
+by GCC commit abbfe1e2616d ("middle-end: Fix ifcvt predicate generation for
+masked function calls"), released in 13.4 and 14.3.
+
+The header now applies a rule automatically: `AETHER_HVM_MASKED` is 0 on
+exactly those compilers (GCC, not clang, 13 before 13.4 and 14 before 14.3) and
+1 everywhere else. Under 0 every routed function is declared
+`simd("notinbranch")` and no masked `_ZGV?M?v_` variant is defined or kept
+alive; GCC cannot if-convert a call that has no masked clone, so only loops
+with a conditional aether math call run scalar there. Unconditional math calls
+keep their unmasked vector variants and every other loop vectorises as before.
+Define `-DAETHER_HVM_MASKED=0` or `=1` to override the rule (for tests, or for
+a distribution compiler that carries the backport). With the macro at 1 the
+generated code is byte-identical to 0.2.2. CI (`host-gcc`, GCC 12, 13, 14) runs
+`tests/packetmath/check_hvm_masked.sh`, which checks the results, the
+vectorisation of the unaffected loops and the symbols; on 13 and 14 a further
+step requires the miscompile to reproduce with `AETHER_HVM_MASKED=1`.
+
 ## 0.2.2 (C++ library 0.2.1, `aether-dsc` 0.2.2)
 
 `orBool` on the device is a one-byte store (`ST.U8`) instead of a 32-bit word

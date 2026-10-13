@@ -32,6 +32,21 @@
  * Masked variants evaluate every lane (inactive lanes are replaced by 1.0
  * first so no lane takes a slow path).
  *
+ * MASKED VARIANTS AND THE GCC BUG (`AETHER_HVM_MASKED`). GCC 13.1 to 13.3
+ * and 14.1 to 14.2 if-convert a conditional call of a function that has
+ * masked (inbranch) vector variants using the INVERTED mask: the masked
+ * variant then evaluates exactly the lanes that should be inactive and the
+ * loop returns wrong results (fixed upstream by "middle-end: Fix ifcvt
+ * predicate generation for masked function calls", GCC commit abbfe1e2616d,
+ * released in 13.4 and 14.3). On those compilers the masked variants are
+ * therefore neither declared nor defined: each function is declared
+ * `simd("notinbranch")`, and GCC cannot if-convert a call that has no masked
+ * clone, so ONLY a loop with a conditional aether math call stays scalar.
+ * Unconditional calls keep their unmasked vector variants and every other
+ * loop vectorises as before. `AETHER_HVM_MASKED` is 0 on exactly those
+ * compilers and 1 everywhere else; define it to 0 or 1 on the command line
+ * to override (tests, or a distribution compiler that carries the backport).
+ *
  * EMISSION. Nothing in the source names a vector variant: the vectoriser
  * creates the call to `_ZGV..._aether_hvm_f` late in optimisation, after GCC
  * has dropped every inline function nothing referenced. Each variant must
@@ -89,6 +104,14 @@
 #error "AETHER_HOST_VECTOR_MATH needs GCC targeting x86-64 (vector function ABI)"
 #endif
 
+#if !defined(AETHER_HVM_MASKED)
+#if !defined(__clang__) && ((__GNUC__ == 13 && __GNUC_PATCHLEVEL__ < 4) || (__GNUC__ == 14 && __GNUC_MINOR__ < 3))
+#define AETHER_HVM_MASKED 0
+#else
+#define AETHER_HVM_MASKED 1
+#endif
+#endif
+
 #include <cmath>
 #include <immintrin.h>
 #include <type_traits>
@@ -126,6 +149,16 @@
 #define AETHER_HVM_IF_AVX512(...) __VA_ARGS__
 #else
 #define AETHER_HVM_IF_AVX512(...)
+#endif
+
+// Masked variants exist only when AETHER_HVM_MASKED is 1 (see the header
+// comment): the argument list of AETHER_HVM_IF_MASKED vanishes otherwise.
+#if AETHER_HVM_MASKED
+#define AETHER_HVM_IF_MASKED(...) __VA_ARGS__
+#define AETHER_HVM_SIMD_ATTR simd
+#else
+#define AETHER_HVM_IF_MASKED(...)
+#define AETHER_HVM_SIMD_ATTR simd("notinbranch")
 #endif
 
 // One vector-ABI variant: C++ name NAME_TAG, assembler name SYM.
@@ -173,21 +206,23 @@
     struct NAME##_keep_t {                                                                         \
         decltype(&NAME##_s1) s1;                                                                   \
         decltype(&NAME##_b2) b2;                                                                   \
-        decltype(&NAME##_b2m) b2m;                                                                 \
-        AETHER_HVM_IF_AVX(decltype(&NAME##_c4) c4; decltype(&NAME##_c4m) c4m;)                     \
-        AETHER_HVM_IF_AVX2(decltype(&NAME##_d4) d4; decltype(&NAME##_d4m) d4m;)                    \
-        AETHER_HVM_IF_AVX512(decltype(&NAME##_e8) e8; decltype(&NAME##_e8m) e8m;)                  \
+        AETHER_HVM_IF_MASKED(decltype(&NAME##_b2m) b2m;)                                           \
+        AETHER_HVM_IF_AVX(decltype(&NAME##_c4) c4; AETHER_HVM_IF_MASKED(decltype(&NAME##_c4m) c4m;)) \
+        AETHER_HVM_IF_AVX2(decltype(&NAME##_d4) d4; AETHER_HVM_IF_MASKED(decltype(&NAME##_d4m) d4m;)) \
+        AETHER_HVM_IF_AVX512(decltype(&NAME##_e8) e8; AETHER_HVM_IF_MASKED(decltype(&NAME##_e8m) e8m;)) \
     };                                                                                             \
     template<class D>                                                                              \
     __attribute__((used, visibility("hidden"))) inline constexpr NAME##_keep_t NAME##_keep{        \
-        &NAME##_s1, &NAME##_b2, &NAME##_b2m AETHER_HVM_IF_AVX(, &NAME##_c4, &NAME##_c4m)           \
-            AETHER_HVM_IF_AVX2(, &NAME##_d4, &NAME##_d4m) AETHER_HVM_IF_AVX512(, &NAME##_e8, &NAME##_e8m)};
+        &NAME##_s1, &NAME##_b2 AETHER_HVM_IF_MASKED(, &NAME##_b2m)                                 \
+            AETHER_HVM_IF_AVX(, &NAME##_c4 AETHER_HVM_IF_MASKED(, &NAME##_c4m))                    \
+                AETHER_HVM_IF_AVX2(, &NAME##_d4 AETHER_HVM_IF_MASKED(, &NAME##_d4m))               \
+                    AETHER_HVM_IF_AVX512(, &NAME##_e8 AETHER_HVM_IF_MASKED(, &NAME##_e8m))};
 
 /// Declares `aether_hvm_NAME(double)` as a simd function and defines the
 /// scalar symbol and every vector variant the TU's ISA can call.
 #define AETHER_HVM_DEFINE_UNARY(NAME, IMPL)                                                         \
     extern "C" {                                                                                   \
-    __attribute__((simd, const, nothrow)) double aether_hvm_##NAME(double);                        \
+    __attribute__((AETHER_HVM_SIMD_ATTR, const, nothrow)) double aether_hvm_##NAME(double);                     \
     }                                                                                              \
     namespace aether {                                                                             \
     namespace math {                                                                               \
@@ -196,13 +231,13 @@
     AETHER_HVM_ATTR double NAME##_s1(double x) __asm__("aether_hvm_" #NAME);                       \
     AETHER_HVM_ATTR double NAME##_s1(double x) { return ::aether::simd::pm::IMPL(x); }             \
     AETHER_HVM_U(NAME, IMPL, b2, "_ZGVbN2v_aether_hvm_" #NAME, __m128d)                            \
-    AETHER_HVM_UM(NAME, IMPL, b2m, "_ZGVbM2v_aether_hvm_" #NAME, __m128d)                          \
+    AETHER_HVM_IF_MASKED(AETHER_HVM_UM(NAME, IMPL, b2m, "_ZGVbM2v_aether_hvm_" #NAME, __m128d))    \
     AETHER_HVM_IF_AVX(AETHER_HVM_U(NAME, IMPL, c4, "_ZGVcN4v_aether_hvm_" #NAME, __m256d)          \
-            AETHER_HVM_UM(NAME, IMPL, c4m, "_ZGVcM4v_aether_hvm_" #NAME, __m256d))                 \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_UM(NAME, IMPL, c4m, "_ZGVcM4v_aether_hvm_" #NAME, __m256d))) \
     AETHER_HVM_IF_AVX2(AETHER_HVM_U(NAME, IMPL, d4, "_ZGVdN4v_aether_hvm_" #NAME, __m256d)         \
-            AETHER_HVM_UM(NAME, IMPL, d4m, "_ZGVdM4v_aether_hvm_" #NAME, __m256d))                 \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_UM(NAME, IMPL, d4m, "_ZGVdM4v_aether_hvm_" #NAME, __m256d))) \
     AETHER_HVM_IF_AVX512(AETHER_HVM_U(NAME, IMPL, e8, "_ZGVeN8v_aether_hvm_" #NAME, __m512d)       \
-            AETHER_HVM_UM8(NAME, IMPL, e8m, "_ZGVeM8v_aether_hvm_" #NAME))                         \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_UM8(NAME, IMPL, e8m, "_ZGVeM8v_aether_hvm_" #NAME)))   \
     AETHER_HVM_KEEP(NAME)                                                                          \
     }                                                                                              \
     }                                                                                              \
@@ -211,7 +246,7 @@
 
 #define AETHER_HVM_DEFINE_BINARY(NAME, IMPL)                                                        \
     extern "C" {                                                                                   \
-    __attribute__((simd, const, nothrow)) double aether_hvm_##NAME(double, double);                \
+    __attribute__((AETHER_HVM_SIMD_ATTR, const, nothrow)) double aether_hvm_##NAME(double, double);                \
     }                                                                                              \
     namespace aether {                                                                             \
     namespace math {                                                                               \
@@ -220,13 +255,13 @@
     AETHER_HVM_ATTR double NAME##_s1(double x, double y) __asm__("aether_hvm_" #NAME);             \
     AETHER_HVM_ATTR double NAME##_s1(double x, double y) { return ::aether::simd::pm::IMPL(x, y); } \
     AETHER_HVM_B(NAME, IMPL, b2, "_ZGVbN2vv_aether_hvm_" #NAME, __m128d)                           \
-    AETHER_HVM_BM(NAME, IMPL, b2m, "_ZGVbM2vv_aether_hvm_" #NAME, __m128d)                         \
+    AETHER_HVM_IF_MASKED(AETHER_HVM_BM(NAME, IMPL, b2m, "_ZGVbM2vv_aether_hvm_" #NAME, __m128d))   \
     AETHER_HVM_IF_AVX(AETHER_HVM_B(NAME, IMPL, c4, "_ZGVcN4vv_aether_hvm_" #NAME, __m256d)         \
-            AETHER_HVM_BM(NAME, IMPL, c4m, "_ZGVcM4vv_aether_hvm_" #NAME, __m256d))                \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_BM(NAME, IMPL, c4m, "_ZGVcM4vv_aether_hvm_" #NAME, __m256d))) \
     AETHER_HVM_IF_AVX2(AETHER_HVM_B(NAME, IMPL, d4, "_ZGVdN4vv_aether_hvm_" #NAME, __m256d)        \
-            AETHER_HVM_BM(NAME, IMPL, d4m, "_ZGVdM4vv_aether_hvm_" #NAME, __m256d))                \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_BM(NAME, IMPL, d4m, "_ZGVdM4vv_aether_hvm_" #NAME, __m256d))) \
     AETHER_HVM_IF_AVX512(AETHER_HVM_B(NAME, IMPL, e8, "_ZGVeN8vv_aether_hvm_" #NAME, __m512d)      \
-            AETHER_HVM_BM8(NAME, IMPL, e8m, "_ZGVeM8vv_aether_hvm_" #NAME))                        \
+            AETHER_HVM_IF_MASKED(AETHER_HVM_BM8(NAME, IMPL, e8m, "_ZGVeM8vv_aether_hvm_" #NAME)))  \
     AETHER_HVM_KEEP(NAME)                                                                          \
     }                                                                                              \
     }                                                                                              \
@@ -278,6 +313,8 @@ AETHER_HVM_DEFINE_BINARY(fdim, vfdim)
 #undef AETHER_HVM_IF_AVX
 #undef AETHER_HVM_IF_AVX2
 #undef AETHER_HVM_IF_AVX512
+#undef AETHER_HVM_IF_MASKED
+#undef AETHER_HVM_SIMD_ATTR
 #undef AETHER_HVM_ATTR
 
 #pragma GCC pop_options
