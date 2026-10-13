@@ -8,7 +8,11 @@
 // compared with a scalar reference:
 //   a  conditional aether math call (the miscompiled pattern),
 //   b  unconditional aether math call,
-//   c  if-conversion without a math call.
+//   c  if-conversion without a math call,
+//   d  an early-exit iteration over a tile of lanes (per-lane active flags, a
+//      bounded trip loop, the math result feeding a select): the shape of a
+//      lane-interchanged kernel, which the affected compilers miscompile on
+//      AVX2 even when they leave loop a scalar.
 // Prints one line per loop ("a: OK" / "a: MISMATCH"); exit status is 0 when
 // every loop is correct and 1 otherwise. Build with -O3 -march=native
 // -DAETHER_HOST_VECTOR_MATH. The loop statements sit on the lines marked
@@ -44,6 +48,54 @@ __attribute__((noinline)) void loopC(const double* a, const double* b, const dou
 {
     for (std::size_t i = 0; i < N; ++i) // LOOP_C
         r[i] = c[i] > lim ? a[i] * 3.0 : b[i] + 1.0;
+}
+
+constexpr std::size_t TILE = 8;
+
+// One trip: s' = 1.1 s + g t; a lane whose s' exceeds lim stops with (s', t),
+// any other lane continues with t' = tanh(t) + 0.1. Twelve trips at most.
+__attribute__((noinline)) void loopD(const double* g, const double* x0, double lim, double* y)
+{
+    for (std::size_t lo = 0; lo < N; lo += TILE) {
+        alignas(64) double s[TILE], t[TILE], gg[TILE], on[TILE];
+        for (std::size_t l = 0; l < TILE; ++l) {
+            s[l] = x0[lo + l];
+            t[l] = x0[lo + l];
+            gg[l] = g[lo + l];
+            on[l] = 1.0;
+        }
+        for (int trip = 0; trip < 12; ++trip) {
+            long live = 0;
+#pragma GCC ivdep
+            for (std::size_t l = 0; l < TILE; ++l) { // LOOP_D
+                const bool lane = on[l] != 0.0;
+                const double tb2 = s[l] * 1.1 + gg[l] * t[l];
+                const bool stop = tb2 > lim;
+                const double th = aether::math::tanh(t[l]);
+                const double n1 = stop ? t[l] : th + 0.1;
+                s[l] = lane ? tb2 : s[l];
+                t[l] = lane ? n1 : t[l];
+                const bool more = lane && !stop;
+                on[l] = more ? 1.0 : 0.0;
+                live |= more ? 1L : 0L;
+            }
+            if (live == 0) break;
+        }
+        for (std::size_t l = 0; l < TILE; ++l)
+            y[lo + l] = s[l] + t[l];
+    }
+}
+
+double refD(double g, double x0, double lim)
+{
+    double s = x0, t = x0;
+    for (int trip = 0; trip < 12; ++trip) {
+        const double tb2 = s * 1.1 + g * t;
+        s = tb2;
+        if (tb2 > lim) break;
+        t = std::tanh(t) + 0.1;
+    }
+    return s + t;
 }
 
 bool close(const double* x, const double* ref)
@@ -85,6 +137,18 @@ int main()
         ref[i] = c[i] > lim ? a[i] * 3.0 : b[i] + 1.0;
     ok = close(r, ref);
     std::printf("c: %s\n", ok ? "OK" : "MISMATCH");
+    bad += !ok;
+
+    double g[N], x0[N];
+    for (std::size_t i = 0; i < N; ++i) {
+        g[i] = 0.2 + 0.03 * static_cast<double>(i % 11);
+        x0[i] = 0.05 * static_cast<double>(i % 7) - 0.1;
+    }
+    loopD(g, x0, 2.0, r);
+    for (std::size_t i = 0; i < N; ++i)
+        ref[i] = refD(g[i], x0[i], 2.0);
+    ok = close(r, ref);
+    std::printf("d: %s\n", ok ? "OK" : "MISMATCH");
     bad += !ok;
 
     return bad ? 1 : 0;
