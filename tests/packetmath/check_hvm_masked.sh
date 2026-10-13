@@ -23,7 +23,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 SRC=$HERE/hvm_masked_repro.cpp
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-FLAGS=(-std=c++23 -O3 -march=native -DAETHER_HOST_VECTOR_MATH -I"$ROOT")
+FLAGS=(-std=c++23 -O3 -ffp-contract=fast -fno-trapping-math -march=native -mprefer-vector-width=512 -fPIC -DAETHER_HOST_VECTOR_MATH -DAETHER_CPP_MODE -I"$ROOT")
 
 build() { # <tag> [extra flags...] ; writes $TMP/<tag>.{exe,vec,o}
     local tag=$1; shift
