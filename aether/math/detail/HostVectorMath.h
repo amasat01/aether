@@ -105,7 +105,7 @@
 #endif
 
 #if !defined(AETHER_HVM_MASKED)
-#if !defined(__clang__) && ((__GNUC__ == 13 && __GNUC_PATCHLEVEL__ < 4) || (__GNUC__ == 14 && __GNUC_MINOR__ < 3))
+#if !defined(__clang__) && ((__GNUC__ == 13 && __GNUC_MINOR__ < 4) || (__GNUC__ == 14 && __GNUC_MINOR__ < 3))
 #define AETHER_HVM_MASKED 0
 #else
 #define AETHER_HVM_MASKED 1
