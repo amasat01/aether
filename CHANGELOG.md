@@ -43,7 +43,7 @@ the CPU suite under AddressSanitizer and UndefinedBehaviorSanitizer, and
 racecheck, synccheck, initcheck) and valgrind. Planted canaries must trip every
 tool, so a gate that stops instrumenting goes red (`tests/sanitize/README.md`).
 
-## 0.2.1 (`aether-dsc` 0.2.1)
+## 0.2.1 (C++ library 0.2.1, `aether-dsc` 0.2.1)
 
 Host SIMD `packetExp` and `packetLog` use table-driven algorithms: a 128-entry
 2^(i/128) table (exp) or (1/c, log c) table (log), a short polynomial, no

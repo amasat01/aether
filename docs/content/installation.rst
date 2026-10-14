@@ -10,9 +10,9 @@ directly — see :doc:`python/aether_dsc`.
 Requirements
 ------------
 
-- CMake >= 3.20 and a C++23 compiler (GCC >= 12 or Clang >= 16).
-- CUDA mode additionally needs CUDA 12.6 or newer (tested with 12.6 and 13.0); nvcc accepts only host
-  compilers up to its own ceiling (GCC 13 for CUDA 12.6), so point it at
+- CMake >= 3.20 and a C++23 compiler. CI builds and tests with GCC 12, 13 and 14 (CMake itself enforces no minimum).
+- CUDA mode additionally needs CUDA 12.6 or newer (this repository's CI has no CUDA leg; eagle and hawk exercise the CUDA builds); nvcc accepts only host
+  compilers up to a ceiling that depends on the toolkit release (see NVIDIA's host-compiler table), so point it at
   one with ``-DCMAKE_CUDA_HOST_COMPILER=<g++-13>`` if your default
   compiler is newer.
 - A GPU is OPTIONAL: build with ``AETHER_CPP_MODE=ON`` and the whole
