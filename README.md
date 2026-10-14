@@ -28,9 +28,9 @@ aether is the numerics core of the [RAPTOR family](https://amasat01.github.io/):
 evaluator that keep the family's kernels efficient on the GPU and portable to CPU threads. See
 [where RAPTOR fits](https://amasat01.github.io/where_raptor_fits.html) for the full four-part story.
 
-| **0** | **1** | **156 ms** |
+| **0** | **1** | **GPU + CPU** |
 |:---:|:---:|:---:|
-| libraries to link (header-only) | source, two targets: CUDA or OpenMP | a million per-sample steps on a Quadro P2000 GPU, on the stack aether sits under — [eagle's card](https://amasat01.github.io/eagle/content/performance.html) |
+| libraries to link (header-only) | source, two targets: CUDA or OpenMP | the stack aether sits under is measured on every device in [eagle's performance cards](https://amasat01.github.io/eagle/content/performance.html) |
 
 ```cpp
 #include <aether/aether.h>
@@ -71,9 +71,10 @@ invocation, and the verification one-liner.
 default, the GPUs in this machine), `all` (every architecture from Pascal to Blackwell that your nvcc compiles), or one
 architecture or a list such as `"80;90"`.
 
-Host (pure C++) execution is built and measured today on x86-64 Linux (Xeon W-2125, AVX-512); the default
-`-march` is `x86-64-v3` (AVX2 + FMA). Support for ARM (aarch64) and for x86 CPUs with other vector widths is
-planned. Device builds are tested with CUDA 12.6 and CUDA 13.0; later CUDA 12 releases are expected to work.
+Host (pure C++) execution runs on x86-64 and aarch64 Linux; the CPUs measured are listed on eagle's performance page. On x86-64 the default
+`-march` is `x86-64-v3` (AVX2 + FMA); on ARM the build uses the compiler's generic default, and the host vector-math route
+(`AETHER_HOST_VECTOR_MATH`) is for GCC on x86-64 only. Loops that call an aether math function under a condition run scalar on GCC 13.1-13.3 and 14.1-14.2, which if-convert such a call wrongly when masked vector variants exist (fixed in GCC 13.4 and 14.3); `-DAETHER_HVM_MASKED=0` or `=1` overrides the automatic rule. This repository's CI builds and tests the CPU mode (GCC 12, 13 and 14
+on the host leg); the CUDA builds are exercised through eagle and hawk, which compile against aether. CUDA 12.6 or newer is required for device builds.
 
 `aether-dsc` on PyPI is the sealed header payload that hawk compiles against. It is installed with hawk
 automatically (`pip install raptor-hawk`); it is not something C++ users install. aether itself is used through

@@ -42,6 +42,8 @@ a time. ``aether::packetBatchedFor``/``aether::optimalTileSize`` add an
 L2-cache-aware tiled form on top of the same flat loop, sizing each tile
 from the destination's L2 cache footprint rather than a fixed constant.
 
+Host math: Loops that call an aether math function under a condition run scalar on GCC 13.1-13.3 and 14.1-14.2, which if-convert such a call wrongly when masked vector variants exist (fixed in GCC 13.4 and 14.3); ``-DAETHER_HVM_MASKED=0`` or ``=1`` overrides the automatic rule.
+
 This is the CPU-side counterpart to the device-side, register-resident
 bundles :doc:`host_vs_device` introduces — different hardware, same idea:
 process several samples per unit of work, held in fast, on-chip storage

@@ -143,3 +143,24 @@ jobs:
           LSAN_OPTIONS="suppressions=$PWD/tests/sanitize/lsan.supp" tests/check_gate.sh cpp build/tests/aether_tests --config debug
       - if: always()
         run: ccache -s
+
+  # AETHER_HOST_VECTOR_MATH on three GCC majors from the distribution's own
+  # packages: the reproducer and the vectorisation check under the default
+  # macro rule, plus (13 and 14) a necessity step proving the rule is not
+  # vacuous: with masked variants forced on, the compiler must miscompile the
+  # conditional-call loop. The step passes only if the mismatch is reported.
+  host-gcc:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gcc: [12, 13, 14]
+    name: host-gcc (${{ matrix.gcc }})
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y g++-${{ matrix.gcc }}
+      - name: reproducer and vectorisation check (default macro)
+        run: tests/packetmath/check_hvm_masked.sh g++-${{ matrix.gcc }}
+      - name: necessity (masked variants forced on must miscompile)
+        if: matrix.gcc != 12
+        run: tests/packetmath/check_hvm_masked.sh g++-${{ matrix.gcc }} --necessity

@@ -23,7 +23,7 @@ library function of the same C name; host compiles call ``std::``.
 "vector" marks the functions that ``AETHER_HOST_VECTOR_MATH`` routes (for
 ``double``, in a GCC x86-64 host translation unit) to the faithfully
 rounded packet math so scalar loops vectorise; the rest stay scalar on the
-host.
+host. Loops that call an aether math function under a condition run scalar on GCC 13.1-13.3 and 14.1-14.2, which if-convert such a call wrongly when masked vector variants exist (fixed in GCC 13.4 and 14.3); ``-DAETHER_HVM_MASKED=0`` or ``=1`` overrides the automatic rule.
 
 .. list-table::
    :header-rows: 1

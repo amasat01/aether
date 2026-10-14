@@ -22,7 +22,7 @@ OpenMP threads or CUDA threads. It is the numerics base layer the
 
 ```{raw} html
 <figure class="perf-glimpse">
-<a href="https://amasat01.github.io/eagle/content/performance.html"><img src="https://raw.githubusercontent.com/amasat01/eagle/main/docs/_static/perf/readme_gpu.svg" alt="Bar chart of wall time per tool for a million RK4 oscillators on one GPU, log scale: eagle.simulate, NVIDIA Warp, JAX, CuPy and PyTorch; the numbers are on eagle's performance page." style="max-width:100%;height:auto"></a>
+<a href="https://amasat01.github.io/eagle/content/performance.html"><img src="https://raw.githubusercontent.com/amasat01/eagle/main/docs/_static/perf/readme_gpu.svg" alt="Bar chart of wall time per tool for a million RK4 oscillators, log scale; the device, tools and numbers are on eagle's performance page." style="max-width:100%;height:auto"></a>
 <figcaption>aether has no benchmarks of its own. This is eagle, built on aether, running hawk kernels: a million RK4 oscillators, each stopping at its own step, wall time per tool, log scale. Measured by eagle's committed performance cards. <a href="https://amasat01.github.io/eagle/content/performance.html">Every device, workload and arm</a>.</figcaption>
 </figure>
 ```
