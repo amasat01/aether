@@ -48,6 +48,15 @@ int main() {
 }
 ```
 
+Compile it as it is, pointing `-I` at this repository (or at the install prefix's `include`):
+
+```bash
+# CPU (OpenMP threads), no CUDA toolchain needed
+g++ -std=c++23 -DAETHER_CPP_MODE=1 -fopenmp -I/path/to/aether hello.cpp -o hello
+# CUDA (name the file hello.cu; nvcc 12.6 takes at most -std=c++20; pick your GPU's architecture)
+nvcc -std=c++20 -arch=sm_80 -I/path/to/aether hello.cu -o hello
+```
+
 No separate install step beyond the below: it is header-only, so a consumer just `#include`s it and links nothing
 extra. See the
 [Quickstart](https://amasat01.github.io/aether/content/quickstart.html).
@@ -78,7 +87,10 @@ on the host leg); the CUDA builds are exercised through eagle and hawk, which co
 
 `aether-dsc` on PyPI is the sealed header payload that hawk compiles against. It is installed with hawk
 automatically (`pip install raptor-hawk`); it is not something C++ users install. aether itself is used through
-CMake, as above. From a clone, `pip install ./aether/dsc` builds it (Python 3.9 or newer).
+CMake, as above. From a clone, seal the payload first, then install it (Python 3.9 or newer):
+`pip install cuda-bindings nvidia-cuda-nvrtc-cu12 nvidia-cuda-cccl-cu12`, then
+`cd aether/dsc && python -m aether_dsc.seal` (it needs an eagle checkout next to this one), then `pip install ./aether/dsc`. Without the seal step the install
+succeeds but carries no payload, and hawk then cannot find `aether/aether.h`; for everyday use `pip install aether-dsc` instead.
 </details>
 
 ---
