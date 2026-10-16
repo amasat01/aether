@@ -23,10 +23,10 @@ BUILDDIR      = _build
 DOXYBUILDDIR  = _doxybuild
 NB_DIRS       = content/tutorials content/examples
 
-.PHONY: help html strict linkcheck doxygen nbexec nbcheck clean
+.PHONY: help html strict linkcheck doxygen nbexec nbcheck nbverify clean
 
 help:
-	@echo "Targets: html strict linkcheck doxygen nbexec nbcheck clean"
+	@echo "Targets: html strict linkcheck doxygen nbexec nbcheck nbverify clean"
 
 doxygen:
 	doxygen Doxyfile.in
@@ -57,6 +57,13 @@ nbexec:
 # notebook slipped in unexecuted).
 nbcheck:
 	python3 _tools/nb_check_filled.py $(NB_DIRS)
+
+# Prove every notebook's C++ still compiles and prints what the page shows:
+# CPU leg re-executes each notebook in a scratch copy and diffs the outputs;
+# CUDA leg compiles every snippet with nvcc (compile-only, no GPU; SKIP when
+# nvcc is absent). Pass NBVERIFY_ARGS=--require-cuda to make that a failure.
+nbverify:
+	python3 _tools/nb_verify.py $(NBVERIFY_ARGS) $(NB_DIRS)
 
 clean:
 	rm -rf $(BUILDDIR) $(DOXYBUILDDIR) content/api/generated content/python/generated
