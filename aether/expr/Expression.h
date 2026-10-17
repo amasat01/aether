@@ -455,29 +455,15 @@ concept aether_expression_structural = requires {
 };
 
 /**
- * @brief `true` for a leaf that IS its value rather than a window onto
- *        storage — `Item` (`aether/view/Item.h`) and `Constant`
- *        (`aether/expr/nodes/Constant.h`) specialise it. Every other leaf
- *        (a `View`, a table, a fused cache) stays `false`.
- */
-template<class E>
-inline constexpr bool isValueLeaf = false;
-
-/**
- * @brief How `Select` holds an operand: a storage leaf by `const&` (the
- *        capture protocol every node uses), a composite node or a value leaf
- *        BY VALUE.
+ * @brief How `Select` holds an operand: a leaf by `const&` (the capture
+ *        protocol every node uses), a composite node by value.
  *
- * A value leaf held by reference is read through the caller's own object.
- * When that object is a `const` local (`const auto c = constant(...)`, the
- * shape emitted kernels use), GCC will not scalarise it (a store into a
- * read-only declaration disqualifies it), so it stays on the stack and its
- * end-of-life clobber blocks if-conversion of a host sample loop around the
- * `select`. A by-value copy is an ordinary aggregate the compiler keeps in
- * registers; the selected values are the same.
+ * A leaf is never held by value: a nested `select` over value leaves
+ * (`Item`, `Constant`) held by value is miscompiled by GCC's points-to
+ * analysis (11.5 and 14.3 at -O2/-O3), and a stale stack value is read.
  */
 template<class E>
-using SelectOperand = std::conditional_t<E::isLeaf && !isValueLeaf<std::remove_cv_t<E>>, const E&, const E>;
+using SelectOperand = std::conditional_t<E::isLeaf, const E&, const E>;
 
 } // namespace detail
 

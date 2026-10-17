@@ -164,3 +164,10 @@ jobs:
       - name: necessity (masked variants forced on must miscompile)
         if: matrix.gcc != 12
         run: tests/packetmath/check_hvm_masked.sh g++-${{ matrix.gcc }} --necessity
+      - name: nested select reads no stale stack (leaves held by reference)
+        run: tests/hosttu/check_select_pta.sh g++-${{ matrix.gcc }}
+      # Not yet known which of 12/13/14 carry the bug on this reduction (11.5 does);
+      # once a run shows which are RED, gate this step on those majors only.
+      - name: necessity (old by-value alias must miscompile)
+        continue-on-error: true
+        run: tests/hosttu/check_select_pta.sh g++-${{ matrix.gcc }} --necessity

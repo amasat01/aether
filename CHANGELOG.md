@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 (C++ library 0.2.2, `aether-dsc` 0.2.4)
+
+`select` holds every leaf operand by reference, like every other node. A nested
+`select` over value leaves (`Item`, `Constant`) held by value was miscompiled by GCC's
+points-to analysis (seen on 11.5 and 14.3): the result could be read from a stale stack
+slot. Second-order derivative kernels (a `select` inside a `select`, as emitted for
+`jvp` of `jvp`) built with GCC were affected. Vectorised loops and timing are unchanged.
+
 ## 0.2.3 (C++ library 0.2.1, `aether-dsc` 0.2.3)
 
 Host vector math (`AETHER_HOST_VECTOR_MATH`): no masked vector variants on the
