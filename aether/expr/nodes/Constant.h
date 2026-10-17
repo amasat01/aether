@@ -92,10 +92,6 @@ private:
     T value_;
 };
 
-/** @brief A `Constant` is a value leaf (see `detail::isValueLeaf`). */
-template<class T, class Extents>
-inline constexpr bool isValueLeaf<Constant<T, Extents>> = true;
-
 } // namespace detail
 
 /**

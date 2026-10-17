@@ -275,10 +275,4 @@ private:
     detail::Carray<T, Size> data_{};
 };
 
-namespace detail {
-/** @brief An `Item` is a value leaf (see `detail::isValueLeaf`). */
-template<class T, std::size_t... Es>
-inline constexpr bool isValueLeaf<Item<T, Es...>> = true;
-} // namespace detail
-
 } // namespace aether

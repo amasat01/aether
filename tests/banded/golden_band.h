@@ -5,7 +5,8 @@
 
 /**
  * @file golden_band.h
- * @brief GENERATED — committed golden values for the banded
+ * @brief GENERATED — a regression anchor minted from the code under test, not an
+ *        independent oracle: committed golden values for the banded
  *        codec and the certified arithmetic core. DO NOT EDIT BY HAND.
  *
  * Minted by `tools/banded/mint_golden.sh` (which drives
