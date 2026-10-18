@@ -3,10 +3,12 @@
 #
 # Builds the Sphinx+Doxygen/breathe docs site and deploys it to GitHub
 # Pages on push to main. Tutorial/example notebooks are executed LOCALLY
-# (`make -C docs nbexec`) and committed WITH their outputs — this workflow
-# only checks they were (`make nbcheck`), it never executes them itself
-# (conf.py sets `nb_execution_mode = "off"`), so no GPU/CUDA toolchain is
-# needed here. Does not touch ci.yml's build/test jobs.
+# (`make -C docs nbexec`) and committed WITH their outputs; the `build` job
+# only checks they were (`make nbcheck`; conf.py sets
+# `nb_execution_mode = "off"`). The `nbverify` job proves the C++ in every
+# notebook: it re-runs each one on the CPU and diffs the outputs, and
+# compiles every snippet with nvcc (compile-only, no GPU). Does not touch
+# ci.yml's build/test jobs.
 
 name: Docs
 
@@ -14,6 +16,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,6 +52,43 @@ jobs:
         with:
           path: docs/_build/html
           retention-days: 7
+
+  nbverify:
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v7
+
+      # g++-13 is the compiler ci.yml uses; the harness invokes `g++`, so
+      # point that name at it.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
+      # nvcc for compile-only checks of the CUDA arm: NVIDIA's apt repo,
+      # just the compiler, the runtime headers and CCCL (no driver, no GPU).
+      - run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 cuda-cccl-12-6
+          echo /usr/local/cuda-12.6/bin >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - run: python3 -m pip install -r docs/requirements.txt matplotlib
+
+      - run: nvcc --version && g++ --version
+
+      # --require-cuda: a missing nvcc is a failure here, never a skip.
+      - run: make -C docs nbverify NBVERIFY_ARGS=--require-cuda
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
