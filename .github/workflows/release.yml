@@ -1,0 +1,226 @@
+# Copyright 2026 Alessandro Masat
+# SPDX-License-Identifier: Apache-2.0
+#
+# Seal, build, check and test everything that ships, on the pull request.
+# The artifacts are named by git tree hash, so publish.yml and docs.yml can
+# find and upload exactly what was tested here instead of rebuilding it.
+#
+# aether-dsc is pure Python (setuptools): one sdist and one py3-none-any
+# wheel. Its payload is NOT source: `python -m aether_dsc.seal` must run
+# before the build, sealing THIS checkout's aether headers (manifest
+# `aether_dsc/payload_headers.txt`) plus the sibling eagle checkout's
+# `plugin/gref_layout.h` / `plugin/gref_abi.h` into a digest-named blob
+# under `aether_dsc/_payload/` (gitignored dev-time output; a wheel built
+# without sealing first ships with no payload and fails at import). Sealing
+# also runs the NVRTC-clean gate over every device-reachable header, so the
+# job needs `cuda-bindings` + `nvidia-cuda-nvrtc-cu12` + `nvidia-cuda-cccl-cu12`
+# from PyPI (a GitHub runner has no CUDA toolkit, so the CCCL `cuda/std`
+# headers the gate compiles against come from the pip wheel too). NVRTC only
+# compiles (to PTX), so this needs no GPU and no driver.
+
+name: Release
+
+# Pull requests only: main receives the tested tree, nothing re-runs there.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tree: ${{ steps.tree.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: aether
+
+      # The sibling eagle checkout `seal()` reads plugin/gref_layout.h and
+      # plugin/gref_abi.h from (host path only; NVRTC itself is served an
+      # alias). Default branch: the tree under test is aether's, not
+      # eagle's. eagle is a public repository, so the default GITHUB_TOKEN
+      # reads it; no secret is involved.
+      - uses: actions/checkout@v7
+        with:
+          repository: amasat01/eagle
+          path: eagle
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: aether/dsc/pyproject.toml
+
+      - run: python -m pip install --quiet build "cuda-bindings" "nvidia-cuda-nvrtc-cu12" "nvidia-cuda-cccl-cu12" "twine>=6" pyyaml
+
+      - name: publish and deploy workflows only download, verify and upload
+        run: python aether/tools/ci_publish_subset.py
+
+      - name: Seal this checkout's AETHER payload (NVRTC-clean gate included)
+        run: cd aether/dsc && python -m aether_dsc.seal
+
+      - run: cd aether/dsc && python -m build --outdir ../../dist
+
+      - run: python -m twine check --strict dist/*
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      - id: tree
+        run: echo "tree=$(git -C aether rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ steps.tree.outputs.tree }}
+          retention-days: 90
+          path: dist/
+
+  test-wheel:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ needs.build.outputs.tree }}
+          path: dist
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Fresh venv, install the released wheel, pip check, import smoke
+        run: |
+          python -m venv venv
+          . venv/bin/activate
+          pip install --quiet --no-index --find-links dist aether-dsc
+          pip check
+          python - <<'PY'
+          import aether_dsc
+          p = aether_dsc.payload()
+          assert p.headers and p.digest
+          with p.serve() as include_root:
+              assert (include_root / "aether" / "typedefs.h").exists()
+          print(f"OK: {len(p.headers)} headers, digest={p.digest[:16]}...")
+          PY
+
+  sdist-install:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ needs.build.outputs.tree }}
+          path: dist
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: The sdist installs into a clean venv and imports
+        run: |
+          python -m venv sv
+          sv/bin/python -m pip install --quiet dist/*.tar.gz
+          sv/bin/python -m pip check
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/sv/bin/python" - <<'PY'
+          import aether_dsc
+          p = aether_dsc.payload()
+          assert p.headers and p.digest
+          print(f"OK: {len(p.headers)} headers, digest={p.digest[:16]}...")
+          PY
+
+  # Notebooks are executed locally (`make -C docs nbexec`) and committed with
+  # outputs; nbcheck only verifies they have them (conf.py sets
+  # `nb_execution_mode = "off"`).
+  docs:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - run: python3 -m pip install -r docs/requirements.txt
+
+      # Refuses to proceed unless every tutorial/example notebook cell
+      # already ran clean.
+      - run: make -C docs nbcheck
+
+      # doxygen (breathe's XML source) + sphinx -W --keep-going: 0 warnings.
+      - run: make -C docs strict
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: site-${{ needs.build.outputs.tree }}
+          retention-days: 90
+          path: docs/_build/html
+
+  # Proves the C++ in every notebook: re-runs each one on the CPU and diffs
+  # the outputs, and compiles every snippet with nvcc (compile-only, no GPU).
+  nbverify:
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - uses: actions/checkout@v7
+
+      # g++-13 is the compiler ci.yml uses; the harness invokes `g++`, so
+      # point that name at it.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
+      # nvcc for compile-only checks of the CUDA arm: NVIDIA's apt repo,
+      # just the compiler, the runtime headers and CCCL (no driver, no GPU).
+      - run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 cuda-cccl-12-6
+          echo /usr/local/cuda-12.6/bin >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - run: python3 -m pip install -r docs/requirements.txt matplotlib
+
+      - run: nvcc --version && g++ --version
+
+      # --require-cuda: a missing nvcc is a failure here, never a skip.
+      - run: make -C docs nbverify NBVERIFY_ARGS=--require-cuda
+
+  # Informational: a non-release PR carries an already published version.
+  pypi-version:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ needs.build.outputs.tree }}
+          path: dist
+      - run: |
+          whl=$(basename dist/*.whl)
+          version=$(echo "$whl" | cut -d- -f2)
+          if curl -fsS "https://pypi.org/pypi/aether-dsc/${version}/json" > /dev/null; then
+            echo "::notice::aether-dsc ${version} is already on PyPI; a release needs a version bump"
+          else
+            echo "::notice::aether-dsc ${version} is not on PyPI yet"
+          fi
