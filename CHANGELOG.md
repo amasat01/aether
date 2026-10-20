@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.2.5 (C++ library 0.2.5, `aether-dsc` 0.2.5)
 
 **Compensated-sum helpers** in `aether/accum/atomic.h`: the Neumaier step, a symmetric pair-combine, a rule for non-finite terms, and the 32-lane warp butterfly with its host twin. eagle 0.6.3's reductions use them, and its CMake build asks for aether 0.2.5.

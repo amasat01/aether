@@ -44,13 +44,13 @@ jobs:
 
       # The sibling eagle checkout `seal()` reads plugin/gref_layout.h and
       # plugin/gref_abi.h from (host path only; NVRTC itself is served an
-      # alias). Default branch: the tree under test is aether's, not
-      # eagle's. eagle is a public repository, so the default GITHUB_TOKEN
-      # reads it; no secret is involved.
-      - uses: actions/checkout@v7
+      # alias). Pinned ref, else a same-named branch, else main.
+      - uses: ./aether/.github/actions/companion
         with:
-          repository: amasat01/eagle
+          repo: eagle
           path: eagle
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: aether/.github/companions
 
       - uses: actions/setup-python@v7
         with:
