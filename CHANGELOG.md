@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5 (C++ library 0.2.5, `aether-dsc` 0.2.5)
+
+**Compensated-sum helpers** in `aether/accum/atomic.h`: the Neumaier step, a symmetric pair-combine, a rule for non-finite terms, and the 32-lane warp butterfly with its host twin. eagle 0.6.3's reductions use them, and its CMake build asks for aether 0.2.5.
+
+**One version number.** The C++ library and `aether-dsc` now share it, so a tag names both. `aether-dsc` itself is unchanged from 0.2.4.
+
+The notebook check also refuses a stored Python warning or a `/dev/shm` path in an output.
+
 ## 0.2.4 (C++ library 0.2.2, `aether-dsc` 0.2.4)
 
 `select` holds every leaf operand by reference, like every other node. A nested
