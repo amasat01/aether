@@ -54,7 +54,7 @@ quaternion        a ``vec4`` laid out ``(w, x, y, z)``; a 3-vector is a ``vec3``
 Build conditions
 ~~~~~~~~~~~~~~~~
 
-The bit-identity holds under two conditions:
+The bit-identity holds under two conditions, with one exception below:
 
 * The C translation unit must be compiled with ``-ffp-contract=off``.
   GNU-mode GCC defaults to ``-ffp-contract=fast``, which fuses ``a*b - c*d``
@@ -63,6 +63,15 @@ The bit-identity holds under two conditions:
 * Identity is to the templates' default ``std::`` host route: no
   ``AETHER_HOST_VECTOR_MATH`` (which reroutes some functions to
   faithfully-rounded packet implementations) and no fast-math.
+
+The exception is the sign of a zero from ``min`` or ``max`` when the operands
+are ``+0`` and ``-0``. C leaves the sign of ``fmin(+0, -0)`` and
+``fmax(+0, -0)`` unspecified, and compilers differ: GCC's inline expansion
+returns the first operand, glibc's out-of-line function the second, and the
+choice can change with the optimisation level. Neither the templates nor the C
+can promise a sign there, so the ``CCore`` suite accepts either zero for these
+two kinds only, and stays a byte comparison everywhere else (a NaN is accepted
+for a NaN, as before).
 
 Consuming it from Python
 ------------------------

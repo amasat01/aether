@@ -98,6 +98,24 @@ bool sameBits(T a, T b)
     return std::memcmp(&a, &b, sizeof(T)) == 0 || (std::isnan(a) && std::isnan(b));
 }
 
+/// `sameBits`, or both zeros of either sign. Only for `min`/`max`: C leaves
+/// the sign of `fmin(+0, -0)` / `fmax(+0, -0)` unspecified, and the answer
+/// changes with how the compiler expands the call (GCC's inline expansion
+/// returns the first operand, glibc's out-of-line fmin the second; see
+/// aether/math/detail/HostVectorMath.h). Neither side's tie sign is a
+/// property of aether, so no C spelling can match it on every build.
+template<class T>
+bool sameBitsOrZeroTie(T a, T b)
+{
+    return sameBits(a, b) || (a == T(0) && b == T(0));
+}
+
+/// The kinds whose signed-zero tie is unspecified (see `sameBitsOrZeroTie`).
+inline bool hasZeroTie(const char* kind)
+{
+    return std::strcmp(kind, "min") == 0 || std::strcmp(kind, "max") == 0;
+}
+
 // ---- corpus ---------------------------------------------------------------
 
 template<class T>
@@ -271,15 +289,16 @@ auto onesLike(const X&)
 // ---- comparison -----------------------------------------------------------
 
 template<class W, class G>
-bool sameResult(const W& want, const G& got)
+bool sameResult(const W& want, const G& got, bool zeroTie = false)
 {
+    const auto same = [zeroTie](auto x, auto y) { return zeroTie ? sameBitsOrZeroTie(x, y) : sameBits(x, y); };
     if constexpr (std::is_arithmetic_v<W>) {
         static_assert(std::is_same_v<W, G>, "scalar result type mismatch");
-        return sameBits(want, got);
+        return same(want, got);
     } else {
         const W g = fromC<W>(got);
         for (std::size_t k = 0; k < W::Size; ++k)
-            if (!sameBits(want.data()[k], g.data()[k]))
+            if (!same(want.data()[k], g.data()[k]))
                 return false;
         return true;
     }
@@ -319,7 +338,7 @@ void checkKind(const Corpus<T>& corpus, const char* w, const char* shape, const 
     for (std::size_t n = 0; n < ins.size(); ++n) {
         const auto& in = ins[n];
         const auto [want, got] = f(in);
-        ASSERT_TRUE(sameResult(want, got))
+        ASSERT_TRUE(sameResult(want, got, hasZeroTie(kind)))
             << "kind " << kind << ", width " << w << ", shape " << shape << ", corpus " << corpus.name << " input #"
             << n << " (i=" << in.pick[0] << ", j=" << in.pick[1] << ", k=" << in.pick[2] << "): a=" << show(in.a)
             << " b=" << show(in.b) << " v=" << show(in.v) << " s=" << show(in.s) << "; aether " << show(want)
