@@ -289,6 +289,15 @@ BundleBitIdentityTest.MisalignedRawPointerWrapFallsBackButStaysExact
 BundleBitIdentityTest.QuatSandwichChainViaBundlesMatchesScalarAssignmentExactly
 BundleBitIdentityTest.TailBundleNotDivisibleByWStillExact
 BundleBitIdentityTest.Vec3AxpyBundleMatchesScalarAssignmentExactly
+CCore.Mat_f32
+CCore.Mat_f64
+CCore.Quat_f32
+CCore.Quat_f64
+CCore.Scalars_f32
+CCore.Scalars_f64
+CCore.SpecialValues
+CCore.Vec_f32
+CCore.Vec_f64
 ChunkTest.CpuAllocateAndFree
 ChunkTest.CpuAllocationIsAligned
 ChunkTest.CudaDeviceAllocateAndFree

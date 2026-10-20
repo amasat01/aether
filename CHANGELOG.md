@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.4 (C++ library 0.2.1, `aether-dsc` 0.2.4)
+
+A plain-C reference core: `aether_dsc.c_core` is a pure-Python generator of C99
+functions (vectors, matrices, quaternions and four scalar formulas, at both
+`double` and `float` widths) that reproduce aether's expression-template
+arithmetic bit for bit. The contract is the fold order: dot, norm and sum
+products are right-nested with the highest index outermost and no zero seed,
+division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. The
+`CCore` test suite pins every generated function `memcmp`-equal to the
+templates, and CI gates the committed corpus headers as strict C99 and with
+`tools/c_core/mint_golden.py --check`.
+
+It exists so that a consumer such as hawk can inline the functions it needs
+into standalone C that matches the templates bit for bit. The C++ library is
+unchanged.
+
 ## 0.2.3 (C++ library 0.2.1, `aether-dsc` 0.2.3)
 
 Host vector math (`AETHER_HOST_VECTOR_MATH`): no masked vector variants on the

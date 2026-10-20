@@ -39,6 +39,15 @@ jobs:
       # OpenMP (find_package(OpenMP REQUIRED)) ships with g++, no extra package.
       - run: sudo apt-get update && sudo apt-get install -y g++-13 ccache
 
+      # gates the committed C reference-core corpus header against the generator (aether_dsc.c_core)
+      - run: PYTHONPATH=dsc python3 tools/c_core/mint_golden.py --check
+
+      # gates that same header as strict C99 (compiled with $CC)
+      - run: tests/c_core/check_c99.sh
+
+      # pins the generator on shapes beyond the corpus (only test_c_core.py: the sibling dsc tests need the sealed payload and raptor)
+      - run: python3 -m pip install --user pytest && PYTHONPATH=dsc python3 -m pytest dsc/tests/test_c_core.py -q
+
       # compiled objects persist across runs; one cache per job and architecture
       - uses: actions/cache@v6
         with:
