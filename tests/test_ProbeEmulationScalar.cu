@@ -66,7 +66,6 @@ AETHER_DEVICEHOST() constexpr ProbeSd operator*(ProbeSd a, ProbeSd b) { return P
 AETHER_DEVICEHOST() constexpr ProbeSd operator/(ProbeSd a, ProbeSd b) { return ProbeSd{ a.v / b.v }; }
 AETHER_DEVICEHOST() constexpr bool operator<(ProbeSd a, ProbeSd b) { return a.v < b.v; }
 AETHER_DEVICEHOST() constexpr bool operator>(ProbeSd a, ProbeSd b) { return a.v > b.v; }
-AETHER_DEVICEHOST() constexpr bool operator==(ProbeSd a, ProbeSd b) { return a.v == b.v; }
 
 class ProbeEmulationScalarTest : public ::testing::Test { };
 

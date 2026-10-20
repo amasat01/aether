@@ -1,20 +1,20 @@
 # Changelog
 
-## 0.2.4 (C++ library 0.2.1, `aether-dsc` 0.2.4)
+## 0.2.5 (C++ library 0.2.5, `aether-dsc` 0.2.5)
 
-A plain-C reference core: `aether_dsc.c_core` is a pure-Python generator of C99
-functions (vectors, matrices, quaternions and four scalar formulas, at both
-`double` and `float` widths) that reproduce aether's expression-template
-arithmetic bit for bit. The contract is the fold order: dot, norm and sum
-products are right-nested with the highest index outermost and no zero seed,
-division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. The
-`CCore` test suite pins every generated function `memcmp`-equal to the
-templates, and CI gates the committed corpus headers as strict C99 and with
-`tools/c_core/mint_golden.py --check`.
+**Compensated-sum helpers** in `aether/accum/atomic.h`: the Neumaier step, a symmetric pair-combine, a rule for non-finite terms, and the 32-lane warp butterfly with its host twin. eagle 0.6.3's reductions use them, and its CMake build asks for aether 0.2.5.
 
-It exists so that a consumer such as hawk can inline the functions it needs
-into standalone C that matches the templates bit for bit. The C++ library is
-unchanged.
+**One version number.** The C++ library and `aether-dsc` now share it, so a tag names both. `aether-dsc` itself is unchanged from 0.2.4.
+
+The notebook check also refuses a stored Python warning or a `/dev/shm` path in an output.
+
+## 0.2.4 (C++ library 0.2.2, `aether-dsc` 0.2.4)
+
+`select` holds every leaf operand by reference, like every other node. A nested
+`select` over value leaves (`Item`, `Constant`) held by value was miscompiled by GCC's
+points-to analysis (seen on 11.5 and 14.3): the result could be read from a stale stack
+slot. Second-order derivative kernels (a `select` inside a `select`, as emitted for
+`jvp` of `jvp`) built with GCC were affected. Vectorised loops and timing are unchanged.
 
 ## 0.2.3 (C++ library 0.2.1, `aether-dsc` 0.2.3)
 

@@ -10,13 +10,11 @@ build-backend = "setuptools.build_meta"
 # "raptor-hawk"). The import name stays flat
 # (`import aether_dsc`).
 name = "aether-dsc"
-# aether-dsc has its own version, independent of the C++ library's
-# (aether/version.h: `constexpr version()`): a dsc release that only adds
-# Python (such as `aether_dsc.c_core`) bumps this and leaves version.h alone.
-# The wheel still ships a SEALED payload of its exact checkout, whose digest
-# (not this number) is what names the headers it speaks for. CHANGELOG headings
-# record both: "C++ library X (`aether-dsc` Y)".
-version = "0.2.4"
+# Tracks aether's own version (aether/version.h: `constexpr version()`) —
+# aether-dsc ships a SEALED payload of that exact checkout, so a version skew
+# between the two would silently claim a payload speaks for a different
+# aether than it does.
+version = "0.2.5"
 description = "aether-dsc — the sealed AETHER header payload: opaque, digest-named, no readable source in the wheel"
 readme = "README.md"
 requires-python = ">=3.9"

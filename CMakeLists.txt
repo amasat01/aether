@@ -15,7 +15,7 @@ option(AETHER_CPP_MODE "Whether to build aether as a pure C++ Package. Default i
 set(AETHER_SANITIZERS "" CACHE STRING "-fsanitize= list applied to the test targets and canaries (empty = off)")
 option(AETHER_BUILD_SANITIZE "Register the \`sanitize\` custom target (valgrind/compute-sanitizer wrapper)" OFF)
 set(AETHER_SANITIZE_TOOL "both" CACHE STRING "Which sanitizer(s) the sanitize target runs: valgrind|computesan|both")
-option(AETHER_SANITIZE_MINIMAL "Run the sanitize target with AETHER_TEST_MINIMAL=1 (currently a no-op, no aether test reads it)" OFF)
+option(AETHER_SANITIZE_MINIMAL "Run the sanitize target with AETHER_TEST_MINIMAL=1 (the banded batteries shrink their bulk arms; see tests/banded/minimal_mode.h)" OFF)
 option(AETHER_SANITIZE_FAIL_ON_REACHABLE "Escalate still-reachable leaks to failures" OFF)
 
 # CUDA architectures, when CMAKE_CUDA_ARCHITECTURES is not given: AETHER_CUDA_ARCHS
@@ -118,10 +118,10 @@ endif()
 
 if (AETHER_CPP_MODE)
   message(STATUS "> Configuring aether in C++ only mode")
-  project(aether VERSION 0.2.1 LANGUAGES CXX)
+  project(aether VERSION 0.2.5 LANGUAGES CXX)
 else()
   message(STATUS "> Configuring aether in CUDA/C++ mode")
-  project(aether VERSION 0.2.1 LANGUAGES CUDA CXX)
+  project(aether VERSION 0.2.5 LANGUAGES CUDA CXX)
 endif()
 
 include(GNUInstallDirs)

@@ -1,42 +1,61 @@
 # Contributing
 
-Contributions — issues and pull requests — are welcome on GitHub, under the
-terms below.
+The manifesto behind [How we build](https://amasat01.github.io/raptor/content/principles.html):
 
-## Terms
+<!-- manifesto:begin -->
+Bloat is future technical debt.<br>
+Excessive abstraction hides reality.<br>
+Focus and clear boundaries promote flexibility and seamless integration.<br>
+Efficiency safeguards portability and scale.<br>
+Performance unlocks capabilities.<br>
+Rigor earns trust.<br>
+Simplicity enables discovery.
+<!-- manifesto:end -->
 
-Contributions are accepted under the Apache License 2.0, the license this
-project ships under (inbound = outbound). Every contribution must carry a
-Developer Certificate of Origin sign-off (`git commit -s`); see
-https://developercertificate.org/ for what that certifies. There is no
-Contributor License Agreement and no relicensing right.
+Read [How we build](https://amasat01.github.io/raptor/content/principles.html) first: the twelve rules every pull request in the
+family is read against, plus the style, release and license terms.
 
-## Using the code
+**This repo:** the header-only C++23 expression library (host and CUDA, one API). The layer every other repo builds on.
 
-The code is available under the Apache License 2.0 (see `LICENSE`).
-Contributions are accepted under the same terms (inbound = outbound).
+## Build and run the gate
 
-## Releasing
+From the repo root (CPU-only shown; leave `cpp=ON` off for a CUDA build). `Makefile` has the same commands.
 
-`aether-dsc` (the sealed AETHER header payload — this repo's C++ library
-itself is not published to PyPI) publishes through
-`.github/workflows/publish.yml`, triggered by pushing a tag `v<version>`
-that matches `dsc/pyproject.toml`'s `project.version` (which tracks
-`aether/version.h`). `workflow_dispatch` runs the same build, check and
-test-wheel steps without publishing.
+```bash
+make test cpp=ON                 # configure, build, then tests/check_gate.sh cpp build/tests/aether_tests
+make remint cpp=ON               # after adding or removing a test: rewrite tests/expected_tests_cpp.txt
+```
 
-1. Bump `version` in `dsc/pyproject.toml` (keep it in step with
-   `aether/version.h`), update `CHANGELOG.md`.
-2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The workflow checks out the sibling `eagle` repository (`seal()` needs
-   its `plugin/gref_layout.h` / `plugin/gref_abi.h`), runs
-   `python -m aether_dsc.seal` — which also runs the NVRTC-clean gate over
-   every device-reachable header — builds the sdist + wheel, runs
-   `twine check --strict`, verifies the wheel ships the sealed payload (and
-   no readable `aether/` source), tests the installed wheel on every
-   supported CPython, then publishes via a PyPI Trusted Publisher
-   (environment `pypi`; no token in this repository).
+Never run the test binary bare. An empty `--gtest_filter` exits 0 from the binary alone; `tests/check_gate.sh` compares the run
+and the listing with the committed name manifest `tests/expected_tests_{cuda,cpp}.txt`. Commit the manifest diff with the tests.
+`remint` is refused when `$CI` is set.
 
-**Publish order across the family:** `aether-dsc` and `raptor-core` (in the
-`raptor` repo) have no family dependencies and publish first, in either
-order. `raptor-hawk` depends on `aether-dsc` and publishes after it.
+CI configures with `-DAETHER_WARN_AS_ERR=ON`; use it too (`.github/workflows/ci.yml`).
+
+Other gates, each a Makefile target: `make sanitize-gate` (CUDA sanitizers, local), `make faithful-gate` (CPU packet math rounding).
+
+Docs (`pip install -r docs/requirements.txt`; the gate needs `doxygen`):
+
+```bash
+tests/docs/check_docs.sh         # doxygen allowlist, cited symbols exist, sphinx -W, examples match their tests
+cd docs && make nbexec && make nbcheck && make linkcheck
+```
+
+A new Doxygen warning is a regression; do not add it to `docs/doxygen_allowlist.txt`.
+
+## What a PR here must show
+
+- The code stays header-only C++23 and builds in both modes, CUDA and `AETHER_CPP_MODE`, with the same API.
+- Device-reachable headers stay NVRTC-clean (`python -m aether_dsc.seal` checks them).
+- The host-compiler matrix stays green: the `host-gcc` job builds with g++ 12, 13 and 14. A compiler bug is worked around here and
+  pinned by a check that fails on the bad compiler.
+- Math changes carry their rounding bound and a test that fails when the code is wrong.
+- Every public symbol has a Doxygen `@brief`; docs cite only symbols that exist.
+- The family checklist from [How we build](https://amasat01.github.io/raptor/content/principles.html), nothing more.
+
+## Release
+
+Bump `version` in `dsc/pyproject.toml` (keep it equal to `aether/version.h`) and update `CHANGELOG.md` in a pull request. Its
+green run builds and tests the wheels, the sdist and the docs; merge it up to date, then tag `vX.Y.Z` on that commit.
+`.github/workflows/publish.yml` uploads the files the pull request built (`workflow_dispatch` dry-runs it). Publish order is in
+the family guide.

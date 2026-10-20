@@ -129,6 +129,152 @@ AETHER_DEVICEHOST() inline void compensatedSum_(double* value, double* comp, dou
 #endif
 }
 
+/** @brief True when `x` is neither infinite nor NaN. */
+template<class T>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() bool isFinite_(T x)
+{
+    return x - x == T(0);
+}
+
+/** @brief `twoSumErr_` for `float` and `double`: the exact residual
+ *         `(a + b) - s` given `s == fl(a + b)`. Same barriers as the
+ *         `double` form. */
+template<class T>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() T twoSumErrT_(T a, T b, T s)
+{
+    AETHER_FP_BARRIER(a);
+    AETHER_FP_BARRIER(b);
+    AETHER_FP_BARRIER(s);
+    const T bb = s - a;
+    return (a - (s - bb)) + (b - bb);
+}
+
+/**
+ * @brief Neumaier step: add one `term` to the (hi, comp) pair. `hi + comp`
+ *        stays the running sum to second order. A non-finite `hi` drops the
+ *        correction, so the pair then follows IEEE through `hi` (lone +Inf
+ *        gives +Inf, +Inf with -Inf gives NaN, NaN stays NaN).
+ */
+template<class T>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() void neumaierAdd_(T& hi, T& comp, T term)
+{
+    AETHER_FP_BARRIER(term);
+    const T s = hi + term;
+    const T e = twoSumErrT_(hi, term, s);
+    hi        = s;
+    comp      = isFinite_(s) ? comp + e : T(0);
+}
+
+/**
+ * @brief Combine two (hi, comp) partials into `(oh, oc)`: TwoSum of the hi
+ *        parts, comp parts added. Symmetric: swapping the operands gives the
+ *        same bits. The non-finite rule of `neumaierAdd_` applies.
+ */
+template<class T>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() void pairCombine_(T ah, T ac, T bh, T bc, T& oh, T& oc)
+{
+    const T s = ah + bh;
+    const T e = twoSumErrT_(ah, bh, s);
+    oh        = s;
+    oc        = isFinite_(s) ? (ac + bc) + e : T(0);
+}
+
+/**
+ * @brief Host twin of the warp butterfly for one column: the canonical
+ *        32-slot pair tree over per-lane partials (xor 16, 8, 4, 2, 1).
+ *        Returns the fully reduced (hi, comp) the butterfly leaves on the
+ *        column's owning lane.
+ */
+template<class T>
+inline void reduce32Host_(const T (&hi)[32], const T (&comp)[32], T& oh, T& oc)
+{
+    T h[32], c[32];
+    for (int l = 0; l < 32; ++l) {
+        h[l] = hi[l];
+        c[l] = comp[l];
+    }
+    for (int off = 16; off >= 1; off >>= 1) {
+        T nh[32], nc[32];
+        for (int l = 0; l < 32; ++l)
+            pairCombine_(h[l], c[l], h[l ^ off], c[l ^ off], nh[l], nc[l]);
+        for (int l = 0; l < 32; ++l) {
+            h[l] = nh[l];
+            c[l] = nc[l];
+        }
+    }
+    oh = h[0];
+    oc = c[0];
+}
+
+/**
+ * @brief Columns left on `lane` after `butterfly32_` over `n` columns: the
+ *        contiguous run `[lo, lo + m)`, held in slots `0 .. m-1`.
+ */
+AETHER_DEVICEHOST() inline void butterflyOwned_(int lane, int n, int& lo, int& m)
+{
+    // Rounds split the slot count `width` the same way on every lane; a lane
+    // may hold fewer live columns than slots (the tail is padding).
+    lo        = 0;
+    m         = n;
+    int width = n;
+    for (int off = 16; off >= 1; off >>= 1) {
+        const int lower = width / 2;
+        if (lane & off) {
+            lo += lower;
+            m = m > lower ? m - lower : 0;
+        } else {
+            m = m < lower ? m : lower;
+        }
+        width -= lower;
+    }
+}
+
+#if defined(__CUDACC__)
+/** @brief One butterfly round over the leading `M` slots (device only). */
+template<int M, class T>
+__device__ AETHER_FORCEINLINE() void butterflyRound_(T* h, T* c, int off, bool up)
+{
+    constexpr int LO = M / 2, UP = M - LO;
+#pragma unroll
+    for (int j = 0; j < UP; ++j) {
+        const T sh = up ? (j < LO ? h[j] : T(0)) : h[LO + j];
+        const T sc = up ? (j < LO ? c[j] : T(0)) : c[LO + j];
+        const T rh = __shfl_xor_sync(0xffffffffu, sh, off);
+        const T rc = __shfl_xor_sync(0xffffffffu, sc, off);
+        if (up) {
+            pairCombine_(h[LO + j], c[LO + j], rh, rc, h[LO + j], c[LO + j]);
+        } else if (j < LO) {
+            pairCombine_(h[j], c[j], rh, rc, h[j], c[j]);
+        }
+    }
+#pragma unroll
+    for (int j = 0; j < UP; ++j) {
+        h[j] = up ? h[LO + j] : (j < LO ? h[j] : T(0));
+        c[j] = up ? c[LO + j] : (j < LO ? c[j] : T(0));
+    }
+}
+
+/**
+ * @brief Warp butterfly transpose-reduce of `N` (hi, comp) columns per lane
+ *        (device only, full mask: all 32 lanes must call it). Rounds xor
+ *        16, 8, 4, 2, 1; each round a lane keeps a contiguous half of its
+ *        columns. Afterwards lane `l` holds, in slots `0 .. m-1`, the fully
+ *        reduced columns `[lo, lo + m)` given by `butterflyOwned_`; each
+ *        equals `reduce32Host_` of that column. Lanes past a ragged end
+ *        must carry +0.0 pairs.
+ */
+template<int N, class T>
+__device__ AETHER_FORCEINLINE() void butterfly32_(T (&h)[N], T (&c)[N], int lane)
+{
+    constexpr int M2 = N - N / 2, M3 = M2 - M2 / 2, M4 = M3 - M3 / 2, M5 = M4 - M4 / 2;
+    butterflyRound_<N>(h, c, 16, lane & 16);
+    butterflyRound_<M2>(h, c, 8, lane & 8);
+    butterflyRound_<M3>(h, c, 4, lane & 4);
+    butterflyRound_<M4>(h, c, 2, lane & 2);
+    butterflyRound_<M5>(h, c, 1, lane & 1);
+}
+#endif
+
 /** @brief Atomic maximum on a signed 32-bit integer at `address`. */
 AETHER_DEVICEHOST() inline int maxInt_(int* address, int val)
 {

@@ -15,6 +15,8 @@ path — these repos go public, and a committed output with
 `/local/...`, `/home/<user>/...` etc. leaks the machine that built
 the docs. Source cells are not scanned (a path in a code comment is not a
 leak); only what got rendered into the committed output is.
+A stored Python warning (``UserWarning:`` and the like) is refused too: it is
+noise from the machine that ran the notebook, and it usually carries such a path.
 """
 import json
 import re
@@ -23,7 +25,9 @@ from pathlib import Path
 
 # Deliberately narrow: absolute local-filesystem roots a committed output
 # should never contain, not a general "looks like a path" heuristic.
-_LEAK_PATTERNS = [re.compile(p) for p in (r"/local/", r"/home/", r"/tmp/", r"/root/", r"/Users/", r"C:\\Users")]
+_LEAK_PATTERNS = [re.compile(p) for p in (r"/local/", r"/home/", r"/tmp/", r"/dev/shm/", r"/root/", r"/Users/",
+                                          r"C:\\Users")]
+_WARNING = re.compile(r"\b\w*Warning: ")
 
 
 def _text_of(value) -> str:
@@ -61,6 +65,8 @@ def check_notebook(path: Path) -> list[str]:
                 pattern = _leaked_path(text)
                 if pattern:
                     errors.append(f"{path}: code cell {idx} output leaks a local path (matched {pattern!r})")
+                if _WARNING.search(text):
+                    errors.append(f"{path}: code cell {idx} output stores a Python warning")
     return errors
 
 

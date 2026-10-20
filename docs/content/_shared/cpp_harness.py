@@ -56,6 +56,9 @@ DEVICE = "gpu" if gpu_visible() else "cpu"
 # no lesson body in this family uses a C++21-23-only feature, so one
 # source compiles clean under both.
 _CPU_STD = "c++23"
+# Extra compiler flags (e.g. "-Wall -Wextra -Werror") that `make nbverify`
+# and CI inject; empty for an ordinary reader running a notebook.
+_EXTRA_FLAGS = os.environ.get("AETHER_NB_EXTRA_FLAGS", "").split()
 _GPU_STD = "c++20"
 
 
@@ -105,7 +108,7 @@ def run_cpp(main_body: str, *, top: str = "", includes: tuple = (), device: str 
         else:
             src = pathlib.Path(tmp) / "example.cpp"
             compiler = "g++"
-            flags = [f"-std={_CPU_STD}", f"-I{ROOT}", "-DAETHER_CPP_MODE=1", "-fopenmp", "-O3"]
+            flags = [f"-std={_CPU_STD}", f"-I{ROOT}", "-DAETHER_CPP_MODE=1", "-fopenmp", "-O3", *_EXTRA_FLAGS]
         src.write_text(source)
         binary = pathlib.Path(tmp) / "example"
         subprocess.run([compiler, *flags, str(src), "-o", str(binary)], check=True)

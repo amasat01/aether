@@ -11,10 +11,9 @@
  * Every tolerance is a generous multiple (6-8x) of the theoretical estimator
  * standard error, so a pass is reproducible rather than lucky.
  *
- * `kN` is a fixed constant rather than a mode-dependent value:
- * `AETHER_SANITIZE_MINIMAL` is explicitly documented in the root
- * CMakeLists.txt as "currently a no-op, no aether test reads it", so there
- * is no knob to read a smaller count from. The fills go through
+ * `kN` is a fixed constant: these tests do not consult `isMinimalMode()`
+ * (tests/banded/minimal_mode.h), so the sanitize minimal mode leaves the
+ * count alone. The fills go through
  * `aether::Array<T,3>` + `hostView()` + `view[SampleIndex] = expr`
  * (`aether/view/View.h`). aether's uniform draws land in `(lo, hi]` on both
  * arms — one endpoint convention everywhere; the moments are identical to
