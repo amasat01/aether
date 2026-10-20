@@ -32,7 +32,7 @@
 namespace aether {
 
 /** @brief This checkout's `project(... VERSION)` string. */
-constexpr const char* version() { return "0.2.2"; }
+constexpr const char* version() { return "0.2.5"; }
 
 #ifndef AETHER_GIT_REVISION
 #define AETHER_GIT_REVISION "unknown"
