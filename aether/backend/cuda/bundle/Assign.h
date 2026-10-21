@@ -29,6 +29,7 @@
  */
 
 #include <cstddef>
+#include <utility>
 #include <type_traits>
 
 #include "aether/backend/cuda/DeviceBundle.h"
@@ -68,18 +69,16 @@ struct RecursiveBundleAssign {
                 bundleStore<Is...>(to, bi, combined);
             }
         } else {
-            loop<0>(bi, to, from);
+            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, bi, to, from);
         }
     }
 
 private:
-    template<std::size_t K, class ExprL, class ExprR>
-    AETHER_DEVICEHOST() static void loop(const BundleIndex<W>& bi, ExprL& to, const ExprR& from)
+    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
+    template<std::size_t... K, class ExprL, class ExprR>
+    AETHER_DEVICEHOST() static void loop(std::index_sequence<K...>, const BundleIndex<W>& bi, ExprL& to, const ExprR& from)
     {
-        if constexpr (K < Extents::static_extent(Mode)) {
-            RecursiveBundleAssign<Extents, Op, Mode + 1, W, Is..., K>::eval(bi, to, from);
-            loop<K + 1>(bi, to, from);
-        }
+        (RecursiveBundleAssign<Extents, Op, Mode + 1, W, Is..., K>::eval(bi, to, from), ...);
     }
 };
 

@@ -129,18 +129,16 @@ struct RecursiveAssign {
         if constexpr (Mode == Extents::Rank) {
             storeWorking<Op>(to.template eval<Is...>(i), evalW<Is...>(from, i));
         } else {
-            loop<0>(i, to, from);
+            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, i, to, from);
         }
     }
 
 private:
-    template<std::size_t K, class ExprL, class ExprR>
-    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void loop(const SampleIndex& i, ExprL& to, const ExprR& from)
+    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
+    template<std::size_t... K, class ExprL, class ExprR>
+    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void loop(std::index_sequence<K...>, const SampleIndex& i, ExprL& to, const ExprR& from)
     {
-        if constexpr (K < Extents::static_extent(Mode)) {
-            RecursiveAssign<Extents, Op, Mode + 1, Is..., K>::eval(i, to, from);
-            loop<K + 1>(i, to, from);
-        }
+        (RecursiveAssign<Extents, Op, Mode + 1, Is..., K>::eval(i, to, from), ...);
     }
 };
 
@@ -308,6 +306,15 @@ public:
         requires(!aether_expression<S>)
     AETHER_DEVICEHOST() constexpr SampleRef& operator-=(const S& scalar);
 
+    /** @brief The element at RUNTIME indices `ks...` of this sample, as a
+     *         writable slot: `view(ks..., i.global())`. What `aether::rt`
+     *         loops read and write through (`aether/expr/Rt.h`). */
+    template<class... Ks>
+    AETHER_DEVICEHOST() constexpr decltype(auto) at(Ks... ks) const
+    {
+        return view_(ks..., i_.global());
+    }
+
     /** @brief Register materialization: an `Item` snapshot of this sample. */
     AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() constexpr detail::ItemFromExtents<element_type, element_extents> get() const
     {
@@ -358,6 +365,15 @@ public:
     AETHER_DEVICEHOST() constexpr decltype(auto) eval() const
     {
         return view_.template eval<Is...>(i_);
+    }
+
+    /** @brief The element at RUNTIME indices `ks...` of this sample:
+     *         `view(ks..., i.global())`, the runtime-index sibling of
+     *         `eval<Is...>()` above (`aether/expr/Rt.h`). */
+    template<class... Ks>
+    AETHER_DEVICEHOST() constexpr decltype(auto) at(Ks... ks) const
+    {
+        return view_(ks..., i_.global());
     }
 
     /** @brief Register materialization: an `Item` snapshot of this sample. */

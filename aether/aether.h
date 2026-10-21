@@ -54,7 +54,9 @@
  * include `interop/Mdspan.h` — same reasoning as `dtype/Format.h` above
  * (host-only, and on this workspace's pinned toolchain also
  * environment-gated inert, see that header's own docstring); include it
- * explicitly when you need the `std::mdspan` adapter.
+ * explicitly when you need the `std::mdspan` adapter. `expr/Rt.h`
+ * (`aether::rt`) is not part of this runtime arm: rolled-loop twins of the static
+ * reductions and contractions for one sample, bit-identical to them.
  *
  * Max-bandwidth device access idioms: `View::as_readonly()` (`__ldg`-
  * routed device loads, `view/View.h`); `BundleIndex<W>`
@@ -187,6 +189,7 @@
 #include "aether/err/DeviceFlag.h"
 #include "aether/err/Error.h"
 #include "aether/eval/Runtime.h"
+#include "aether/expr/Rt.h"
 #include "aether/expr/nodes/Arithmetic.h"
 #include "aether/expr/nodes/Constant.h"
 #include "aether/expr/nodes/Elementwise.h"

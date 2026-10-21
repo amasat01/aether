@@ -431,6 +431,15 @@ ExprReduceTest.MaxNormMatchesHandComputedVec3d
 ExprReduceTest.NormFamilyMatchesHandComputedVec3d
 ExprReduceTest.SumMatchesHandComputedVec3d
 ExprReduceTest.ViewMaterializedDotAndSumMatchRawAccessorArithmetic
+ExprRt.MatDot @debug
+ExprRt.MatMat @debug
+ExprRt.MatVec @debug
+ExprRt.ReductionsN1 @debug
+ExprRt.ReductionsN144 @debug
+ExprRt.ReductionsN16 @debug
+ExprRt.ReductionsN2 @debug
+ExprRt.ReductionsN3 @debug
+ExprRt.ReductionsN7 @debug
 ExprStructuralTest.HeadReadsLeadingComponents
 ExprStructuralTest.SegmentComposesWithArithmetic
 ExprStructuralTest.SegmentReadsContiguousComponents

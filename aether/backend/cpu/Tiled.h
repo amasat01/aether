@@ -70,18 +70,16 @@ struct RecursivePacketCapture {
         if constexpr (Mode == Extents::Rank) {
             out.template packet<Is...>() = packetGet<Is...>(from, pi);
         } else {
-            loop<0>(pi, out, from);
+            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, pi, out, from);
         }
     }
 
 private:
-    template<std::size_t K, class Expr, class Out>
-    static void loop(const PacketIndex<W>& pi, Out& out, const Expr& from)
+    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
+    template<std::size_t... K, class Expr, class Out>
+    static void loop(std::index_sequence<K...>, const PacketIndex<W>& pi, Out& out, const Expr& from)
     {
-        if constexpr (K < Extents::static_extent(Mode)) {
-            RecursivePacketCapture<Extents, Mode + 1, W, Is..., K>::eval(pi, out, from);
-            loop<K + 1>(pi, out, from);
-        }
+        (RecursivePacketCapture<Extents, Mode + 1, W, Is..., K>::eval(pi, out, from), ...);
     }
 };
 

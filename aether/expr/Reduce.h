@@ -13,8 +13,8 @@
  *        the whole member-function surface stays inline), plus the free
  *        `aether::isFinite(expr)`.
  *
- * The recursion walks the component index descending (dim = N-1 down to 0,
- * terminating at 0) — i.e. for N=3 a sum reduce unrolls to
+ * The fold nests the component index descending (N-1 outermost, 0
+ * innermost) — i.e. for N=3 a sum reduce unrolls to
  * `f(get<2>) + (f(get<1>) + f(get<0>))`, right-associated. This
  * associativity is deliberate and fixed (not just the same set of terms),
  * since floating point addition is not associative and a different fold
@@ -35,6 +35,7 @@
  */
 
 #include <cstddef>
+#include <utility>
 
 #include "aether/dtype/WorkingType.h"
 #include "aether/index/SampleIndex.h"
@@ -138,61 +139,49 @@ struct IsFiniteOp {
 };
 
 // ---------------------------------------------------------------------------
-// Unary recursive reduce: fold Transf(e.eval<K>(i)) over K = Dim..0 with
-// Reduce, DESCENDING (see the file docstring for the associativity rationale).
+// Unary reduce: Transf(e.eval<K>(i)) folded with Reduce as
+// Reduce(x[N-1], Reduce(x[N-2], ... Reduce(x[1], x[0]))) (see the file docstring
+// for the associativity rationale). Written as an accumulator over ascending K,
+// expanded by a fold expression: one instantiation deep whatever N is (nvcc
+// stops nesting instantiations at 200).
 // ---------------------------------------------------------------------------
 
-template<std::size_t Dim, class E, class ReduceOp, class TransfOp, class OutT>
-struct RecursiveReduce {
-    AETHER_DEVICEHOST() static constexpr OutT eval(const E& e, const SampleIndex& i)
-    {
-        return ReduceOp{}(TransfOp{}(toWorkingValue(e.template eval<Dim>(i))),
-            RecursiveReduce<Dim - 1, E, ReduceOp, TransfOp, OutT>::eval(e, i));
-    }
-};
-template<class E, class ReduceOp, class TransfOp, class OutT>
-struct RecursiveReduce<0, E, ReduceOp, TransfOp, OutT> {
-    AETHER_DEVICEHOST() static constexpr OutT eval(const E& e, const SampleIndex& i)
-    {
-        return TransfOp{}(toWorkingValue(e.template eval<0>(i)));
-    }
-};
-
-/** @brief `N`-component unary reduce entry point (`N = element_extents::static_extent(0)`). */
 template<std::size_t N, class E, class ReduceOp, class TransfOp, class OutT>
 struct GenericReduce {
     AETHER_DEVICEHOST() static constexpr OutT eval(const E& e, const SampleIndex& i)
     {
-        return RecursiveReduce<N - 1, E, ReduceOp, TransfOp, OutT>::eval(e, i);
+        return fold(std::make_index_sequence<N - 1>{}, e, i);
+    }
+
+private:
+    template<std::size_t... K>
+    AETHER_DEVICEHOST() static constexpr OutT fold(std::index_sequence<K...>, const E& e, const SampleIndex& i)
+    {
+        OutT acc = TransfOp{}(toWorkingValue(e.template eval<0>(i)));
+        ((acc = ReduceOp{}(TransfOp{}(toWorkingValue(e.template eval<K + 1>(i))), acc)), ...);
+        return acc;
     }
 };
 
 // ---------------------------------------------------------------------------
-// Binary recursive reduce (dot product): fold Transf(a.eval<K>(i), b.eval<K>(i))
-// over K = Dim..0 with Reduce, DESCENDING.
+// Binary reduce (dot product): Transf(a.eval<K>(i), b.eval<K>(i)) folded the
+// same way.
 // ---------------------------------------------------------------------------
-
-template<std::size_t Dim, class L, class R, class ReduceOp, class TransfOp, class OutT>
-struct BinaryRecursiveReduce {
-    AETHER_DEVICEHOST() static constexpr OutT eval(const L& a, const R& b, const SampleIndex& i)
-    {
-        return ReduceOp{}(TransfOp{}(toWorkingValue(a.template eval<Dim>(i)), toWorkingValue(b.template eval<Dim>(i))),
-            BinaryRecursiveReduce<Dim - 1, L, R, ReduceOp, TransfOp, OutT>::eval(a, b, i));
-    }
-};
-template<class L, class R, class ReduceOp, class TransfOp, class OutT>
-struct BinaryRecursiveReduce<0, L, R, ReduceOp, TransfOp, OutT> {
-    AETHER_DEVICEHOST() static constexpr OutT eval(const L& a, const R& b, const SampleIndex& i)
-    {
-        return TransfOp{}(toWorkingValue(a.template eval<0>(i)), toWorkingValue(b.template eval<0>(i)));
-    }
-};
 
 template<std::size_t N, class L, class R, class ReduceOp, class TransfOp, class OutT>
 struct GenericBinaryReduce {
     AETHER_DEVICEHOST() static constexpr OutT eval(const L& a, const R& b, const SampleIndex& i)
     {
-        return BinaryRecursiveReduce<N - 1, L, R, ReduceOp, TransfOp, OutT>::eval(a, b, i);
+        return fold(std::make_index_sequence<N - 1>{}, a, b, i);
+    }
+
+private:
+    template<std::size_t... K>
+    AETHER_DEVICEHOST() static constexpr OutT fold(std::index_sequence<K...>, const L& a, const R& b, const SampleIndex& i)
+    {
+        OutT acc = TransfOp{}(toWorkingValue(a.template eval<0>(i)), toWorkingValue(b.template eval<0>(i)));
+        ((acc = ReduceOp{}(TransfOp{}(toWorkingValue(a.template eval<K + 1>(i)), toWorkingValue(b.template eval<K + 1>(i))), acc)), ...);
+        return acc;
     }
 };
 
