@@ -88,7 +88,7 @@
 #if defined(AETHER_DEVICE_COMPILE)
 #define AETHER_MATH_BINARY(NAME, FLOATFN, DOUBLEFN, STDEXPR)                                                         \
     template<class T>                                                                                                \
-        requires(!aether::banded::IsBandedFamily<T>)                                                                  \
+        requires(!aether::banded::IsBandedFamily<T> && !std::is_integral_v<T>)                                       \
     AETHER_DEVICEHOST() AETHER_FORCEINLINE() T NAME(T a, T b)                                                        \
     {                                                                                                                \
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
@@ -102,7 +102,7 @@
 #else
 #define AETHER_MATH_BINARY(NAME, FLOATFN, DOUBLEFN, STDEXPR)                                                         \
     template<class T>                                                                                                \
-        requires(!aether::banded::IsBandedFamily<T>)                                                                  \
+        requires(!aether::banded::IsBandedFamily<T> && !std::is_integral_v<T>)                                       \
     AETHER_MATH_HOST_ABI AETHER_DEVICEHOST() AETHER_FORCEINLINE() T NAME(T a, T b)                                                        \
     {                                                                                                                \
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
@@ -110,6 +110,20 @@
         return STDEXPR;                                                                                              \
     }
 #endif
+
+// --- The INTEGER companion ------------------------------------------------
+//
+// `fmax`/`fmin`/`min` on an integer type are the exact integer compare-select,
+// on host and device alike: no conversion to floating point (a 64-bit value
+// would lose bits in a double). The binary scaffold above excludes integral
+// types in its requires-clause so this overload is never ambiguous with it.
+#define AETHER_MATH_BINARY_INT(NAME, OP)                                                                             \
+    template<class T>                                                                                                \
+        requires std::is_integral_v<T>                                                                                \
+    [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr T NAME(T a, T b)                                \
+    {                                                                                                                \
+        return (b OP a) ? b : a;                                                                                     \
+    }
 
 // --- The BANDED companions ----------------------------------------------
 //

@@ -156,7 +156,20 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
 
+      # companion site (amasat01.github.io): the ref pinned in .github/companions, else a same-named branch, else main
+      - uses: ./.github/actions/companion
+        with:
+          repo: amasat01.github.io
+          path: site
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: .github/companions
+
       - run: python3 -m pip install -r docs/requirements.txt
+      # the checked-out site replaces the package the requirements fetch, so a PR pair is what is tested
+      - run: python3 -m pip install ./site
+
+      # The generated capability map matches the site's data.
+      - run: python3 -m raptor_docs.fresh --check
 
       # Refuses to proceed unless every tutorial/example notebook cell
       # already ran clean.
@@ -203,7 +216,15 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
 
-      - run: python3 -m pip install -r docs/requirements.txt matplotlib
+      - uses: ./.github/actions/companion
+        with:
+          repo: amasat01.github.io
+          path: site
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: .github/companions
+
+      - run: python3 -m pip install -r docs/requirements.txt
+      - run: python3 -m pip install ./site
 
       - run: nvcc --version && g++ --version
 

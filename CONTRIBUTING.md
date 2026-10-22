@@ -34,12 +34,17 @@ CI configures with `-DAETHER_WARN_AS_ERR=ON`; use it too (`.github/workflows/ci.
 
 Other gates, each a Makefile target: `make sanitize-gate` (CUDA sanitizers, local), `make faithful-gate` (CPU packet math rounding).
 
-Docs (`pip install -r docs/requirements.txt`; the gate needs `doxygen`):
+Docs (`pip install -r docs/requirements.txt`; the gate needs `doxygen`). The family skin, the notebook tools and the freshness
+check are the `raptor-docs` package from the site repo (`pip install ./site` from a checkout, offline); `docs/raptor_docs.toml` holds
+this repo's settings.
 
 ```bash
 tests/docs/check_docs.sh         # doxygen allowlist, cited symbols exist, sphinx -W, examples match their tests
 cd docs && make nbexec && make nbcheck && make linkcheck
+python -m raptor_docs.fresh --check --site <site checkout>   # the capability map; --write after the site's data changes
 ```
+
+Do not copy the skin css, the font or the notebook tools back into `docs/`: `fresh --check` fails on a second copy.
 
 A new Doxygen warning is a regression; do not add it to `docs/doxygen_allowlist.txt`.
 
