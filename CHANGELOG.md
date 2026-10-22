@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.7 (unreleased)
+## Unreleased
 
 **A plain-C reference core, `aether_dsc.c_core`.** A pure-Python generator of C99 functions for vectors, matrices, quaternions and four scalar formulas, at both `double` and `float` widths, that reproduce aether's expression-template arithmetic bit for bit. The contract is the fold order: dot, norm and sum products are right-nested with the highest index outermost and no zero seed, division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. It exists so that a consumer such as hawk can inline the functions it needs into standalone C. The C++ headers are unchanged; the C++ version moves with `aether-dsc`, as every release now does.
 
