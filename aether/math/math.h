@@ -102,11 +102,15 @@ AETHER_MATH_BINARY(fmax, fmaxf, ::fmax, AETHER_MATH_HOST_ROUTE(fmax, a, b))
  *         limb, never a lexicographic limb compare (which is WRONG — see
  *         `banded::detail::fmax`'s own counterexample). */
 AETHER_MATH_BINARY_BAND(fmax, fmax)
+/** @brief …on an integer type: the exact integer maximum (no floating-point round trip). */
+AETHER_MATH_BINARY_INT(fmax, >)
 
 /** @brief Minimum of two values (floating-point `fmin` semantics). */
 AETHER_MATH_BINARY(fmin, fminf, ::fmin, AETHER_MATH_HOST_ROUTE(fmin, a, b))
 /** @brief …on a banded operand. @see fmax. */
 AETHER_MATH_BINARY_BAND(fmin, fmin)
+/** @brief …on an integer type: the exact integer minimum. */
+AETHER_MATH_BINARY_INT(fmin, <)
 
 /** @brief Minimum of two values — alias entry point
  *         alongside `fmax`/`fmin`; same dispatch as `fmin`. */
@@ -114,6 +118,8 @@ AETHER_MATH_BINARY(min, fminf, ::fmin, AETHER_MATH_HOST_ROUTE(fmin, a, b))
 /** @brief …on a banded operand — the same certified `fmin`, under the alias
  *         spelling, so a consumer migrating by spelling swap keeps both names. */
 AETHER_MATH_BINARY_BAND(min, fmin)
+/** @brief …on an integer type: the exact integer minimum. */
+AETHER_MATH_BINARY_INT(min, <)
 
 /** @brief `a` raised to the power `b`. */
 AETHER_MATH_BINARY(pow, powf, ::pow, AETHER_MATH_HOST_ROUTE(pow, a, b))

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6 (2026-10-22)
+
+**`aether::math::fmax`/`fmin`/`min` on integers** compile on host and device and are exact integer compare-selects (they failed before: ambiguous `fmax(long long, long long)` on the host).
+
+**`aether::rt`** (`aether/expr/Rt.h`): loop forms of `dot`, `sum`, the norms, `maxNorm`, `isFinite`, `matDot`, `matVec` and `matMat`, for one sample in a kernel. Same bits as the static forms; a 144-long `dot` on sm_61 takes 17 registers instead of 32, and a 16x144 `matVec` 20 instead of 255 with spills. `view[i].at(k...)` reads one element of a sample at a runtime index.
+
+**No size limit on static items.** Assigning or reducing an item of more than about 200 elements no longer stops nvcc ("excessive recursion"): the unrolls are folds now. Generated code is unchanged.
+
 ## 0.2.5 (C++ library 0.2.5, `aether-dsc` 0.2.5)
 
 **Compensated-sum helpers** in `aether/accum/atomic.h`: the Neumaier step, a symmetric pair-combine, a rule for non-finite terms, and the 32-lane warp butterfly with its host twin. eagle 0.6.3's reductions use them, and its CMake build asks for aether 0.2.5.

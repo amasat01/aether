@@ -1,0 +1,7 @@
+repo = "aether"
+helper_dirs = ["docs/content/_shared"]
+image_budget = 80000
+nb_roots = ["docs/content/tutorials", "docs/content/examples"]
+fresh = ["python -m raptor_docs.capmap -o docs/_static/capmap.svg"]
+
+[helper_needs]

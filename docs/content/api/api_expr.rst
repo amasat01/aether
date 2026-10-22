@@ -6,7 +6,8 @@ individual node types (``Sum``, ``CWiseScale``, ``Cross``, ``QuatRotate``,
 ...) live in ``aether::detail`` and are reached through the operators
 documented in :doc:`../expression_templates`, not cited individually here.
 ``aether::eval`` is the dual-mode runtime evaluator that walks a tree at
-assignment time.
+assignment time. ``aether::rt`` holds loop forms of the reductions and
+products.
 
 ``aether::Expression``
 -------------------------
@@ -19,5 +20,12 @@ Namespace ``aether::eval``
 ------------------------------
 
 .. doxygennamespace:: aether::eval
+   :project: aether
+   :members:
+
+Namespace ``aether::rt``
+------------------------
+
+.. doxygennamespace:: aether::rt
    :project: aether
    :members:

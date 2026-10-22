@@ -93,6 +93,15 @@ else()
   endif()
 endif()
 
+# test_ExprRt.cpp compares aether::rt loops with the unrolled static folds bit
+# for bit. Under -march=x86-64-v3 -O3 GCC vectorises parts of a long static
+# fold and fuses fewer products than the loop (red at n >= 7 without this
+# flag). Host only: the .cu keeps the production -fmad, where both forms
+# contract the same way and that sameness is what it checks.
+if (AETHER_CPP_MODE AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_ExprRt.cpp)
+  set_source_files_properties(test_ExprRt.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 # test_ContractionGuard.{cpp,cu} prove the host error-free transformations
 # (aether/accum/atomic.h) exact UNDER contraction, so they are built with
 # -ffp-contract=fast explicitly (gcc's default, pinned here so a changed

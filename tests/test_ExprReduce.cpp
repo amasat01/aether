@@ -9,7 +9,7 @@
 // `aether::isFinite` are DEVICEHOST-safe with no CUDA-specific behaviour a
 // plain host build cannot already exercise.
 //
-// The reduction's exact fold order (`RecursiveReduce` walks the component
+// The reduction's exact fold order (`GenericReduce` nests the component
 // index descending, N-1 down to 0; see aether/expr/Reduce.h's docstring)
 // matches every hand-computed reference below, so EXPECT_DOUBLE_EQ is
 // meaningful (a reference computed via a different sequence can
@@ -40,7 +40,7 @@ TEST_F(ExprReduceTest, DotMatchesHandComputedVec3d)
         a(i) = static_cast<double>(i) + 1.5;
     Vec3d b = a * 3.0;
 
-    // Fold order matches RecursiveReduce: (a2*b2) + ((a1*b1) + (a0*b0)).
+    // Fold order matches GenericReduce: (a2*b2) + ((a1*b1) + (a0*b0)).
     const double expected = (a(2) * b(2)) + ((a(1) * b(1)) + (a(0) * b(0)));
     EXPECT_DOUBLE_EQ(a.dot(b), expected);
 }

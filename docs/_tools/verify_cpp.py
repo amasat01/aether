@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # Copyright 2026 Alessandro Masat
 # SPDX-License-Identifier: Apache-2.0
-"""docs/_tools/nb_verify.py -- `make nbverify`: prove every C++ snippet in
+"""docs/_tools/verify_cpp.py -- `make nbverify`: prove every C++ snippet in
 every tutorial/example notebook compiles and still prints what the page shows.
 
 Two legs, one PASS/FAIL/SKIP line each:
 
- cpu   Execute the notebook (jupyter kernel, CUDA hidden so the CPU arm runs)
-       in a scratch copy of the docs tree, and compare every code cell's
+ cpu   Execute the notebook with the shared executor (`python -m raptor_docs.nb
+       execute`; CUDA hidden so the CPU arm runs) in a scratch copy of the
+       docs tree, and compare every code cell's
        fresh output with the committed one. Compiles use the shared harness
        (content/_shared/cpp_harness.py) with `-Wall -Wextra -Werror`, like
        aether's own build.
@@ -23,14 +24,14 @@ Output normalisation (only what genuinely varies between runs/machines):
   * image payloads: only the presence of an image/png output is compared
     (pixels differ across matplotlib/font versions); text is compared exactly.
 
-usage: nb_verify.py [--require-cuda] [--cpu-only|--cuda-only] [dir ...]
+usage: verify_cpp.py [--require-cuda] [--cpu-only|--cuda-only] [dir ...]
 Writes a table to $GITHUB_STEP_SUMMARY when set. Exit 1 on any FAIL.
 """
 import argparse
 import contextlib
+import difflib
 import io
 import warnings
-import difflib
 import json
 import os
 import pathlib
@@ -93,26 +94,25 @@ def notebooks(dirs):
 # ---------------------------------------------------------------- CPU leg
 def cpu_leg(nbs, scratch):
     import nbformat
-    from nbclient import NotebookClient
 
     tree = scratch / "docs"
     shutil.copytree(DOCS / "content", tree / "content", ignore=shutil.ignore_patterns("_build", ".ipynb_checkpoints"))
     os.symlink(REPO / "aether", scratch / "aether")  # harness asserts aether/aether.h at the root
+    env = {**os.environ, "AETHER_NB_EXTRA_FLAGS": WARN_CPU, "CUDA_VISIBLE_DEVICES": ""}  # CPU arm, like the committed outputs
     results = {}
-    os.environ["AETHER_NB_EXTRA_FLAGS"] = WARN_CPU
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # CPU arm everywhere, like the committed outputs
     for nb_path in nbs:
         rel = nb_path.resolve().relative_to(DOCS)
         work = tree / rel
         committed = json.loads(nb_path.read_text())
-        try:
-            nb = nbformat.read(str(work), as_version=4)
-            NotebookClient(nb, timeout=600, kernel_name="python3", resources={"metadata": {"path": str(work.parent)}}).execute()
-        except Exception as exc:  # CellExecutionError carries the compiler output
-            msg = str(exc).strip().splitlines()
+        # the shared executor runs it in the scratch copy, in place (a compile error is a cell error)
+        run = subprocess.run([sys.executable, "-m", "raptor_docs.nb", "execute", str(work)], cwd=REPO, env=env,
+                             capture_output=True, text=True)
+        if run.returncode:
+            msg = (run.stdout + run.stderr).strip().splitlines()
             keep = [l for l in msg if "error" in l.lower() or "Error" in l] or msg[-3:]
             results[nb_path] = ("FAIL", "execution failed: " + " | ".join(l.strip() for l in keep[:4]))
             continue
+        nb = nbformat.read(str(work), as_version=4)
         fresh = [c for c in nb.cells if c.cell_type == "code"]
         old = [c for c in committed["cells"] if c["cell_type"] == "code"]
         diffs = []

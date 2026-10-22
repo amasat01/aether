@@ -34,12 +34,17 @@ CI configures with `-DAETHER_WARN_AS_ERR=ON`; use it too (`.github/workflows/ci.
 
 Other gates, each a Makefile target: `make sanitize-gate` (CUDA sanitizers, local), `make faithful-gate` (CPU packet math rounding).
 
-Docs (`pip install -r docs/requirements.txt`; the gate needs `doxygen`):
+Docs (`pip install -r docs/requirements.txt`; the gate needs `doxygen`). The family skin, the notebook tools and the freshness
+check are the `raptor-docs` package from the site repo (`pip install ./site` from a checkout, offline); `docs/raptor_docs.toml` holds
+this repo's settings.
 
 ```bash
 tests/docs/check_docs.sh         # doxygen allowlist, cited symbols exist, sphinx -W, examples match their tests
 cd docs && make nbexec && make nbcheck && make linkcheck
+python -m raptor_docs.fresh --check --site <site checkout>   # the capability map; --write after the site's data changes
 ```
+
+Do not copy the skin css, the font or the notebook tools back into `docs/`: `fresh --check` fails on a second copy.
 
 A new Doxygen warning is a regression; do not add it to `docs/doxygen_allowlist.txt`.
 
@@ -55,7 +60,4 @@ A new Doxygen warning is a regression; do not add it to `docs/doxygen_allowlist.
 
 ## Release
 
-Bump `version` in `dsc/pyproject.toml` (keep it equal to `aether/version.h`) and update `CHANGELOG.md` in a pull request. Its
-green run builds and tests the wheels, the sdist and the docs; merge it up to date, then tag `vX.Y.Z` on that commit.
-`.github/workflows/publish.yml` uploads the files the pull request built (`workflow_dispatch` dry-runs it). Publish order is in
-the family guide.
+Record changes under `## Unreleased` in `CHANGELOG.md`; release with `python tools/version.py bump X.Y.Z` (never edit version strings by hand); the whole flow is in [RELEASING.md](https://github.com/amasat01/raptor/blob/main/RELEASING.md).

@@ -25,8 +25,10 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <omp.h>
 #include <utility>
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 #include "aether/backend/cpu/L2Cache.h"
 #include "aether/backend/cpu/PacketItem.h"
@@ -39,6 +41,23 @@
 namespace aether {
 
 namespace detail {
+
+// OpenMP queries; a build without OpenMP (Apple clang without libomp) runs the tiled loops on one thread.
+inline bool ompInParallel() {
+#if defined(_OPENMP)
+    return omp_in_parallel() != 0;
+#else
+    return false;
+#endif
+}
+
+inline std::size_t ompNumThreads() {
+#if defined(_OPENMP)
+    return static_cast<std::size_t>(omp_get_num_threads());
+#else
+    return 1;
+#endif
+}
 
 /**
  * @brief `PacketItem<T, W, Extents's static modes...>` — the type
@@ -70,18 +89,16 @@ struct RecursivePacketCapture {
         if constexpr (Mode == Extents::Rank) {
             out.template packet<Is...>() = packetGet<Is...>(from, pi);
         } else {
-            loop<0>(pi, out, from);
+            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, pi, out, from);
         }
     }
 
 private:
-    template<std::size_t K, class Expr, class Out>
-    static void loop(const PacketIndex<W>& pi, Out& out, const Expr& from)
+    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
+    template<std::size_t... K, class Expr, class Out>
+    static void loop(std::index_sequence<K...>, const PacketIndex<W>& pi, Out& out, const Expr& from)
     {
-        if constexpr (K < Extents::static_extent(Mode)) {
-            RecursivePacketCapture<Extents, Mode + 1, W, Is..., K>::eval(pi, out, from);
-            loop<K + 1>(pi, out, from);
-        }
+        (RecursivePacketCapture<Extents, Mode + 1, W, Is..., K>::eval(pi, out, from), ...);
     }
 };
 
@@ -136,15 +153,21 @@ void packetFor(std::size_t begin, std::size_t end, Func&& body, bool parallel = 
     const std::size_t nFullPackets = (end - begin) / W;
     const std::size_t tailStart = begin + nFullPackets * W;
 
-    if (omp_in_parallel()) {
+    if (detail::ompInParallel()) {
+#if defined(_OPENMP)
 #pragma omp for schedule(static) nowait
+#endif
         for (std::size_t p = 0; p < nFullPackets; ++p)
             body(PacketIndex<W>::make(begin + p * W));
+#if defined(_OPENMP)
 #pragma omp single nowait
+#endif
         if (tailStart < end)
             body(PacketIndex<W>::makeTail(tailStart, end - tailStart));
     } else if (parallel) {
+#if defined(_OPENMP)
 #pragma omp parallel for schedule(static)
+#endif
         for (std::size_t p = 0; p < nFullPackets; ++p)
             body(PacketIndex<W>::make(begin + p * W));
         if (tailStart < end)
@@ -306,8 +329,8 @@ void packetBatchedFor(std::size_t begin, std::size_t end, Func&& body, std::size
 {
     std::size_t tile = (tileOverride > 0) ? tileOverride : optimalTileSize<T>(bytesPerSample);
 
-    if (omp_in_parallel() && (end > begin)) {
-        const std::size_t nthreads = static_cast<std::size_t>(omp_get_num_threads());
+    if (detail::ompInParallel() && (end > begin)) {
+        const std::size_t nthreads = detail::ompNumThreads();
         const std::size_t targetTiles = nthreads * std::size_t{ 2 };
         const std::size_t maxTile = (end - begin + targetTiles - 1) / targetTiles;
         if (maxTile > 0 && tile > maxTile) {
@@ -319,15 +342,19 @@ void packetBatchedFor(std::size_t begin, std::size_t end, Func&& body, std::size
 
     const std::size_t nTilesTotal = (end > begin) ? (end - begin + tile - 1) / tile : 0;
 
-    if (omp_in_parallel()) {
+    if (detail::ompInParallel()) {
+#if defined(_OPENMP)
 #pragma omp for schedule(static) nowait
+#endif
         for (std::size_t t = 0; t < nTilesTotal; ++t) {
             const std::size_t tileStart = begin + t * tile;
             const std::size_t tileEnd = std::min(tileStart + tile, end);
             detail::processTile<T>(tileStart, tileEnd, body);
         }
     } else if (parallel) {
+#if defined(_OPENMP)
 #pragma omp parallel for schedule(static)
+#endif
         for (std::size_t t = 0; t < nTilesTotal; ++t) {
             const std::size_t tileStart = begin + t * tile;
             const std::size_t tileEnd = std::min(tileStart + tile, end);

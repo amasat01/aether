@@ -18,6 +18,7 @@
  */
 
 #include <cstddef>
+#include <utility>
 #include <type_traits>
 
 #include "aether/backend/cpu/packet/LoadStore.h"
@@ -46,18 +47,16 @@ struct RecursivePacketAssign {
             auto pkt = packetGet<Is...>(from, pi);
             packetStore<Is...>(to, pi, pkt);
         } else {
-            loop<0>(pi, to, from);
+            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, pi, to, from);
         }
     }
 
 private:
-    template<std::size_t K, class ExprL, class ExprR>
-    static void loop(const PacketIndex<W>& pi, ExprL& to, const ExprR& from)
+    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
+    template<std::size_t... K, class ExprL, class ExprR>
+    static void loop(std::index_sequence<K...>, const PacketIndex<W>& pi, ExprL& to, const ExprR& from)
     {
-        if constexpr (K < Extents::static_extent(Mode)) {
-            RecursivePacketAssign<Extents, Mode + 1, W, Is..., K>::eval(pi, to, from);
-            loop<K + 1>(pi, to, from);
-        }
+        (RecursivePacketAssign<Extents, Mode + 1, W, Is..., K>::eval(pi, to, from), ...);
     }
 };
 

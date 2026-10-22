@@ -73,3 +73,25 @@ A runnable example
 ``Vec3d c = a + b;`` is the assignment that actually runs the addition,
 component by component. :doc:`vector_matrix_cookbook` builds on the exact
 same mechanism for cross products, dot products and matrix algebra.
+
+Long folds in a kernel: ``aether::rt``
+---------------------------------------
+
+The reductions and products above unroll every element at compile time,
+which is the fast form for short vectors. On a long fold inside a kernel it
+keeps many values live (on sm_61 a 144-long ``dot`` takes 32 registers, and
+``y[i] = M * v`` with a 16x144 ``M`` spills). ``aether/expr/Rt.h`` adds loop
+forms that read each element when needed:
+
+.. code-block:: cpp
+
+   const double d = aether::rt::dot(a[i], b[i]);  // == a[i].get().dot(b[i].get())
+   aether::rt::matVec(y[i], M[i], v[i]);          // == y[i] = M * v
+
+The set is ``dot``, ``sum``, the norms, ``maxNorm``, ``isFinite``, ``matDot``
+and ``matVec``/``matMat`` with ``Add``/``Sub`` variants (full list in
+:doc:`api/api_expr`). Each returns the same bits as its static form; on the
+host, compare with ``-ffp-contract=off``. Pass the per-sample proxies
+``view[i]``: an ``Item`` also works, but on the device it lives in local
+memory. ``eval/Runtime.h`` is a different thing, a whole-array evaluator for
+run-time shapes.
