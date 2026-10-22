@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.6 (2026-10-22)
 
 **`aether::math::fmax`/`fmin`/`min` on integers** compile on host and device and are exact integer compare-selects (they failed before: ambiguous `fmax(long long, long long)` on the host).
 
