@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6 (C++ library 0.2.6, `aether-dsc` 0.2.6)
+
+**A plain-C reference core, `aether_dsc.c_core`.** A pure-Python generator of C99 functions for vectors, matrices, quaternions and four scalar formulas, at both `double` and `float` widths, that reproduce aether's expression-template arithmetic bit for bit. The contract is the fold order: dot, norm and sum products are right-nested with the highest index outermost and no zero seed, division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. It exists so that a consumer such as hawk can inline the functions it needs into standalone C. The C++ headers are unchanged; the C++ version moves with `aether-dsc`, as every release now does.
+
+**Pinned by its own tests.** The `CCore` suite compares every generated function with the template it mirrors, byte for byte, over a seeded spread and the special values. One result is outside the guarantee: the sign of a zero from `min` or `max` of `+0` and `-0`, which C leaves unspecified and compilers resolve differently, so the suite accepts either zero for those two kinds. The generated corpus is committed as one header per width and shape under `tests/c_core/corpus/`, behind the umbrella `tests/c_core/aether_c_corpus.h`; CI checks it is exactly what the generator produces (`tools/c_core/mint_golden.py --check`) and compiles the umbrella and every part as strict C99.
+
 ## 0.2.5 (C++ library 0.2.5, `aether-dsc` 0.2.5)
 
 **Compensated-sum helpers** in `aether/accum/atomic.h`: the Neumaier step, a symmetric pair-combine, a rule for non-finite terms, and the 32-lane warp butterfly with its host twin. eagle 0.6.3's reductions use them, and its CMake build asks for aether 0.2.5.
