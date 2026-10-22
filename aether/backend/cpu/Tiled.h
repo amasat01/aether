@@ -53,7 +53,7 @@ inline bool ompInParallel() {
 
 inline std::size_t ompNumThreads() {
 #if defined(_OPENMP)
-    return detail::ompNumThreads();
+    return static_cast<std::size_t>(omp_get_num_threads());
 #else
     return 1;
 #endif
@@ -154,14 +154,20 @@ void packetFor(std::size_t begin, std::size_t end, Func&& body, bool parallel = 
     const std::size_t tailStart = begin + nFullPackets * W;
 
     if (detail::ompInParallel()) {
+#if defined(_OPENMP)
 #pragma omp for schedule(static) nowait
+#endif
         for (std::size_t p = 0; p < nFullPackets; ++p)
             body(PacketIndex<W>::make(begin + p * W));
+#if defined(_OPENMP)
 #pragma omp single nowait
+#endif
         if (tailStart < end)
             body(PacketIndex<W>::makeTail(tailStart, end - tailStart));
     } else if (parallel) {
+#if defined(_OPENMP)
 #pragma omp parallel for schedule(static)
+#endif
         for (std::size_t p = 0; p < nFullPackets; ++p)
             body(PacketIndex<W>::make(begin + p * W));
         if (tailStart < end)
@@ -337,14 +343,18 @@ void packetBatchedFor(std::size_t begin, std::size_t end, Func&& body, std::size
     const std::size_t nTilesTotal = (end > begin) ? (end - begin + tile - 1) / tile : 0;
 
     if (detail::ompInParallel()) {
+#if defined(_OPENMP)
 #pragma omp for schedule(static) nowait
+#endif
         for (std::size_t t = 0; t < nTilesTotal; ++t) {
             const std::size_t tileStart = begin + t * tile;
             const std::size_t tileEnd = std::min(tileStart + tile, end);
             detail::processTile<T>(tileStart, tileEnd, body);
         }
     } else if (parallel) {
+#if defined(_OPENMP)
 #pragma omp parallel for schedule(static)
+#endif
         for (std::size_t t = 0; t < nTilesTotal; ++t) {
             const std::size_t tileStart = begin + t * tile;
             const std::size_t tileEnd = std::min(tileStart + tile, end);
