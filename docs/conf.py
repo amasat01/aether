@@ -57,6 +57,7 @@ extensions = [
     "sphinx_copybutton",
     "myst_nb",       # markdown pages + executed notebooks
     "breathe",       # Doxygen (C++ API) integration
+    "raptor_docs.sphinx",  # family skin: fonts, css, favicons, theme defaults (pip install -r requirements.txt)
     # Registers `.. aether-example::` / `.. aether-example-end::`, the
     # marker pair tests/docs/check_examples.py scans for (docs/_ext/
     # aether_example.py) — no-op at render time.
@@ -143,56 +144,15 @@ html_theme = "sphinx_book_theme"
 html_title = f"aether — one array, built once, runs on CPU or GPU ({version})"
 
 html_static_path = ["_static"]
-# raptor-tokens.css (kit) -> site-accent.css (this site's --accent) ->
-# raptor-theme.css (shared skin, derives everything from --accent) ->
-# raptor-reveal.css (kit).
-html_css_files = ["raptor-tokens.css", "site-accent.css", "raptor-theme.css", "raptor-reveal.css"]
+# The family skin and its css order come from raptor_docs.sphinx; this site only adds its accent.
+html_css_files = ["site-accent.css"]
 
 html_theme_options = {
     "repository_url": "https://github.com/amasat01/aether",
-    "repository_branch": "main",
-    "path_to_docs": "docs",
-    "use_repository_button": True,
-    "collapse_navigation": True,
-    # Colab + download launch buttons on notebook pages (no Binder: not configured).
-    "launch_buttons": {
-        "colab_url": "https://colab.research.google.com",
-        "notebook_interface": "classic",
-    },
     # One transparent logo file works on light AND dark pages (RAPTOR brand kit).
     "logo": {
         "image_light": "_static/brand/family_aether.svg",
         "image_dark": "_static/brand/family_aether.svg",
         "alt_text": "aether",
     },
-    # Family frame: purple "part of RAPTOR" chip in the footer, every site
-    # (raptor-theme.css's .raptor-family-chip; theme's own extension point).
-    "extra_footer": (
-        '<div class="raptor-family-chip">part of '
-        '<a href="https://amasat01.github.io/">RAPTOR</a></div>'
-    ),
 }
-
-# RAPTOR brand: favicons + home-screen icon. Leave html_favicon unset: the
-# hook below writes the icon links itself (SVG where supported, favicon.ico
-# for Safari/older tools, 180 px icon for iOS home screens).
-_RAPTOR_ICONS = [
-    ("icon", "brand/favicon.ico", 'sizes="any"'),
-    ("icon", "brand/favicon.svg", 'type="image/svg+xml"'),
-    ("apple-touch-icon", "brand/app_icon_180.png", ""),
-]
-
-
-def _raptor_icons(app, pagename, templatename, context, doctree):
-    pathto = context.get("pathto")
-    if pathto is None:
-        return
-    links = "".join(
-        f'<link rel="{rel}" href="{pathto("_static/" + path, 1)}" {extra}>\n'
-        for rel, path, extra in _RAPTOR_ICONS
-    )
-    context["metatags"] = context.get("metatags", "") + links
-
-
-def setup(app):
-    app.connect("html-page-context", _raptor_icons)

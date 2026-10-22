@@ -93,6 +93,15 @@ else()
   endif()
 endif()
 
+# test_ExprRt.cpp compares aether::rt loops with the unrolled static folds bit
+# for bit. Under -march=x86-64-v3 -O3 GCC vectorises parts of a long static
+# fold and fuses fewer products than the loop (red at n >= 7 without this
+# flag). Host only: the .cu keeps the production -fmad, where both forms
+# contract the same way and that sameness is what it checks.
+if (AETHER_CPP_MODE AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_ExprRt.cpp)
+  set_source_files_properties(test_ExprRt.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 # test_CCore.{cpp,cu} pins aether's C reference core
 # (tests/c_core/aether_c_corpus.h and its parts under tests/c_core/corpus/,
 # minted from dsc/aether_dsc/c_core.py) bit

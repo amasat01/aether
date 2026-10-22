@@ -44,13 +44,13 @@ jobs:
 
       # The sibling eagle checkout `seal()` reads plugin/gref_layout.h and
       # plugin/gref_abi.h from (host path only; NVRTC itself is served an
-      # alias). Default branch: the tree under test is aether's, not
-      # eagle's. eagle is a public repository, so the default GITHUB_TOKEN
-      # reads it; no secret is involved.
-      - uses: actions/checkout@v7
+      # alias). Pinned ref, else a same-named branch, else main.
+      - uses: ./aether/.github/actions/companion
         with:
-          repository: amasat01/eagle
+          repo: eagle
           path: eagle
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: aether/.github/companions
 
       - uses: actions/setup-python@v7
         with:
@@ -156,7 +156,20 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
 
+      # companion site (amasat01.github.io): the ref pinned in .github/companions, else a same-named branch, else main
+      - uses: ./.github/actions/companion
+        with:
+          repo: amasat01.github.io
+          path: site
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: .github/companions
+
       - run: python3 -m pip install -r docs/requirements.txt
+      # the checked-out site replaces the package the requirements fetch, so a PR pair is what is tested
+      - run: python3 -m pip install ./site
+
+      # The generated capability map matches the site's data.
+      - run: python3 -m raptor_docs.fresh --check
 
       # Refuses to proceed unless every tutorial/example notebook cell
       # already ran clean.
@@ -203,7 +216,15 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
 
-      - run: python3 -m pip install -r docs/requirements.txt matplotlib
+      - uses: ./.github/actions/companion
+        with:
+          repo: amasat01.github.io
+          path: site
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: .github/companions
+
+      - run: python3 -m pip install -r docs/requirements.txt
+      - run: python3 -m pip install ./site
 
       - run: nvcc --version && g++ --version
 

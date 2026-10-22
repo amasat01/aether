@@ -265,3 +265,23 @@
         (x)                            = aetherFpBarrier_;                     \
     } while (0)
 #endif
+
+/**
+ * @brief Keep the next loop ROLLED: placed directly before a `for`.
+ *
+ * nvcc unrolls a constant-trip-count loop by itself (x32 on a 144-long dot),
+ * which puts back the register cost the loop form exists to avoid
+ * (`aether/expr/Rt.h`). The nvcc device pass gets `#pragma unroll 1`; the
+ * nvcc host pass nothing (its front end rejects `GCC unroll`, its host
+ * compiler `unroll`); GCC and clang `#pragma GCC unroll 1`; anything else
+ * nothing.
+ */
+#if defined(__CUDA_ARCH__)
+#define AETHER_NO_UNROLL() _Pragma("unroll 1")
+#elif defined(__CUDACC__)
+#define AETHER_NO_UNROLL()
+#elif defined(__GNUC__)
+#define AETHER_NO_UNROLL() _Pragma("GCC unroll 1")
+#else
+#define AETHER_NO_UNROLL()
+#endif

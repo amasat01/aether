@@ -27,6 +27,16 @@ OpenMP threads or CUDA threads. It is the numerics base layer the
 </figure>
 ```
 
+## What each tool can do
+
+```{image} _static/capmap.svg
+:alt: Capability map, one row per block of work, a CPU and a GPU square per tool, filled where the tool documents a way to do it.
+:width: 100%
+```
+
+Squares are filled where a tool's own documentation shows a designed way to do the work. How the tools compare on speed and
+fit is on the [family site](https://amasat01.github.io/where_raptor_fits.html).
+
 ## 30 seconds
 
 ```cpp

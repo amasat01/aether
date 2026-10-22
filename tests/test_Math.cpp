@@ -64,6 +64,23 @@ TEST_F(MathDispatchTest, FmaxFminMinMatchKnownAnswers)
     EXPECT_FLOAT_EQ(aether::math::fmax(3.0f, 7.0f), 7.0f);
 }
 
+TEST_F(MathDispatchTest, FmaxFminMinAreExactOnIntegers)
+{
+    // Values a double cannot hold: a float round trip would return the wrong one.
+    constexpr long long big = (1LL << 62) + 1;
+    constexpr long long bigger = (1LL << 62) + 3;
+    EXPECT_EQ(aether::math::fmax(big, bigger), bigger);
+    EXPECT_EQ(aether::math::fmin(bigger, big), big);
+    EXPECT_EQ(aether::math::min(big, bigger), big);
+    EXPECT_EQ(aether::math::fmax(-5, 3), 3);
+    EXPECT_EQ(aether::math::fmin(-5, 3), -5);
+    EXPECT_EQ(aether::math::min(7, 7), 7);
+    EXPECT_EQ(aether::math::fmax(std::int64_t{ -4 }, std::int64_t{ -9 }), std::int64_t{ -4 });
+    EXPECT_EQ(aether::math::fmin(std::uint32_t{ 4000000000u }, std::uint32_t{ 3u }), std::uint32_t{ 3u });
+    EXPECT_EQ(aether::math::fmax(std::uint64_t{ ~0ull }, std::uint64_t{ 1u }), ~0ull);
+    static_assert(std::is_same_v<decltype(aether::math::fmax(1, 2)), int>);
+}
+
 TEST_F(MathDispatchTest, PowMatchesStdForFloatAndDouble)
 {
     EXPECT_DOUBLE_EQ(aether::math::pow(2.0, 10.0), std::pow(2.0, 10.0));

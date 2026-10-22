@@ -52,6 +52,7 @@ host. Loops that call an aether math function under a condition run scalar on GC
      - vector
    * - sign, selection
      - ``abs``, ``copysign``, ``fmax``, ``fmin``, ``min``, ``fdim``
+       (``fmax``, ``fmin`` and ``min`` take integers too: exact compare-select)
      - vector / inline
    * - other
      - ``sign``, ``clip``, ``fmod``, ``remainder``, ``fma``, ``isnan``,
@@ -73,7 +74,7 @@ bits; the transcendental ones agree within the CUDA Math API's documented
 error plus glibc's (a few ULP).
 
 Not provided yet: ``lgamma``, ``tgamma``, ``digamma``, Bessel functions,
-and integer-specific operations.
+and integer-only operations beyond ``min``, ``fmax``, ``fmin`` and ``abs``.
 
 .. doxygenfunction:: aether::math::sign
    :project: aether

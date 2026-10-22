@@ -14,7 +14,8 @@
 # (`make nbexec`) and committed WITH outputs; `nb_execution_mode = "off"`
 # in conf.py means the docs build itself never re-executes them. `make
 # nbcheck` refuses a build unless every code cell in every notebook has
-# run without error.
+# run without error. The notebook tools come from the raptor-docs package
+# (`pip install -r requirements.txt`); its settings are in raptor_docs.toml.
 
 SPHINXOPTS    ?=
 SPHINXBUILD   ?= python3 -m sphinx
@@ -46,24 +47,20 @@ linkcheck: doxygen
 # are what gets committed (and what CI renders with nb_execution_mode =
 # "off" — one execution per notebook, done locally, not in CI).
 nbexec:
-	@for d in $(NB_DIRS); do \
-	  find "$$d" -name '*.ipynb' -not -path '*/.ipynb_checkpoints/*' -print0 2>/dev/null | \
-	    xargs -0 -r -n1 jupyter nbconvert --to notebook --execute --inplace \
-	      --ExecutePreprocessor.timeout=120; \
-	done
+	python3 -m raptor_docs.nb execute $(NB_DIRS)
 
 # Refuse to proceed unless every code cell in every tutorial/example
 # notebook has actually run (execution_count set, no empty/placeholder
 # notebook slipped in unexecuted).
 nbcheck:
-	python3 _tools/nb_check_filled.py $(NB_DIRS)
+	python3 -m raptor_docs.nb check $(NB_DIRS)
 
 # Prove every notebook's C++ still compiles and prints what the page shows:
 # CPU leg re-executes each notebook in a scratch copy and diffs the outputs;
 # CUDA leg compiles every snippet with nvcc (compile-only, no GPU; SKIP when
 # nvcc is absent). Pass NBVERIFY_ARGS=--require-cuda to make that a failure.
 nbverify:
-	python3 _tools/nb_verify.py $(NBVERIFY_ARGS) $(NB_DIRS)
+	python3 _tools/verify_cpp.py $(NBVERIFY_ARGS) $(NB_DIRS)
 
 clean:
 	rm -rf $(BUILDDIR) $(DOXYBUILDDIR) content/api/generated content/python/generated

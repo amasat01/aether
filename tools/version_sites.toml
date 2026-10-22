@@ -1,0 +1,16 @@
+# Version sites: first entry is the primary; each regex has ONE capture group around the version.
+[[site]]
+file = "dsc/pyproject.toml"
+pattern = '^version = "([^"]+)"'
+
+[[site]]
+file = "CMakeLists.txt"
+pattern = 'project\(aether VERSION ([0-9.]+) '
+
+[[site]]
+file = "aether/version.h"
+pattern = 'version\(\) \{ return "([^"]+)"; \}'
+
+[[site]]
+file = "dsc/aether_dsc/__init__.py"
+pattern = '^version = "([^"]+)"'
