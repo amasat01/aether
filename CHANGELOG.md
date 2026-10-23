@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**A plain-C reference core, `aether_dsc.c_core`.** A pure-Python generator of C99 functions for vectors, matrices, quaternions and four scalar formulas, at both `double` and `float` widths, that reproduce aether's expression-template arithmetic bit for bit. The contract is the fold order: dot, norm and sum products are right-nested with the highest index outermost and no zero seed, division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. It exists so that a consumer such as hawk can inline the functions it needs into standalone C. The C++ headers are unchanged; the C++ version moves with `aether-dsc`, as every release now does.
+
+**Pinned by its own tests.** The `CCore` suite compares every generated function with the template it mirrors, byte for byte, over a seeded spread and the special values. One result is outside the guarantee: the sign of a zero from `min` or `max` of `+0` and `-0`, which C leaves unspecified and compilers resolve differently, so the suite accepts either zero for those two kinds. The generated corpus is committed as one header per width and shape under `tests/c_core/corpus/`, behind the umbrella `tests/c_core/aether_c_corpus.h`; CI checks it is exactly what the generator produces (`tools/c_core/mint_golden.py --check`) and compiles the umbrella and every part as strict C99.
+
 ## 0.2.6 (2026-10-22)
 
 **`aether::math::fmax`/`fmin`/`min` on integers** compile on host and device and are exact integer compare-selects (they failed before: ambiguous `fmax(long long, long long)` on the host).

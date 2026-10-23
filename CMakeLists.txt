@@ -118,10 +118,10 @@ endif()
 
 if (AETHER_CPP_MODE)
   message(STATUS "> Configuring aether in C++ only mode")
-  project(aether VERSION 0.2.6 LANGUAGES CXX)
+  project(aether VERSION 0.2.7 LANGUAGES CXX)
 else()
   message(STATUS "> Configuring aether in CUDA/C++ mode")
-  project(aether VERSION 0.2.6 LANGUAGES CUDA CXX)
+  project(aether VERSION 0.2.7 LANGUAGES CUDA CXX)
 endif()
 
 include(GNUInstallDirs)

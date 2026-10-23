@@ -102,6 +102,24 @@ if (AETHER_CPP_MODE AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_ExprRt.cpp)
   set_source_files_properties(test_ExprRt.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 
+# test_CCore.{cpp,cu} pins aether's C reference core
+# (tests/c_core/aether_c_corpus.h and its parts under tests/c_core/corpus/,
+# minted from dsc/aether_dsc/c_core.py) bit
+# for bit against the expression templates it transcribes. Both sides are
+# sums of products (dot/norm/sum folds, cross, M*v, A*B, quatMul,
+# quatRotate) that a host compiler contracts into FMAs at its own discretion,
+# per side; the corpus itself is specified for a -ffp-contract=off C TU, so
+# this TU is built the same way (same trap as test_Bundle above).
+if (AETHER_CPP_MODE)
+  if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_CCore.cpp)
+    set_source_files_properties(test_CCore.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+  endif()
+else()
+  if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_CCore.cu)
+    set_source_files_properties(test_CCore.cu PROPERTIES COMPILE_OPTIONS "-Xcompiler=-ffp-contract=off;-fmad=false")
+  endif()
+endif()
+
 # test_ContractionGuard.{cpp,cu} prove the host error-free transformations
 # (aether/accum/atomic.h) exact UNDER contraction, so they are built with
 # -ffp-contract=fast explicitly (gcc's default, pinned here so a changed

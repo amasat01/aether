@@ -1,8 +1,8 @@
 Advanced topics
 ===============
 
-Beyond the core: several devices, CPU vectorization, emulated precision and
-race-free accumulation.
+Beyond the core: several devices, CPU vectorization, emulated precision,
+race-free accumulation and plain-C output.
 
 :doc:`Multi-device residency <multi_device_residency>`
    Keep a replica per GPU, or partition data across several.
@@ -16,6 +16,9 @@ race-free accumulation.
 :doc:`Accumulation <accumulation>`
    Adding many producers' contributions into one per-sample slot without a data race.
 
+:doc:`Plain-C reference core <c_core>`
+   Standalone C99 functions that reproduce aether's arithmetic bit for bit.
+
 .. toctree::
    :maxdepth: 1
    :hidden:
@@ -24,3 +27,4 @@ race-free accumulation.
    cpu_simd
    banded_emulated_real
    accumulation
+   c_core
