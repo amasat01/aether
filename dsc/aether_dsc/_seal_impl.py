@@ -146,7 +146,8 @@ def seal(aether_root: str | Path | None = None,
 
 
 def seal_and_write(headers: Mapping[str, bytes],
-                   host_only_names: frozenset[str] = frozenset()) -> Path:
+                   host_only_names: frozenset[str] = frozenset(),
+                   *, gate: bool = True) -> Path:
     """Runs the NVRTC-clean gate over the NVRTC-clean section ONLY, then
     writes `_payload/<digest>.bin` — refuses to write a payload that fails
     the gate. Removes any stale blob first: `aether_dsc.payload()` globs
@@ -157,11 +158,14 @@ def seal_and_write(headers: Mapping[str, bytes],
     (not merely excluded from its force-#include set, the way
     `GREF_ABI_HOST_NAME` is — see its own docstring): the host-only section
     is never claimed NVRTC-clean and the gate never even sees its content.
+
+    `gate=False` skips the NVRTC check, for a machine with no NVRTC (CPU-only macOS):
+    the blob is the same bytes the gated Linux seal writes, and only the host route reads it there.
     """
     nvrtc_headers = ({k: v for k, v in headers.items() if k not in host_only_names}
                      if host_only_names else headers)
-    diagnostics = _tools.check_headers_nvrtc_clean(
-        nvrtc_headers, exclude_from_toplevel=frozenset({GREF_ABI_HOST_NAME}))
+    diagnostics = (_tools.check_headers_nvrtc_clean(
+        nvrtc_headers, exclude_from_toplevel=frozenset({GREF_ABI_HOST_NAME})) if gate else [])
     if diagnostics:
         raise RuntimeError(
             "NVRTC-clean check FAILED: the sealed payload does not compile clean under NVRTC "
