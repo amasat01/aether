@@ -22,6 +22,8 @@ import subprocess
 import tempfile
 import textwrap
 
+from themed_figure import show  # noqa: F401  re-exported: a chart is shown as a light/dark pair
+
 # docs/content/_shared/cpp_harness.py -> repo root is three levels up.
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 assert (ROOT / "aether" / "aether.h").exists(), f"not the aether repo root: {ROOT}"

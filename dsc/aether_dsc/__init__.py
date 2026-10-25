@@ -32,6 +32,8 @@ goes through :func:`seal`; see :mod:`aether_dsc.seal`'s module docstring.
 from __future__ import annotations
 
 import threading
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _metadata_version
 
 from ._core import Payload, PAYLOAD_DIR, _unpack, digest_of
 # Imported from `_seal_impl`, deliberately NOT from `.seal`:
@@ -46,11 +48,12 @@ from ._seal_impl import seal
 
 __all__ = ["Payload", "seal", "payload", "version", "PAYLOAD_DIR"]
 
-#: This distribution's version — tracks aether's own (`aether/version.h`:
-#: `constexpr version()`), because a sealed payload speaks for exactly one
-#: aether checkout and a version skew between the two would silently claim
-#: otherwise.
-version = "0.2.7"
+#: This distribution's version — aether's own (the same git tag), because a
+#: sealed payload speaks for exactly one aether checkout.
+try:
+    version = _metadata_version("aether-dsc")
+except PackageNotFoundError:  # run from a checkout without an install
+    version = "unknown"
 __version__ = version  # the conventional spelling
 
 _PAYLOAD_CACHE: Payload | None = None

@@ -4,8 +4,7 @@
 """aether's C reference core: a generator of plain C99 functions.
 
 Each function reproduces, bit for bit, what aether's expression templates
-evaluate on the host (see "Bit-identity formula table" in
-docs/superpowers/specs/2026-10-16-embedded-c-target-design.md). The rules
+evaluate on the host (see docs/content/numerics_contract.rst). The rules
 that make that true:
 
 * folds (dot, norm, sum) are right-nested, highest index outermost, with no

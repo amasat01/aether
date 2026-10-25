@@ -15,8 +15,8 @@
  * compared with the aether expression of the same kind evaluated at
  * `SampleIndex::make(0)` into an `Item` (or a scalar for the folds and the
  * rank-0 functions). The aether spellings are the ones hawk emits (the
- * "Bit-identity formula table" of
- * docs/superpowers/specs/2026-10-16-embedded-c-target-design.md): `neg` is
+ * "Bit-identity formula table" of docs/content/numerics_contract.rst):
+ * `neg` is
  * `x * T(-1)`, the rank-2 `sum` is `m.matDot(ones)`, `div_s` is `x / s`.
  * The comparison is per component, `std::memcmp` exact or both NaN (aether
  * may flip a NaN's sign where the C multiplies by -1). Out-of-domain and

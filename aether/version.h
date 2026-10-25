@@ -10,12 +10,11 @@
  *        without running CMake, so there is no configure_file/generated
  *        header in the source tree at all.
  *
- * `AETHER_VERSION`/`AETHER_ABI` are literals here, kept in sync with
- * `CMakeLists.txt`'s `project(aether VERSION ...)` by
- * `VersionTest.VersionMatchesCMakeProjectVersion`
- * (`tests/test_Version.{cpp,cu}`), which reads the CMake value through a
- * compile definition rather than re-deriving it — so a drift between this
- * literal and `project(VERSION)` fails that test, not silently.
+ * `version()` returns the `AETHER_VERSION_STRING` compile definition (the git
+ * tag, via `cmake/GitVersion.cmake`), threaded like `AETHER_GIT_REVISION`
+ * below; `VersionTest.VersionMatchesCMakeProjectVersion`
+ * (`tests/test_Version.{cpp,cu}`) reads the CMake value through a separate
+ * compile definition, so the macro crossing the target is checked, not assumed.
  *
  * `gitRevision()` returns the `AETHER_GIT_REVISION` compile definition
  * when the build defines one — root `CMakeLists.txt` computes it via `git
@@ -31,8 +30,14 @@
 
 namespace aether {
 
-/** @brief This checkout's `project(... VERSION)` string. */
-constexpr const char* version() { return "0.2.7"; }
+#ifndef AETHER_VERSION_STRING
+#define AETHER_VERSION_STRING "unknown"
+#endif
+
+/** @brief This checkout's version (the `AETHER_VERSION_STRING` compile
+ *  definition on the `aether` target, from the git tag), or "unknown" when
+ *  this header is compiled without CMake. */
+constexpr const char* version() { return AETHER_VERSION_STRING; }
 
 #ifndef AETHER_GIT_REVISION
 #define AETHER_GIT_REVISION "unknown"

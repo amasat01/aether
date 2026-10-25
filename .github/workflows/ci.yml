@@ -11,6 +11,7 @@ name: CI
 # Pull requests only: main receives the tested tree, nothing re-runs there.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch: {}
 
 concurrency:
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   release-gate:
-    # Every merge to main is a release unless docs-only (tools/release_gate.sh). Skipped on other PRs.
+    # The release label, the diff, the PR body and the tag it would create agree (tools/release_gate.sh). Skipped on other PRs.
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-latest
     steps:
@@ -29,16 +30,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: bash tools/release_gate.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
-  version:
-    # Every version string and the CHANGELOG heading agree (tools/version_sites.toml)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - run: python tools/version.py check
+      - env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash tools/release_gate.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
   test-cpp:
     runs-on: ubuntu-latest
     strategy:

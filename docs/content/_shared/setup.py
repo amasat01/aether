@@ -9,6 +9,6 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from cpp_harness import DEVICE, plot_style, run_cpp, run_or_show, split_data  # noqa: F401
+from cpp_harness import DEVICE, plot_style, run_cpp, run_or_show, show, split_data  # noqa: F401
 
 print("running on:", DEVICE)
