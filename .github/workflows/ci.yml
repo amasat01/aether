@@ -51,6 +51,8 @@ jobs:
       CMAKE_CUDA_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the version comes from the git tag (cmake/GitVersion.cmake)
 
       # C++23 (aether's cxx_std_23 requirement): ubuntu-latest (24.04) carries
       # gcc-13 as its default toolchain major; installed explicitly so the
@@ -112,6 +114,8 @@ jobs:
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the version comes from the git tag (cmake/GitVersion.cmake)
 
       - run: sudo apt-get update && sudo apt-get install -y g++-13 ccache
 
