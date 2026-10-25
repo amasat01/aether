@@ -37,73 +37,39 @@ a gate must never regenerate its own expectation).
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import struct
 import sys
 import argparse
 
-DEFAULT_SEED = 0xFE7A5EED0C0FFEE5  # matches the seed used across the golden_*.h corpora (see golden_random.h)
-
-
-# =====================================================================
-#  splitmix64 — matches ulp_oracle's own Rng (oracle_core.cpp) and the
-#  project-wide seeded-stream convention.
-# =====================================================================
-class SplitMix64:
-    def __init__(self, seed: int):
-        self.s = seed & 0xFFFFFFFFFFFFFFFF
-
-    def next(self) -> int:
-        self.s = (self.s + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
-        z = self.s
-        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
-        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
-        return z ^ (z >> 31)
-
-    def uniform01(self) -> float:
-        return (self.next() >> 11) * (1.0 / 9007199254740992.0)
-
-    def mantissa(self) -> float:
-        """Uniform in [1, 2)."""
-        return 1.0 + self.uniform01()
-
-    def sign(self) -> float:
-        return -1.0 if (self.next() & 1) else 1.0
-
-
-# =====================================================================
-#  Bit helpers
-# =====================================================================
-def bits_of(x: float) -> int:
-    return struct.unpack("<Q", struct.pack("<d", x))[0]
-
-
-def double_of(b: int) -> float:
-    return struct.unpack("<d", struct.pack("<Q", b & 0xFFFFFFFFFFFFFFFF))[0]
-
-
-POS_ZERO = 0x0000000000000000
-NEG_ZERO = 0x8000000000000000
-POS_INF = 0x7FF0000000000000
-NEG_INF = 0xFFF0000000000000
-QNAN = 0x7FF8000000000000
-NAN_PAYLOAD_A = 0x7FF8000000000001
-NAN_PAYLOAD_B = 0xFFF8000000012345
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _corpus_common import (
+    DEFAULT_SEED,
+    FENCE_NOTE,
+    K_BAND_ADMITTED_HI,
+    K_BAND_ADMITTED_LO,
+    K_BAND_HARD_CEILING_EXP,
+    K_BAND_HARD_FLOOR_EXP,
+    Op,
+    SplitMix64,
+    add_out_dir_arg,
+    bits_of,
+    double_of,
+    exponent_of,
+    is_nan,
+    label_counts,
+    label_for_exponent,
+    refuse_under_ci,
+    specials_pool,
+    write_list_header,
+)
 
 DBL_MIN_NORMAL = struct.unpack("<d", struct.pack("<Q", 0x0010000000000000))[0]
-DBL_MAX = struct.unpack("<d", struct.pack("<Q", 0x7FEFFFFFFFFFFFFF))[0]
-DBL_MIN_SUBNORMAL = struct.unpack("<d", struct.pack("<Q", 0x0000000000000001))[0]
-
 # Tier edges: 2^-94 (past the carrier floor kBandCarrierFloorExp=-96) and 2^125 (short of the nominal ceiling
 # kBandNominalCeilingExp=115 + hard FP32 overflow at 2^128).
 TIER_EDGE_LO = math.ldexp(1.0, -94)
 TIER_EDGE_HI = math.ldexp(1.0, 125)
-
-
-def is_nan(x: float) -> bool:
-    return x != x
 
 
 def classify(b: int) -> int:
@@ -114,39 +80,6 @@ def classify(b: int) -> int:
     if exp == 0:
         return 1 if frac else 0  # subnormal / zero
     return 2  # normal
-
-
-# =====================================================================
-#  Admission predicates — transcribed verbatim from
-#  aether/banded/Band.h's admission-guard section, same constants, same formulas:
-#    kBandNominalCeilingExp = 115
-#    kBandCarrierFloorExp   = -96
-#    kBandAdmissionMargin   = 8
-#    bandCeilingAdmits(e, m=8)      = e + m <= 115
-#    bandIntermediateAdmits(e, m=8) = e - m >= -96
-#  For add/sub/mul: an operand exponent e is certified in-domain when
-#  -88 <= e <= 107 (bandCeilingAdmits+bandIntermediateAdmits on
-#  operands/result at the default margin).
-# =====================================================================
-K_BAND_NOMINAL_CEILING_EXP = 115
-K_BAND_CARRIER_FLOOR_EXP = -96
-K_BAND_ADMISSION_MARGIN = 8
-K_BAND_ADMITTED_LO = K_BAND_CARRIER_FLOOR_EXP + K_BAND_ADMISSION_MARGIN  # -88
-K_BAND_ADMITTED_HI = K_BAND_NOMINAL_CEILING_EXP - K_BAND_ADMISSION_MARGIN  # 107
-K_BAND_HARD_CEILING_EXP = 128  # FP32 hard overflow (Band.h's "hard ceiling" doc note)
-K_BAND_HARD_FLOOR_EXP = -149  # FP32 hard subnormal floor
-
-
-def band_ceiling_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e + margin <= K_BAND_NOMINAL_CEILING_EXP
-
-
-def band_intermediate_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e - margin >= K_BAND_CARRIER_FLOOR_EXP
-
-
-def spine_admits(e: int) -> bool:
-    return band_ceiling_admits(e) and band_intermediate_admits(e)
 
 
 # =====================================================================
@@ -212,16 +145,6 @@ def _fma_fallback(a: float, b: float, c: float) -> float:
 # =====================================================================
 #  Op table
 # =====================================================================
-class Op:
-    def __init__(self, name, arity, category, ref, bound, provenance):
-        self.name = name
-        self.arity = arity
-        self.category = category  # 'exact_total' or 'spine_admitted'
-        self.ref = ref
-        self.bound = bound  # ULP bound for in_domain rows (int, ULP units)
-        self.provenance = provenance
-
-
 OPS = [
     Op("abs", 1, "exact_total", ref_abs, 0,
        "aether/banded/Band.h:830 — total, exact (3 sign-XOR mask), 0 ULP."),
@@ -292,10 +215,6 @@ OPS = [
 # sign-bit-only zero/inf/NaN paths) — this is
 # the ONE place magnitude genuinely does not matter.
 # =====================================================================
-def specials_pool():
-    return {POS_ZERO, NEG_ZERO, POS_INF, NEG_INF, QNAN, NAN_PAYLOAD_A, NAN_PAYLOAD_B}
-
-
 def binary_specials_generic():
     """Curated combos crossing zero/inf/nan/+-1/+-2 — the ties/signed-zero
     rows Band.h documents in-body for fmax/fmin/copysign."""
@@ -305,26 +224,6 @@ def binary_specials_generic():
         for b in vals:
             out.add((bits_of(a), bits_of(b)))
     return out
-
-
-def exponent_of(x: float):
-    """Base-2 exponent such that x == mantissa * 2**exponent_of(x) with
-    1 <= |mantissa| < 2 (ldexp convention). None for 0/inf/nan (magnitude
-    is not the governing property for those — see module note above)."""
-    if x == 0.0 or math.isinf(x) or math.isnan(x):
-        return None
-    m, e = math.frexp(x)  # x = m * 2**e, 0.5 <= |m| < 1
-    return e - 1
-
-
-def label_for_exponent(e):
-    if e is None:
-        return 0  # zero/inf/nan: always in_domain, see module note.
-    if e >= K_BAND_HARD_CEILING_EXP or e <= K_BAND_HARD_FLOOR_EXP:
-        return 2  # rejected: hard FP32 escape (overflow / subnormal collapse)
-    if spine_admits(e):
-        return 0
-    return 1  # degraded: representable but past the certified margin
 
 
 # Per-op rule for which operand exponent(s) the RESULT'S admission tracks —
@@ -497,9 +396,7 @@ def build_corpus(op: Op, seed: int):
 #  (README.md "fence check").
 # =====================================================================
 def write_header(op: Op, rows, seed: int, out_path: str, argv_echo: str):
-    in_domain = sum(1 for r in rows if r[2] == 0)
-    degraded = sum(1 for r in rows if r[2] == 1)
-    rejected = sum(1 for r in rows if r[2] == 2)
+    in_domain, degraded, rejected = label_counts(rows)
 
     head = []
     head.append(f"// GENERATED by tools/bandmath/gen_corpus.py — golden reference + domain")
@@ -519,59 +416,28 @@ def write_header(op: Op, rows, seed: int, out_path: str, argv_echo: str):
     head.append(f"// corpus: {len(rows)} rows ({in_domain} in_domain / {degraded} degraded / "
                  f"{rejected} rejected)")
     head.append(f"//")
-    head.append("// The row block below is md5-FENCED:")
-    head.append("//   BEGIN_RE='^// ---8<--- GOLDEN ROWS BEGIN' ; END_RE='^// ---8<--- GOLDEN ROWS END'")
-    head.append("//   sed -n \"/$BEGIN_RE/,/$END_RE/p\" <this file> | sed '1d;$d' | md5sum")
-    head.append("// and compare against the value on the BEGIN line.")
+    head.extend(FENCE_NOTE)
 
-    body = []
-    body.append("#pragma once\n")
-    body.append("\n".join(head) + "\n")
-    body.append("#include <cstdint>\n#include <cstddef>\n")
-    body.append(f"namespace aether_tests {{\nnamespace bandmath_golden {{\nnamespace {op.name} {{\n")
-    body.append(f"inline constexpr int kArity = {op.arity};")
-    body.append(f"inline constexpr double kUlpBound = {op.bound}.0;")
-    body.append("struct Row {")
-    body.append(f"    std::uint64_t in[{op.arity}];  ///< input bit patterns")
-    body.append("    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits")
-    body.append("    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected")
-    body.append("};\n")
-
-    rows_text_lines = ["inline constexpr Row kRows[] = {"]
+    row_struct = [
+        f"    std::uint64_t in[{op.arity}];  ///< input bit patterns",
+        "    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits",
+        "    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected",
+    ]
+    row_lines = []
     for bits_tuple, ref, label in rows:
         in_str = ", ".join(f"0x{b:016X}ULL" for b in bits_tuple)
-        rows_text_lines.append(f"    {{ {{ {in_str} }}, 0x{bits_of(ref):016X}ULL, {label} }},")
-    rows_text_lines.append("};")
-    rows_text = "\n".join(rows_text_lines) + "\n"
-
-    md5 = hashlib.md5(rows_text.encode("utf-8")).hexdigest()
-
-    body.append(f"// ---8<--- GOLDEN ROWS BEGIN (md5 = {md5}) ---8<---")
-    body.append(rows_text.rstrip("\n"))
-    body.append("// ---8<--- GOLDEN ROWS END ---8<---\n")
-    body.append(f"inline constexpr std::size_t kCorpusSize = {len(rows)};")
-    body.append(f"inline constexpr std::size_t kInDomainCount = {in_domain};")
-    body.append(f"inline constexpr std::size_t kDegradedCount = {degraded};")
-    body.append(f"inline constexpr std::size_t kRejectedCount = {rejected};\n")
-    body.append(f"}} // namespace {op.name}\n}} // namespace bandmath_golden\n}} // namespace aether_tests\n")
-
-    with open(out_path, "w") as f:
-        f.write("\n".join(body))
-
-    return in_domain, degraded, rejected
+        row_lines.append(f"    {{ {{ {in_str} }}, 0x{bits_of(ref):016X}ULL, {label} }},")
+    return write_list_header(out_path, head, op.name, op.arity, f"{op.bound}.0", row_struct, row_lines, rows)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=lambda s: int(s, 0), default=DEFAULT_SEED)
-    ap.add_argument("--out-dir", default=os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "tests", "bandmath"))
+    add_out_dir_arg(ap)
     ap.add_argument("--ops", default=None, help="comma-separated subset (default: all)")
     args = ap.parse_args()
 
-    if os.environ.get("CI"):
-        print("gen_corpus.py: refusing to mint under $CI — a gate must never "
-              "regenerate its own expectation.", file=sys.stderr)
+    if refuse_under_ci("gen_corpus.py"):
         return 1
 
     out_dir = os.path.abspath(args.out_dir)

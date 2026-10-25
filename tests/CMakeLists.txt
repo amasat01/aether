@@ -228,9 +228,9 @@ endif()
 
 # test_Version.{cpp,cu} reads the expected version string at test-configure
 # time via a compile definition rather than re-deriving it — AETHER_VERSION
-# is the same variable root CMakeLists.txt's configure_file(aether/version.h.in
-# ...) feeds into aether/version.h, so this is the identical value by
-# construction, not a second, driftable copy. Not ${PROJECT_VERSION}: this
+# is the variable root CMakeLists.txt threads to aether/version.h as the
+# AETHER_VERSION_STRING definition on the aether target, so the test checks the
+# value that crossed the target against the value that was sent. Not ${PROJECT_VERSION}: this
 # file's own project(aether_tests ...) call above (no VERSION argument)
 # shadows the root project's PROJECT_VERSION with an empty string in this
 # scope.

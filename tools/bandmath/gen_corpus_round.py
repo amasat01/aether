@@ -40,8 +40,7 @@ Admission constants transcribed verbatim from `aether/banded/Band.h`
 (`kBandNominalCeilingExp`/`kBandCarrierFloorExp`/`kBandAdmissionMargin`)
 and `aether/banded/BandRound.h` (`kBandFmodMaxSpan`) — same convention
 `gen_corpus.py`'s own "admission predicates — transcribed verbatim"
-section established, reproduced here rather than imported so this script
-has no import-time dependency on the other beyond `SplitMix64` (below).
+section established (now in `_corpus_common.py`).
 
 Usage:
     python3 tools/bandmath/gen_corpus_round.py [--seed HEX] [--out-dir DIR]
@@ -51,69 +50,40 @@ a gate must never regenerate its own expectation).
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import os
-import struct
 import sys
 import argparse
 from fractions import Fraction
 
-DEFAULT_SEED = 0xFE7A5EED0C0FFEE5  # matches the seed used across the golden_*.h corpora (see golden_random.h)
-
-
-# =====================================================================
-#  Bit helpers
-# =====================================================================
-def bits_of(x: float) -> int:
-    return struct.unpack("<Q", struct.pack("<d", x))[0]
-
-
-def double_of(b: int) -> float:
-    return struct.unpack("<d", struct.pack("<Q", b & 0xFFFFFFFFFFFFFFFF))[0]
-
-
-POS_ZERO = 0x0000000000000000
-NEG_ZERO = 0x8000000000000000
-POS_INF = 0x7FF0000000000000
-NEG_INF = 0xFFF0000000000000
-QNAN = 0x7FF8000000000000
-NAN_PAYLOAD_A = 0x7FF8000000000001
-NAN_PAYLOAD_B = 0xFFF8000000012345
-
-DBL_MAX = struct.unpack("<d", struct.pack("<Q", 0x7FEFFFFFFFFFFFFF))[0]
-DBL_MIN_SUBNORMAL = struct.unpack("<d", struct.pack("<Q", 0x0000000000000001))[0]
-
-
-def is_nan(x: float) -> bool:
-    return x != x
-
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _corpus_common import (
+    DEFAULT_SEED,
+    K_BAND_ADMISSION_MARGIN,
+    K_BAND_HARD_CEILING_EXP,
+    K_BAND_HARD_FLOOR_EXP,
+    Op,
+    SplitMix64,
+    add_out_dir_arg,
+    band_ceiling_admits,
+    band_intermediate_admits,
+    bits_of,
+    double_of,
+    emit_golden_header,
+    exponent_of,
+    is_nan,
+    label_for_exponent,
+    refuse_under_ci,
+    specials_pool,
+    spine_admits,
+)
 
 # =====================================================================
 #  Admission — TRANSCRIBED verbatim from aether/banded/Band.h /
 #  aether/banded/BandRound.h. Same constants gen_corpus.py's own
 #  "Admission predicates" section carries.
 # =====================================================================
-K_BAND_NOMINAL_CEILING_EXP = 115
-K_BAND_CARRIER_FLOOR_EXP = -96
-K_BAND_ADMISSION_MARGIN = 8
-K_BAND_ADMITTED_LO = K_BAND_CARRIER_FLOOR_EXP + K_BAND_ADMISSION_MARGIN  # -88
-K_BAND_ADMITTED_HI = K_BAND_NOMINAL_CEILING_EXP - K_BAND_ADMISSION_MARGIN  # 107
-K_BAND_HARD_CEILING_EXP = 128
-K_BAND_HARD_FLOOR_EXP = -149
 K_BAND_FMOD_MAX_SPAN = 72  # BandRound.h::kBandFmodMaxSpan
-
-
-def band_ceiling_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e + margin <= K_BAND_NOMINAL_CEILING_EXP
-
-
-def band_intermediate_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e - margin >= K_BAND_CARRIER_FLOOR_EXP
-
-
-def spine_admits(e: int) -> bool:
-    return band_ceiling_admits(e) and band_intermediate_admits(e)
 
 
 def band_fmod_admits(max_exp_dividend, min_exp_divisor, max_span: int,
@@ -121,45 +91,6 @@ def band_fmod_admits(max_exp_dividend, min_exp_divisor, max_span: int,
     return band_ceiling_admits(max_exp_dividend, margin) \
         and band_intermediate_admits(min_exp_divisor, margin) \
         and max_span <= K_BAND_FMOD_MAX_SPAN
-
-
-def exponent_of(x: float):
-    if x == 0.0 or math.isinf(x) or math.isnan(x):
-        return None
-    m, e = math.frexp(x)
-    return e - 1
-
-
-def label_for_exponent(e):
-    if e is None:
-        return 0  # zero/inf/nan: always in_domain (gen_corpus.py precedent)
-    if e >= K_BAND_HARD_CEILING_EXP or e <= K_BAND_HARD_FLOOR_EXP:
-        return 2
-    if spine_admits(e):
-        return 0
-    return 1
-
-
-# =====================================================================
-#  splitmix64 — SAME stream gen_corpus.py's own SplitMix64 produces (a
-#  local copy rather than a cross-import: this script's only shared
-#  dependency with gen_corpus.py is the ALGORITHM, not the module, mirroring
-#  gen_corpus_root.py's own choice not to import gen_corpus for anything but
-#  rsqrtCube's corpus).
-# =====================================================================
-class SplitMix64:
-    def __init__(self, seed: int):
-        self.s = seed & 0xFFFFFFFFFFFFFFFF
-
-    def next(self) -> int:
-        self.s = (self.s + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
-        z = self.s
-        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
-        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
-        return z ^ (z >> 31)
-
-    def uniform01(self) -> float:
-        return (self.next() >> 11) * (1.0 / 9007199254740992.0)
 
 
 # =====================================================================
@@ -223,16 +154,6 @@ def ref_fmod(a: float, b: float) -> float:
 # =====================================================================
 #  Op table
 # =====================================================================
-class Op:
-    def __init__(self, name, arity, category, ref, bound, provenance):
-        self.name = name
-        self.arity = arity
-        self.category = category  # 'exact_total' | 'spine_admitted' | 'fmod'
-        self.ref = ref
-        self.bound = bound
-        self.provenance = provenance
-
-
 OPS = [
     Op("floor", 1, "exact_total", ref_floor, 0,
        "aether/banded/BandRound.h::floor — total, exact, 0 ULP "
@@ -263,10 +184,6 @@ FMOD_OP = Op("fmod", 2, "fmod", ref_fmod, 0,
 #  shape (specials + at_exp sweep + random bulk), independently written
 #  (this script's own copy, per its module docstring).
 # =====================================================================
-def specials_pool():
-    return {POS_ZERO, NEG_ZERO, POS_INF, NEG_INF, QNAN, NAN_PAYLOAD_A, NAN_PAYLOAD_B}
-
-
 def at_exp(e, mant_seed_n=3):
     out = []
     for i in range(mant_seed_n):
@@ -507,23 +424,7 @@ def build_rows_fmod(seed: int, bulk_n: int = 900):
 #  Header emission — matches golden_add.h's format exactly.
 # =====================================================================
 def emit_header(op: Op, rows, out_path: str, seed: int, minter_note: str):
-    in_dom = sum(1 for r in rows if r[-1] == 0)
-    deg = sum(1 for r in rows if r[-1] == 1)
-    rej = sum(1 for r in rows if r[-1] == 2)
-
-    row_lines = []
-    for r in rows:
-        ins = r[:op.arity]
-        ref = r[op.arity]
-        label = r[op.arity + 1]
-        in_str = ", ".join(f"0x{v:016X}ULL" for v in ins)
-        row_lines.append(f"    {{ {{ {in_str} }}, 0x{ref:016X}ULL, {label} }},")
-    row_block = "\n".join(row_lines)
-    md5 = hashlib.md5(("\n" + row_block + "\n").encode()).hexdigest()
-
-    text = f"""#pragma once
-
-// GENERATED by tools/bandmath/gen_corpus_round.py — golden reference +
+    emit_golden_header(op.name, op.arity, op.bound, rows, out_path, f"""// GENERATED by tools/bandmath/gen_corpus_round.py — golden reference +
 // domain label table for `{op.name}`, DO NOT EDIT BY HAND. Regenerate with
 // the mint command below and commit the diff in the SAME commit as
 // whatever test consuming this header changed.
@@ -531,60 +432,16 @@ def emit_header(op: Op, rows, out_path: str, seed: int, minter_note: str):
 // mint command line: python3 tools/bandmath/gen_corpus_round.py
 // seed:              0x{seed:016X}ULL
 // reference:         {minter_note}
-// provenance:        {op.provenance}
-// bound (in_domain, ULP): {op.bound}
-//
-// label encoding: 0=in_domain 1=degraded 2=rejected
-// corpus: {len(rows)} rows ({in_dom} in_domain / {deg} degraded / {rej} rejected)
-//
-// The row block below is md5-FENCED:
-//   BEGIN_RE='^// ---8<--- GOLDEN ROWS BEGIN' ; END_RE='^// ---8<--- GOLDEN ROWS END'
-//   sed -n "/$BEGIN_RE/,/$END_RE/p" <this file> | sed '1d;$d' | md5sum
-// and compare against the value on the BEGIN line.
-
-#include <cstdint>
-#include <cstddef>
-
-namespace aether_tests {{
-namespace bandmath_golden {{
-namespace {op.name} {{
-
-inline constexpr int kArity = {op.arity};
-inline constexpr double kUlpBound = {op.bound};
-struct Row {{
-    std::uint64_t in[{op.arity}];  ///< input bit patterns
-    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits
-    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected
-}};
-
-// ---8<--- GOLDEN ROWS BEGIN (md5 = {md5}) ---8<---
-inline constexpr Row kRows[] = {{
-{row_block}
-}};
-// ---8<--- GOLDEN ROWS END ---8<---
-
-inline constexpr std::size_t kCorpusSize = {len(rows)};
-inline constexpr std::size_t kInDomainCount = {in_dom};
-inline constexpr std::size_t kDegradedCount = {deg};
-inline constexpr std::size_t kRejectedCount = {rej};
-
-}} // namespace {op.name}
-}} // namespace bandmath_golden
-}} // namespace aether_tests
-"""
-    with open(out_path, "w") as f:
-        f.write(text)
-    print(f"wrote {out_path}: {len(rows)} rows ({in_dom}/{deg}/{rej})")
+// provenance:        {op.provenance}""")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", default=hex(DEFAULT_SEED))
-    ap.add_argument("--out-dir", default=os.path.join(os.path.dirname(__file__), "..", "..", "tests", "bandmath"))
+    add_out_dir_arg(ap)
     args = ap.parse_args()
 
-    if os.environ.get("CI"):
-        print("gen_corpus_round.py: refusing to write under $CI", file=sys.stderr)
+    if refuse_under_ci("gen_corpus_round.py"):
         return 1
 
     seed = int(args.seed, 16)

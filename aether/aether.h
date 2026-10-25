@@ -121,7 +121,8 @@
  * capacity) and its error-contract dependency `aether::DeviceFlag`
  * (`err/DeviceFlag.h`: the missing device-visible half of the
  * host-throw error contract `err/Error.h` states but cannot itself
- * express from device code).
+ * express from device code) — plus `aether::accum::run` (`accum/run.h`:
+ * a keyed sum with one atomic per run of lanes that share a slot).
  *
  * `view/TableView.h` (`TableView<T,Extents>`/`makeTableView` — a thin
  * alias over `View<const T,Extents,layout_right>`/`make_view`) and
@@ -176,6 +177,7 @@
 #include "aether/accum/AccumPlane.h"
 #include "aether/accum/AppendCounter.h"
 #include "aether/accum/atomic.h"
+#include "aether/accum/run.h"
 #include "aether/array/Array.h"
 #include "aether/backend/cpu/Tiled.h"
 #include "aether/backend/cuda/DeviceBundle.h"

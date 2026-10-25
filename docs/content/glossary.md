@@ -64,4 +64,14 @@ accumulation plane
 append counter
   A shared counter that lets an unknown number of writers each claim the
   next free slot of one destination array. See {doc}`accumulation`.
+
+numerics contract
+  The fixed order and spelling of aether's arithmetic (fold order, division
+  as one reciprocal, compensated sums, non-finite rules) that every target
+  computes against. See {doc}`numerics_contract`.
+
+language core
+  The numerics contract written out in a language that cannot compile
+  aether's C++23 templates, generated and checked against the same reference
+  set. See {doc}`numerics_contract` and {doc}`c_core`.
 ```

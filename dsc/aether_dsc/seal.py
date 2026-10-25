@@ -12,7 +12,10 @@ why: this file being importable as `aether_dsc.seal` — which `-m` does
 internally — would otherwise shadow the `aether_dsc.seal(*roots)`
 function exposed from `aether_dsc/__init__.py`).
 
-    python -m aether_dsc.seal
+    python -m aether_dsc.seal [--no-gate]
+
+`--no-gate` writes the blob without the NVRTC check, for a machine that has no NVRTC (CPU-only
+macOS): the check ran on the Linux seal of the same headers.
 """
 from __future__ import annotations
 
@@ -27,14 +30,14 @@ def main(argv: list[str] | None = None) -> int:
     """Seal this checkout, gate it on the NVRTC-clean check, write the
     blob. Prints the outcome; exit 0 on a written blob, 1 on a gate
     failure or a missing input file."""
-    del argv  # no options today — the CLI seals exactly this checkout
+    gate = "--no-gate" not in (sys.argv[1:] if argv is None else argv)
     try:
         p = seal()
     except FileNotFoundError as exc:
         print(f"RED: {exc}", file=sys.stderr)
         return 1
     try:
-        blob_path = seal_and_write(p.headers, p.host_only_names)
+        blob_path = seal_and_write(p.headers, p.host_only_names, gate=gate)
     except RuntimeError as exc:
         print(f"RED: {exc}", file=sys.stderr)
         return 1

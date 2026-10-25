@@ -88,6 +88,31 @@ newly-written samples into the ``Array`` via its own ``commit()``, and
 reset the counter for the next step — never throwing itself, so a
 rejected overflow does not discard the samples that did fit.
 
+Keyed sums: one atomic per run
+---------------------------------
+
+When many lanes add into the same slot of a keyed sum, ``aether::accum::run``
+(``aether/accum/run.h``) adds a run of lanes that share a slot with ONE
+atomic instead of one per lane:
+
+- ``add<W>(target, at, term, own, open)``: the caller knows the slot is the
+  same over every aligned group of ``W`` lanes (a power of two up to 32).
+- ``addTested(target, at, term, open)``: no such knowledge; one vote checks
+  that the whole warp shares the slot.
+- ``addSorted(target, at, term, open)``: equal slots are adjacent in lane
+  order; each run is found at run time.
+
+``addCompensated<W>``, ``addTestedCompensated`` and ``addSortedCompensated``
+take a companion view ``comp`` after ``target``: the run is summed plainly
+and its one commit is compensated, so ``target + comp`` holds the sum (see
+:doc:`numerics_contract`). On the device a warp that does not meet a form's
+condition commits lane by lane, so every call is correct for any key. On the
+host each call adds into ``open``, the caller's open run
+(``auto open = run::open(target);``): one per target for a serial range of
+lanes, committed when the slot changes and by ``run::close(open)`` at the
+end of the range. ``tests/test_Run.cu`` and ``tests/test_Run.cpp`` check
+the commit counts and the error of every form on both paths.
+
 A runnable example
 -------------------
 

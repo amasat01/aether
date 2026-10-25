@@ -13,7 +13,6 @@
 # The pedagogic pages live under content/ and are toctree'd from index.md.
 
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_ext"))
@@ -25,22 +24,10 @@ project = "aether"
 copyright = "2026, Alessandro Masat"
 author = "Alessandro Masat"
 
-# Read version from CMakeLists.txt's project(aether VERSION x.y.z ...).
-_version = "unknown"
-_cmake = os.path.join(os.path.dirname(__file__), "..", "CMakeLists.txt")
-_pattern = re.compile(r"project\s*\(\s*aether\s+VERSION\s+(\d+\.\d+\.\d+)", re.IGNORECASE)
-try:
-    with open(_cmake) as _f:
-        for _line in _f:
-            _m = _pattern.search(_line)
-            if _m:
-                _version = _m.group(1)
-                break
-except FileNotFoundError:
-    pass
+# The version is the latest git tag (setuptools-scm), never written into the tree.
+import setuptools_scm
 
-version = _version
-release = _version
+release = version = setuptools_scm.get_version(root="..", relative_to=__file__, fallback_version="0.0.0")
 
 # -- General configuration ---------------------------------------------------
 

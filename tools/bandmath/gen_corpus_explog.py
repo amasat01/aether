@@ -42,33 +42,32 @@ convention).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import math
 import os
-import re
-import struct
 import subprocess
 import sys
 
-DEFAULT_SEED = 0xFE7A5EED0C0FFEE5  # matches the seed convention gen_corpus.py / ulp_oracle use
-
-# =====================================================================
-#  Bit helpers (same convention as gen_corpus.py)
-# =====================================================================
-def bits_of(x: float) -> int:
-    return struct.unpack("<Q", struct.pack("<d", x))[0]
-
-
-def double_of(b: int) -> float:
-    return struct.unpack("<d", struct.pack("<Q", b & 0xFFFFFFFFFFFFFFFF))[0]
-
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _corpus_common import (
+    BINARY_ROW_RE,
+    DEFAULT_SEED,
+    FENCE_NOTE,
+    K_BAND_ADMISSION_MARGIN,
+    K_BAND_HARD_CEILING_EXP,
+    K_BAND_HARD_FLOOR_EXP,
+    add_out_dir_arg,
+    band_ceiling_admits,
+    band_intermediate_admits,
+    double_of,
+    exponent_of,
+    label_counts,
+    parse_unary_raw,
+    refuse_under_ci,
+    write_list_header,
+)
 
 LN2 = 0.6931471805599453
 SQRT2 = 1.4142135623730951
-
-
-def nextafter(x: float, direction: float) -> float:
-    return math.nextafter(x, direction)
 
 
 # =====================================================================
@@ -77,25 +76,10 @@ def nextafter(x: float, direction: float) -> float:
 #  own bandCeilingAdmits/bandIntermediateAdmits (K_BAND_ADMITTED_LO/HI
 #  already match gen_corpus.py's own transcription of those two).
 # =====================================================================
-K_BAND_NOMINAL_CEILING_EXP = 115
-K_BAND_CARRIER_FLOOR_EXP = -96
-K_BAND_ADMISSION_MARGIN = 8
-K_BAND_ADMITTED_LO = K_BAND_CARRIER_FLOOR_EXP + K_BAND_ADMISSION_MARGIN  # -88
-K_BAND_ADMITTED_HI = K_BAND_NOMINAL_CEILING_EXP - K_BAND_ADMISSION_MARGIN  # 107
 K_BAND_LOG_TAIL_NORMAL_EXP = -77
-K_BAND_HARD_CEILING_EXP = 128
-K_BAND_HARD_FLOOR_EXP = -149
 K_BAND_LOG2E = 1.44269504088896340736
 K_BAND_EXP_SAT_HIGH = 88.7228391  # 128*ln2
 K_BAND_EXP_SAT_LOW = -103.972077  # -150*ln2
-
-
-def band_ceiling_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e + margin <= K_BAND_NOMINAL_CEILING_EXP
-
-
-def band_intermediate_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e - margin >= K_BAND_CARRIER_FLOOR_EXP
 
 
 def band_exp_ceil_exp(max_input: float) -> int:
@@ -114,13 +98,6 @@ def band_exp_admits(max_input: float, min_input: float, margin: int = K_BAND_ADM
     return band_ceiling_admits(band_exp_ceil_exp(max_input), margin) and band_intermediate_admits(
         band_exp_floor_exp(min_input), margin
     )
-
-
-def exponent_of(x: float):
-    if x == 0.0 or math.isinf(x) or math.isnan(x):
-        return None
-    m, e = math.frexp(x)
-    return e - 1
 
 
 def band_log_admits(max_abs_exp_arg, min_abs_exp_arg, min_abs_exp_result, margin=K_BAND_ADMISSION_MARGIN) -> bool:
@@ -270,7 +247,7 @@ def build_exp_spec() -> str:
     # domain edges (certified interval, both sides, tight neighbours)
     lo, hi = -60.997, 74.16679
     for e in (lo, hi):
-        pts += [e, nextafter(e, e - 1), nextafter(e, e + 1)]
+        pts += [e, math.nextafter(e, e - 1), math.nextafter(e, e + 1)]
     # tiny |x|
     pts += [1e-300, -1e-300, 1e-30, -1e-30, 1e-10, -1e-10]
     lines.append("points " + " ".join(repr(v) for v in pts))
@@ -291,7 +268,7 @@ def build_log_spec() -> str:
     lines = [f"seed 0x{DEFAULT_SEED:016X}"]
     lines.append("points " + " ".join(
         repr(v) for v in (
-            1.0, nextafter(1.0, 2.0), nextafter(1.0, 0.0),
+            1.0, math.nextafter(1.0, 2.0), math.nextafter(1.0, 0.0),
             -1.0, -2.0, -0.5, -1e300,
         )
     ))
@@ -316,7 +293,7 @@ def build_log_spec() -> str:
     pts2 = []
     for e in (-90, -50, -10, 0, 1, 10, 50, 100):
         m = SQRT2 * (2.0 ** e)
-        pts2 += [m, nextafter(m, m * 1.01), nextafter(m, m * 0.99)]
+        pts2 += [m, math.nextafter(m, m * 1.01), math.nextafter(m, m * 0.99)]
     lines.append("points " + " ".join(repr(v) for v in pts2))
     lines.append("# pow2 input family, envelope-edge on both legs, both signs (negative -> loud reject)")
     lines.append("reduction pow2 -95 112")
@@ -376,26 +353,13 @@ def build_pow_spec() -> str:
 # =====================================================================
 #  Stage 1 runner + Stage 2 (parse raw MPFR header, relabel, re-emit).
 # =====================================================================
-UNARY_ROW_RE = re.compile(
-    r"\{\s*\{\s*(0x[0-9A-Fa-f]+)ULL\s*\}\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(\d+)\s*\}")
-BINARY_ROW_RE = re.compile(
-    r"\{\s*\{\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*\}\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(\d+)\s*\}")
-
-
-def parse_unary_raw(path: str):
-    text = open(path).read()
-    return [(int(a, 16), int(b, 16)) for a, b, _c in UNARY_ROW_RE.findall(text)]
-
-
 def parse_binary_raw(path: str):
     text = open(path).read()
     return [(int(a, 16), int(b, 16), int(c, 16)) for a, b, c, _c in BINARY_ROW_RE.findall(text)]
 
 
 def write_labeled_header(op: str, arity: int, bound: float, rows, provenance: str, out_path: str, mint_cmd: str):
-    in_domain = sum(1 for r in rows if r[-1] == 0)
-    degraded = sum(1 for r in rows if r[-1] == 1)
-    rejected = sum(1 for r in rows if r[-1] == 2)
+    in_domain, degraded, rejected = label_counts(rows)
 
     head = []
     head.append(f"// GENERATED by tools/bandmath/gen_corpus_explog.py -- golden reference + domain")
@@ -414,48 +378,22 @@ def write_labeled_header(op: str, arity: int, bound: float, rows, provenance: st
     head.append(f"// label encoding: 0=in_domain 1=degraded 2=rejected")
     head.append(f"// corpus: {len(rows)} rows ({in_domain} in_domain / {degraded} degraded / {rejected} rejected)")
     head.append(f"//")
-    head.append("// The row block below is md5-FENCED:")
-    head.append("//   BEGIN_RE='^// ---8<--- GOLDEN ROWS BEGIN' ; END_RE='^// ---8<--- GOLDEN ROWS END'")
-    head.append("//   sed -n \"/$BEGIN_RE/,/$END_RE/p\" <this file> | sed '1d;$d' | md5sum")
-    head.append("// and compare against the value on the BEGIN line.")
+    head.extend(FENCE_NOTE)
 
-    body = []
-    body.append("#pragma once\n")
-    body.append("\n".join(head) + "\n")
-    body.append("#include <cstdint>\n#include <cstddef>\n")
-    body.append(f"namespace aether_tests {{\nnamespace bandmath_golden {{\nnamespace {op} {{\n")
-    body.append(f"inline constexpr int kArity = {arity};")
-    body.append(f"inline constexpr double kUlpBound = {bound};")
-    body.append("struct Row {")
-    body.append(f"    std::uint64_t in[{arity}];  ///< input bit pattern(s)")
-    body.append("    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits")
-    body.append("    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected")
-    body.append("};\n")
-
-    rows_text_lines = ["inline constexpr Row kRows[] = {"]
+    row_struct = [
+        f"    std::uint64_t in[{arity}];  ///< input bit pattern(s)",
+        "    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits",
+        "    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected",
+    ]
+    row_lines = []
     for r in rows:
         if arity == 1:
             in0, ref, label = r
-            rows_text_lines.append(f"    {{ {{ 0x{in0:016X}ULL }}, 0x{ref:016X}ULL, {label} }},")
+            row_lines.append(f"    {{ {{ 0x{in0:016X}ULL }}, 0x{ref:016X}ULL, {label} }},")
         else:
             in0, in1, ref, label = r
-            rows_text_lines.append(f"    {{ {{ 0x{in0:016X}ULL, 0x{in1:016X}ULL }}, 0x{ref:016X}ULL, {label} }},")
-    rows_text_lines.append("};")
-    rows_text = "\n".join(rows_text_lines) + "\n"
-    md5 = hashlib.md5(rows_text.encode("utf-8")).hexdigest()
-
-    body.append(f"// ---8<--- GOLDEN ROWS BEGIN (md5 = {md5}) ---8<---")
-    body.append(rows_text.rstrip("\n"))
-    body.append("// ---8<--- GOLDEN ROWS END ---8<---\n")
-    body.append(f"inline constexpr std::size_t kCorpusSize = {len(rows)};")
-    body.append(f"inline constexpr std::size_t kInDomainCount = {in_domain};")
-    body.append(f"inline constexpr std::size_t kDegradedCount = {degraded};")
-    body.append(f"inline constexpr std::size_t kRejectedCount = {rejected};\n")
-    body.append(f"}} // namespace {op}\n}} // namespace bandmath_golden\n}} // namespace aether_tests\n")
-
-    with open(out_path, "w") as f:
-        f.write("\n".join(body))
-    return in_domain, degraded, rejected
+            row_lines.append(f"    {{ {{ 0x{in0:016X}ULL, 0x{in1:016X}ULL }}, 0x{ref:016X}ULL, {label} }},")
+    return write_list_header(out_path, head, op, arity, bound, row_struct, row_lines, rows)
 
 
 OPS = {
@@ -472,16 +410,14 @@ OPS = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--oracle-bin", required=True, help="path to the built ulp_oracle binary")
-    ap.add_argument("--out-dir", default=os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "tests", "bandmath"))
+    add_out_dir_arg(ap)
     ap.add_argument("--spec-dir", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "specs"))
     ap.add_argument("--raw-dir", default="/tmp/p11c1_explog_raw")
     ap.add_argument("--ops", default=None)
     args = ap.parse_args()
 
-    if os.environ.get("CI"):
-        print("gen_corpus_explog.py: refusing to mint under $CI.", file=sys.stderr)
+    if refuse_under_ci("gen_corpus_explog.py"):
         return 1
 
     out_dir = os.path.abspath(args.out_dir)

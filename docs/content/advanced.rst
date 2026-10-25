@@ -16,6 +16,9 @@ race-free accumulation and plain-C output.
 :doc:`Accumulation <accumulation>`
    Adding many producers' contributions into one per-sample slot without a data race.
 
+:doc:`Numerics contract <numerics_contract>`
+   The fold order, division, compensated sums and non-finite rules every target computes against.
+
 :doc:`Plain-C reference core <c_core>`
    Standalone C99 functions that reproduce aether's arithmetic bit for bit.
 
@@ -27,4 +30,5 @@ race-free accumulation and plain-C output.
    cpu_simd
    banded_emulated_real
    accumulation
+   numerics_contract
    c_core

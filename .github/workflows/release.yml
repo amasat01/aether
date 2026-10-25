@@ -24,6 +24,7 @@ name: Release
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -41,6 +42,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: aether
+          fetch-depth: 0
 
       # The sibling eagle checkout `seal()` reads plugin/gref_layout.h and
       # plugin/gref_abi.h from (host path only; NVRTC itself is served an
@@ -57,6 +59,14 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: aether/dsc/pyproject.toml
+
+      - name: Tag this checkout with the version its label gives
+        working-directory: aether
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          v=$(python tools/next_version.py "$PR_LABELS" 2>/dev/null || true)  # no label or release:none: build untagged (the gate reports a missing label)
+          [ -z "$v" ] || git tag "v$v"
 
       - run: python -m pip install --quiet build "cuda-bindings" "nvidia-cuda-nvrtc-cu12" "nvidia-cuda-cccl-cu12" "twine>=6" pyyaml
 
@@ -128,11 +138,13 @@ jobs:
           python -m venv sv
           sv/bin/python -m pip install --quiet dist/*.tar.gz
           sv/bin/python -m pip check
+          want=$(basename dist/*.tar.gz .tar.gz); want=${want##*-}
           cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/sv/bin/python" - <<'PY'
+          "$GITHUB_WORKSPACE/sv/bin/python" - <<PY
           import aether_dsc
           p = aether_dsc.payload()
           assert p.headers and p.digest
+          assert aether_dsc.__version__ == "$want", aether_dsc.__version__
           print(f"OK: {len(p.headers)} headers, digest={p.digest[:16]}...")
           PY
 
@@ -144,6 +156,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: manifesto copy matches raptor
         run: bash tools/manifesto_check.sh CONTRIBUTING.md
@@ -155,6 +169,13 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: docs/requirements.txt
+
+      - name: Tag this checkout with the version its label gives
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          v=$(python tools/next_version.py "$PR_LABELS" 2>/dev/null || true)  # no label or release:none: build untagged (the gate reports a missing label)
+          [ -z "$v" ] || git tag "v$v"
 
       # companion site (amasat01.github.io): the ref pinned in .github/companions, else a same-named branch, else main
       - uses: ./.github/actions/companion
@@ -231,7 +252,7 @@ jobs:
       # --require-cuda: a missing nvcc is a failure here, never a skip.
       - run: make -C docs nbverify NBVERIFY_ARGS=--require-cuda
 
-  # Informational: a non-release PR carries an already published version.
+  # Informational: a docs-only PR carries an already published version.
   pypi-version:
     needs: build
     runs-on: ubuntu-latest

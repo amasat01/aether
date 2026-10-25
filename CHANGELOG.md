@@ -1,6 +1,14 @@
 # Changelog
 
+Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
+
 ## Unreleased
+
+**A numerics-contract page.** One docs page, `numerics_contract`, states what every target computes against: the fold order of sums and dot products, division by a scalar as one reciprocal, the compensated sums, the non-finite rules, and where bit identity holds and where a ULP band replaces it. The bit-identity table moved there from the plain-C core page, which now links to it. The `CCore` corpus is named as the shared check for any further language core. No header changes.
+
+**Keyed sums with one atomic per run, `aether/accum/run.h`.** `aether::accum::run::add<W>`, `addTested` and `addSorted` add a run of lanes that share a slot with one atomic: a run the caller proves, one a warp vote finds, or one of adjacent equal keys. Each has a compensated twin that sums the run plainly and makes its one commit compensated. A warp that does not qualify commits lane by lane; on the host each call adds into the caller's open run, committed when the slot changes and at `run::close`. New tests `AccumRun.*` check commit counts and errors on both paths.
+
+## 0.2.7 (2026-10-23)
 
 **A plain-C reference core, `aether_dsc.c_core`.** A pure-Python generator of C99 functions for vectors, matrices, quaternions and four scalar formulas, at both `double` and `float` widths, that reproduce aether's expression-template arithmetic bit for bit. The contract is the fold order: dot, norm and sum products are right-nested with the highest index outermost and no zero seed, division by a scalar multiplies by one reciprocal, and `neg` is `x * -1`. It exists so that a consumer such as hawk can inline the functions it needs into standalone C. The C++ headers are unchanged; the C++ version moves with `aether-dsc`, as every release now does.
 

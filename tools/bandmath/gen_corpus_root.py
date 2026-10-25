@@ -43,29 +43,31 @@ convention: a gate must never regenerate its own expectation).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import math
 import os
-import re
-import struct
-import subprocess
 import sys
 import tempfile
 from decimal import Decimal, getcontext
 
-DEFAULT_SEED = 0xFE7A5EED0C0FFEE5
-
-
-# =====================================================================
-#  Bit helpers (same convention as gen_corpus.py)
-# =====================================================================
-def bits_of(x: float) -> int:
-    return struct.unpack("<Q", struct.pack("<d", x))[0]
-
-
-def double_of(b: int) -> float:
-    return struct.unpack("<d", struct.pack("<Q", b & 0xFFFFFFFFFFFFFFFF))[0]
-
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _corpus_common import (
+    DEFAULT_SEED,
+    K_BAND_ADMISSION_MARGIN,
+    K_BAND_HARD_CEILING_EXP,
+    K_BAND_HARD_FLOOR_EXP,
+    SplitMix64,
+    add_out_dir_arg,
+    band_ceiling_admits,
+    band_intermediate_admits,
+    bits_of,
+    double_of,
+    emit_golden_header,
+    exponent_of,
+    parse_raw_binary,
+    parse_raw_unary,
+    refuse_under_ci,
+    run_ulp_oracle,
+)
 
 # =====================================================================
 #  Admission predicates — transcribed verbatim from
@@ -74,22 +76,7 @@ def double_of(b: int) -> float:
 #  "admits" section) — reproduced here with the same ceilHalf/floorHalf
 #  integer helpers.
 # =====================================================================
-K_BAND_NOMINAL_CEILING_EXP = 115
-K_BAND_CARRIER_FLOOR_EXP = -96
 K_BAND_NOMINAL_FLOOR_EXP = -56
-K_BAND_ADMISSION_MARGIN = 8
-K_BAND_HARD_CEILING_EXP = 128
-K_BAND_HARD_FLOOR_EXP = -149
-
-
-def band_ceiling_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e + margin <= K_BAND_NOMINAL_CEILING_EXP
-
-
-def band_intermediate_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
-    return e - margin >= K_BAND_CARRIER_FLOOR_EXP
-
-
 def band_floor_admits(e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
     return e - margin >= K_BAND_NOMINAL_FLOOR_EXP
 
@@ -140,13 +127,6 @@ def band_cbrt_admits(max_e: int, min_e: int, margin: int = K_BAND_ADMISSION_MARG
 
 def band_hypot_admits(max_e: int, min_e: int, margin: int = K_BAND_ADMISSION_MARGIN) -> bool:
     return band_ceiling_admits(max_e + 1, margin) and band_intermediate_admits(min_e, margin)
-
-
-def exponent_of(x: float):
-    if x == 0.0 or math.isinf(x) or math.isnan(x):
-        return None
-    _, e = math.frexp(x)
-    return e - 1
 
 
 # Per-op HARD-reject thresholds — TIGHTER than the generic FP32 hard
@@ -244,29 +224,6 @@ OPS = {
 # =====================================================================
 #  ulp_oracle raw-header parsing (sqrt/rsqrt/cbrt/hypot)
 # =====================================================================
-_ROW1_RE = re.compile(r"\{\s*\{\s*(0x[0-9A-Fa-f]+)ULL\s*\}\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(\d+)\s*\}")
-_ROW2_RE = re.compile(
-    r"\{\s*\{\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*\}\s*,\s*(0x[0-9A-Fa-f]+)ULL\s*,\s*(\d+)\s*\}")
-
-
-def run_ulp_oracle(oracle_bin: str, func: str, spec_text: str, scratch_dir: str):
-    spec_path = os.path.join(scratch_dir, f"spec_{func}.txt")
-    out_path = os.path.join(scratch_dir, f"raw_{func}.h")
-    with open(spec_path, "w") as f:
-        f.write(spec_text)
-    subprocess.run([oracle_bin, func, spec_path, out_path], check=True, capture_output=True, text=True)
-    with open(out_path) as f:
-        return f.read()
-
-
-def parse_raw_unary(text: str):
-    return [(int(a, 16), int(r, 16)) for a, r, _ in _ROW1_RE.findall(text)]
-
-
-def parse_raw_binary(text: str):
-    return [(int(a, 16), int(b, 16), int(r, 16)) for a, b, r, _ in _ROW2_RE.findall(text)]
-
-
 # =====================================================================
 #  rsqrtCube — decimal-based reference (see module docstring).
 # =====================================================================
@@ -288,7 +245,6 @@ def rsqrt_cube_ref_bits(x_bits: int) -> int:
 
 
 def build_rsqrt_cube_rows(seed: int):
-    from gen_corpus import SplitMix64  # co-located script, same seeded-stream convention
     rng = SplitMix64(seed)
     bits_pool = set()
     # specials (mirrors ulp_oracle's own always-on block, unary case)
@@ -312,23 +268,7 @@ def build_rsqrt_cube_rows(seed: int):
 #  Header emission — matches golden_add.h's format exactly.
 # =====================================================================
 def emit_header(op: str, arity: int, bound: float, provenance: str, rows, out_path: str, seed: int):
-    in_dom = sum(1 for r in rows if r[-1] == 0)
-    deg = sum(1 for r in rows if r[-1] == 1)
-    rej = sum(1 for r in rows if r[-1] == 2)
-
-    row_lines = []
-    for r in rows:
-        ins = r[:arity]
-        ref = r[arity]
-        label = r[arity + 1]
-        in_str = ", ".join(f"0x{v:016X}ULL" for v in ins)
-        row_lines.append(f"    {{ {{ {in_str} }}, 0x{ref:016X}ULL, {label} }},")
-    row_block = "\n".join(row_lines)
-    md5 = hashlib.md5(("\n" + row_block + "\n").encode()).hexdigest()
-
-    text = f"""#pragma once
-
-// GENERATED by tools/bandmath/gen_corpus_root.py — golden reference + domain
+    emit_golden_header(op, arity, bound, rows, out_path, f"""// GENERATED by tools/bandmath/gen_corpus_root.py — golden reference + domain
 // label table for `{op}`, DO NOT EDIT BY HAND. Regenerate with the mint
 // command below and commit the diff in the SAME commit as whatever test
 // consuming this header changed.
@@ -338,50 +278,7 @@ def emit_header(op: str, arity: int, bound: float, provenance: str, rows, out_pa
 // reference:         MPFR @ 256 bits via tools/ulp_oracle (rsqrtCube: Python
 //                    decimal @ 60 significant digits — no ulp_oracle FuncId
 //                    exists for it, see this script's module docstring)
-// provenance:        {provenance}
-// bound (in_domain, ULP): {bound}
-//
-// label encoding: 0=in_domain 1=degraded 2=rejected
-// corpus: {len(rows)} rows ({in_dom} in_domain / {deg} degraded / {rej} rejected)
-//
-// The row block below is md5-FENCED:
-//   BEGIN_RE='^// ---8<--- GOLDEN ROWS BEGIN' ; END_RE='^// ---8<--- GOLDEN ROWS END'
-//   sed -n "/$BEGIN_RE/,/$END_RE/p" <this file> | sed '1d;$d' | md5sum
-// and compare against the value on the BEGIN line.
-
-#include <cstdint>
-#include <cstddef>
-
-namespace aether_tests {{
-namespace bandmath_golden {{
-namespace {op} {{
-
-inline constexpr int kArity = {arity};
-inline constexpr double kUlpBound = {bound};
-struct Row {{
-    std::uint64_t in[{arity}];  ///< input bit patterns
-    std::uint64_t ref;         ///< golden reference, correctly-rounded double bits
-    std::uint8_t  label;       ///< 0=in_domain 1=degraded 2=rejected
-}};
-
-// ---8<--- GOLDEN ROWS BEGIN (md5 = {md5}) ---8<---
-inline constexpr Row kRows[] = {{
-{row_block}
-}};
-// ---8<--- GOLDEN ROWS END ---8<---
-
-inline constexpr std::size_t kCorpusSize = {len(rows)};
-inline constexpr std::size_t kInDomainCount = {in_dom};
-inline constexpr std::size_t kDegradedCount = {deg};
-inline constexpr std::size_t kRejectedCount = {rej};
-
-}} // namespace {op}
-}} // namespace bandmath_golden
-}} // namespace aether_tests
-"""
-    with open(out_path, "w") as f:
-        f.write(text)
-    print(f"wrote {out_path}: {len(rows)} rows ({in_dom}/{deg}/{rej})")
+// provenance:        {provenance}""")
 
 
 # =====================================================================
@@ -420,11 +317,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ulp-oracle", required=True, help="path to the built ulp_oracle binary")
     ap.add_argument("--seed", default=hex(DEFAULT_SEED))
-    ap.add_argument("--out-dir", default=os.path.join(os.path.dirname(__file__), "..", "..", "tests", "bandmath"))
+    add_out_dir_arg(ap)
     args = ap.parse_args()
 
-    if os.environ.get("CI"):
-        print("gen_corpus_root.py: refusing to write under $CI", file=sys.stderr)
+    if refuse_under_ci("gen_corpus_root.py"):
         return 1
 
     seed = int(args.seed, 16)

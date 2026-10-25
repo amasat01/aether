@@ -27,51 +27,20 @@ lists the kinds. The format version tag is ``aether-c/1``
 The contract
 ------------
 
-The generated functions follow aether's evaluation order exactly, because
-floating-point addition is not associative and any other order changes the
-low bits:
-
-* Folds (dot, norm, sum) are right-nested, highest index outermost, with no
-  zero seed: ``e[N-1] + (e[N-2] + (... + e[0]))``.
-* Dividing by a scalar computes the reciprocal ``1/s`` once, then multiplies
-  every component by it.
-* ``neg`` is ``x * -1``, and ``norm`` is ``sqrt`` of the sum of squares (no
-  ``hypot``).
-* Nothing promotes: an ``f32`` function only handles ``f32`` values.
-
-The key cases:
-
-================  ===============================================================
-Operation         Generated arithmetic
-================  ===============================================================
-sum, dot          right-nested, no seed: ``(a2*b2) + ((a1*b1) + (a0*b0))``
-norm              ``sqrt(ssq)``, where ``ssq`` is the right-nested sum of squares
-div by scalar     ``r = 1/s`` once, then ``r * x_k`` per component
-neg               ``x * -1``
-quaternion        a ``vec4`` laid out ``(w, x, y, z)``; a 3-vector is a ``vec3``
-================  ===============================================================
+The generated functions follow the evaluation order in the
+:doc:`numerics_contract`: right-nested folds with no zero seed, division by
+one reciprocal, ``neg`` as ``x * -1``, ``norm`` as ``sqrt`` of the sum of
+squares, no promotion. The page also holds the table of generated arithmetic
+and the exact extent of the bit guarantee.
 
 Build conditions
 ~~~~~~~~~~~~~~~~
 
-The bit-identity holds under two conditions, with one exception below:
-
-* The C translation unit must be compiled with ``-ffp-contract=off``.
-  GNU-mode GCC defaults to ``-ffp-contract=fast``, which fuses ``a*b - c*d``
-  (the shape of ``cross``, ``quat_mul`` and every row dot) into an FMA and
-  changes the low bits.
-* Identity is to the templates' default ``std::`` host route: no
-  ``AETHER_HOST_VECTOR_MATH`` (which reroutes some functions to
-  faithfully-rounded packet implementations) and no fast-math.
-
-The exception is the sign of a zero from ``min`` or ``max`` when the operands
-are ``+0`` and ``-0``. C leaves the sign of ``fmin(+0, -0)`` and
-``fmax(+0, -0)`` unspecified, and compilers differ: GCC's inline expansion
-returns the first operand, glibc's out-of-line function the second, and the
-choice can change with the optimisation level. Neither the templates nor the C
-can promise a sign there, so the ``CCore`` suite accepts either zero for these
-two kinds only, and stays a byte comparison everywhere else (a NaN is accepted
-for a NaN, as before).
+The bit-identity holds under two conditions: compile the C translation unit
+with ``-ffp-contract=off``, and compare against the templates' default
+``std::`` host route (no ``AETHER_HOST_VECTOR_MATH``, no fast-math). The
+sign of a zero from ``min`` or ``max`` of ``+0`` and ``-0`` is the one
+exception. The reasons are in :doc:`numerics_contract`.
 
 Consuming it from Python
 ------------------------

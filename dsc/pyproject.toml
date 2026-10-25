@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,11 +10,9 @@ build-backend = "setuptools.build_meta"
 # "raptor-hawk"). The import name stays flat
 # (`import aether_dsc`).
 name = "aether-dsc"
-# Tracks aether's own version (aether/version.h: `constexpr version()`) —
-# aether-dsc ships a SEALED payload of that exact checkout, so a version skew
-# between the two would silently claim a payload speaks for a different
-# aether than it does.
-version = "0.2.7"
+# aether-dsc ships a SEALED payload of its own checkout and takes aether's version
+# from the same git tag (setuptools-scm, root = ".."), so the two cannot skew.
+dynamic = ["version"]
 description = "aether-dsc — the sealed AETHER header payload: opaque, digest-named, no readable source in the wheel"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -41,6 +39,9 @@ test = ["pytest"]
 Homepage = "https://github.com/amasat01/aether"
 Documentation = "https://amasat01.github.io/aether/"
 Repository = "https://github.com/amasat01/aether"
+
+[tool.setuptools_scm]
+root = ".."
 
 [tool.setuptools]
 # aether/LICENSE + aether/NOTICE, copied here (setuptools' license-files glob

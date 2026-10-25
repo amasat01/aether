@@ -116,12 +116,15 @@ if(NOT AETHER_CPP_MODE AND NOT DEFINED CMAKE_CUDA_STANDARD)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/GitVersion.cmake)
+git_version(AETHER)
+
 if (AETHER_CPP_MODE)
   message(STATUS "> Configuring aether in C++ only mode")
-  project(aether VERSION 0.2.7 LANGUAGES CXX)
+  project(aether VERSION ${AETHER_VERSION_NUMERIC} LANGUAGES CXX)
 else()
   message(STATUS "> Configuring aether in CUDA/C++ mode")
-  project(aether VERSION 0.2.7 LANGUAGES CUDA CXX)
+  project(aether VERSION ${AETHER_VERSION_NUMERIC} LANGUAGES CUDA CXX)
 endif()
 
 include(GNUInstallDirs)
@@ -219,22 +222,18 @@ endif()
 ###########################
 
 # A header-only library must be includable from a fresh checkout WITHOUT
-# running CMake at all, so
-# aether/version.h is a COMMITTED header (no configure_file, no generated
-# file in the source tree). AETHER_VERSION/AETHER_ABI are literals in that
-# header, kept in sync with project(VERSION) by
-# VersionTest.VersionMatchesCMakeProjectVersion (tests/CMakeLists.txt feeds
-# the CMake value through a compile definition). Only the git revision is
-# configure-time-computed: `git rev-parse HEAD` ("unknown" if absent),
-# threaded to consumers as an INTERFACE compile definition
-# (AETHER_GIT_REVISION) on the aether target itself — so a normal CMake
-# consumer (in-tree test, or a downstream `find_package(aether)`, which
-# picks it up via the exported target's INTERFACE_COMPILE_DEFINITIONS) sees
-# the real sha, while a bare `-I<repo_root>` compile with no CMake
-# (tests/headers/check_header_diet.sh) sees no such macro and
-# aether::gitRevision() falls back to the "unknown" literal in the header
-# itself — see aether/version.h.
-set(AETHER_VERSION "${PROJECT_VERSION}")
+# running CMake at all, so aether/version.h is a COMMITTED header (no
+# configure_file, no generated file in the source tree). The version
+# (AETHER_VERSION_STRING, from the git tag: cmake/GitVersion.cmake) and the git
+# revision (AETHER_GIT_REVISION, `git rev-parse HEAD`, "unknown" if absent) are
+# threaded to consumers as INTERFACE compile definitions on the aether target
+# itself — so a normal CMake consumer (in-tree test, or a downstream
+# `find_package(aether)`, which picks them up via the exported target's
+# INTERFACE_COMPILE_DEFINITIONS) sees the real values, while a bare
+# `-I<repo_root>` compile with no CMake (tests/headers/check_header_diet.sh)
+# sees no such macros and version()/gitRevision() fall back to the "unknown"
+# literal in the header itself — see aether/version.h.
+set(AETHER_VERSION "${AETHER_VERSION_FULL}")
 find_package(Git QUIET)
 set(AETHER_GIT_REVISION "unknown")
 if (Git_FOUND)
@@ -249,7 +248,7 @@ if (Git_FOUND)
     set(AETHER_GIT_REVISION "${_AETHER_GIT_REV}")
   endif()
 endif()
-target_compile_definitions(${AETHER_LIB} INTERFACE AETHER_GIT_REVISION="${AETHER_GIT_REVISION}")
+target_compile_definitions(${AETHER_LIB} INTERFACE AETHER_VERSION_STRING="${AETHER_VERSION}" AETHER_GIT_REVISION="${AETHER_GIT_REVISION}")
 ###########################
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
