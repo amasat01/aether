@@ -1,4 +1,4 @@
-API reference — memory
+Memory
 ========================
 
 The owning and non-owning containers: ``Chunk`` is raw owned bytes,

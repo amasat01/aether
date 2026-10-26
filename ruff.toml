@@ -1,0 +1,8 @@
+target-version = "py39"
+# notebooks are executed by nbcheck, not linted
+extend-exclude = ["*.ipynb"]
+
+[lint]
+select = ["F"]
+# kernel bodies assign named values the tracer reads; deleting them changes the kernel
+ignore = ["F841"]

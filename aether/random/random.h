@@ -23,13 +23,13 @@
  *    device arm too);
  *  - nothing here includes `<curand_kernel.h>`, so the module compiles with
  *    no CUDA toolchain at all;
- *  - the device stream still matches the real cuRAND device stream bit-for-
- *    bit for `randomBits64` and `uniform01`, because the implementation
- *    reproduces cuRAND's key/counter layout and output ordering exactly
- *    (certified by `tools/random/curand_host_probe.cpp` against libcurand).
- *    The normal stream is tolerance-matched against that reference, by
- *    design: Box-Muller here goes through `aether::math::{log,sqrt,sincos}`
- *    rather than cuRAND's `sincospi`/`__sincosf`.
+ *  - each `(seed, global, counter)` owns one Philox block (cuRAND's block at
+ *    word offset `4 * counter`), so `randomBits64` is cuRAND's word pair
+ *    there and neighbouring counters share no word. `uniform01` is the
+ *    open interval `(0,1)`; the Philox words are certified against libcurand
+ *    by `tools/random/curand_host_probe.cpp`. The normal stream is
+ *    Box-Muller through `aether::math::{log,sqrt,sincos}` rather than
+ *    cuRAND's `sincospi`/`__sincosf`, so it is tolerance-matched, by design.
  *
  * Every draw is a pure function of `(seed, global sample id, sub-counter)`:
  * no per-sample state array, no atomic counter, no persisted generator state.

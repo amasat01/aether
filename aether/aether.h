@@ -162,6 +162,9 @@
  * `dtype/Fetch.h` also joins `aether/device.h` (see that header's own
  * docstring).
  *
+ * `aether::linalg` (`linalg/linalg.h` — per-lane LU, Cholesky and Jacobi
+ * `eigh` on small static matrices, host and device).
+ *
  * `View::component<I>` (`view/View.h` — a writable rank-1 strided view
  * of static component `I` of a rank-2 view); `aether::simd::select`
  * (`backend/cpu/simd/Packet.h` — the lane-wise blend); and
@@ -202,6 +205,7 @@
 #include "aether/expr/nodes/Structural.h"
 #include "aether/interop/Buffer.h"
 #include "aether/interop/DLPack.h"
+#include "aether/linalg/linalg.h"
 #include "aether/math/math.h"
 #include "aether/random/random.h"
 #include "aether/residency/Partition.h"

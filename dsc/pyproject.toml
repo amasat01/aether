@@ -2,8 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["setuptools>=61", "setuptools-scm>=8"]
-build-backend = "setuptools.build_meta"
+requires = [
+    "scikit-build-core>=0.10",
+    "setuptools-scm>=8",
+    # nanobind 3 needs Python 3.10+; 3.9 (no free-threaded build) uses nanobind 2
+    "nanobind>=3.1,<4; python_version>='3.10'",
+    "nanobind>=2.2,<3; python_version<'3.10'",
+]
+build-backend = "_build_backend"
+backend-path = ["."]
 
 [project]
 # DIST name vs IMPORT name (mirrors raptor's "raptor-core" / hawk's
@@ -13,7 +20,7 @@ name = "aether-dsc"
 # aether-dsc ships a SEALED payload of its own checkout and takes aether's version
 # from the same git tag (setuptools-scm, root = ".."), so the two cannot skew.
 dynamic = ["version"]
-description = "aether-dsc — the sealed AETHER header payload: opaque, digest-named, no readable source in the wheel"
+description = "aether-dsc: the sealed AETHER header payload (aether_dsc) and CPU/GPU arrays for Python (aether)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
@@ -22,17 +29,12 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
 ]
-# Zero runtime dependencies: unpacking the sealed blob uses only the
-# standard library (zlib/tarfile/hashlib). `seal()`'s own NVRTC-clean gate
-# needs cuda-bindings, but only when actually SEALING (`python -m aether_dsc.seal`,
-# a dev-time-only operation) — never at import time or at payload()/serve()
-# time, which is every ordinary consumer's path.
+# Zero runtime dependencies: the sealed payload unpacks with the standard library, and the arrays
+# (`aether`) need neither numpy nor cuda-bindings. `seal()`'s own NVRTC-clean gate needs cuda-bindings, but
+# only when actually SEALING (`python -m aether_dsc.seal`, a dev-time operation).
 dependencies = []
 
 [project.optional-dependencies]
-# seal() itself needs no extra package (cuda-bindings is a dev/CI-time
-# tool this repo's own env already carries); this dependency is what a
-# ratifying gate imports to run `python -m aether_dsc.seal`.
 test = ["pytest"]
 
 [project.urls]
@@ -43,28 +45,21 @@ Repository = "https://github.com/amasat01/aether"
 [tool.setuptools_scm]
 root = ".."
 
-[tool.setuptools]
-# aether/LICENSE + aether/NOTICE, copied here (setuptools' license-files glob
-# must resolve inside this project directory -- it cannot reach "../LICENSE"
-# the way `readme`'s single-file path can): the wheel/sdist must carry what
-# `license = { text = "Apache-2.0" }` above claims, not just assert it.
-license-files = ["LICENSE", "NOTICE"]
+# One wheel per platform and Python: `aether_dsc/` (the sealed payload, data) and `aether/` (the arrays,
+# `aether._core` plus, on linux x86_64, the two CUDA plugins). The extension is plain C++; no nvcc.
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["aether_dsc"]   # `aether/` (python files, _core, plugins) is installed by CMakeLists.txt
+wheel.exclude = ["**/__pycache__/**"]
+cmake.version = ">=3.20"
+# The sealed blob is git-ignored dev-time output but must ship, and so must the header copy.
+sdist.exclude = ["**/*.so", "build", "**/__pycache__", "*.egg-info"]
+sdist.include = ["aether_dsc/_payload/**", "_sdist_include/**"]
+wheel.license-files = ["LICENSE", "NOTICE"]
 
-[tool.setuptools.packages.find]
-include = ["aether_dsc*"]
-
-[tool.setuptools.package-data]
-# The sealed blob(s) ship AS DATA, not source — `python -m aether_dsc.seal`
-# writes them under `aether_dsc/_payload/`. `payload_headers.txt` is the
-# NVRTC-clean manifest: it used to live under the aether repo's own
-# `tools/`, reached via a `sys.path` mutation `aether_dsc._seal_impl` no
-# longer makes — the manifest ships INSIDE the package instead, so a wheel
-# install (no `tools/` beside it) can still seal/verify against it.
-# `payload_headers_host.txt` is its host-only sibling (never NVRTC-clean,
-# never gated by the NVRTC-clean check) — shipped for the same reason: a
-# wheel-only install can still re-seal against a real aether checkout.
-aether_dsc = ["py.typed", "_payload/*.bin", "payload_headers.txt",
-             "payload_headers_host.txt"]
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.setuptools_scm"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -75,7 +70,3 @@ markers = [
 # install — this repo root, prepended to sys.path before collection (mirrors
 # raptor's/hawk's own pyproject convention).
 pythonpath = ["."]
-
-[tool.ruff]
-line-length = 88
-target-version = "py39"

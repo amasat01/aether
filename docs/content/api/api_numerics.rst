@@ -1,4 +1,4 @@
-API reference — numerics
+Numerics
 ===========================
 
 Device-legal scalar math, the working-type indirection expression trees

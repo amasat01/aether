@@ -1,10 +1,15 @@
 Tutorials
 =========
 
-Five notebooks, read in order. Each compiles and runs a small C++ program
+Five notebooks in two topics, each read in order. Each compiles and runs a small C++ program
 through the same ``run_cpp()`` helper: ``g++ -std=c++23
 -DAETHER_CPP_MODE=1`` by default (no GPU or CUDA toolchain needed), and
 ``nvcc`` on the SAME source when a GPU is visible.
+
+Arrays and memory
+-----------------
+
+One array on two machines, and expressions that do not allocate.
 
 1 — :doc:`One array, two machines <tutorials/01_one_array_two_machines>`
    Build an ``aether::Array``, read/write it through a ``View``, and move
@@ -14,6 +19,11 @@ through the same ``run_cpp()`` helper: ``g++ -std=c++23
 2 — :doc:`Expressions without temporaries <tutorials/02_expressions_without_temporaries>`
    Compose ``+``/``-``/``*`` into one expression tree, and see what it
    costs not to.
+
+Device code
+-----------
+
+Math that runs on both machines, your own device function, and a new function added to aether.
 
 3 — :doc:`Device math <tutorials/03_device_math>`
    Call ``aether::math::erf``, ``sincos``, ``hypot`` the same way from

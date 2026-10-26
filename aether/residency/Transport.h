@@ -24,6 +24,8 @@
  */
 
 #include <concepts>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "aether/chunk/Chunk.h"
@@ -122,6 +124,67 @@ public:
         aether::copy(dst, src);
     }
 
+    /**
+     * @brief ONE ordered copy for every pair, on `stream`: `dst` is written after the work already queued
+     *        on `stream`, and every device-side leg is enqueued on it.
+     *
+     * CUDA<->CUDA and CUDA<->CUDAHost go direct (`aether::copyAsync`, no event recorded). A PAGEABLE host
+     * chunk on one side is STAGED through this transport's pinned bounce buffer: host->device copies the
+     * bytes into the bounce chunk now and enqueues the upload (the call returns before it ran; the next
+     * staged call waits for it before reusing the bounce chunk), device->host downloads into the bounce
+     * chunk and BLOCKS on `stream` before copying into `dst`. The staged routes allocate and synchronize:
+     * not capture-legal; the direct ones are. A pair with no CUDA device chunk is host-only: blocks on
+     * `stream`, then `aether::copy`. `AETHER_CPP_MODE`: every pair is host-only, `stream` ignored.
+     *
+     * @throws aether::Error on a size mismatch or a failing CUDA call.
+     */
+    void copyOrdered(Chunk& dst, const Chunk& src, Stream stream)
+    {
+#ifdef AETHER_HAS_CUDA
+        if (dst.size() != src.size()) {
+            err::fail("copyOrdered", detail::pathLabel(src, dst), src.size(),
+                "size mismatch: dst.size()=" + std::to_string(dst.size()));
+        }
+        const bool srcCuda = src.device().type() == kDLCUDA, dstCuda = dst.device().type() == kDLCUDA;
+        if (!srcCuda && !dstCuda) {
+            err::checkCuda(cudaStreamSynchronize(stream), "copyOrdered", detail::pathLabel(src, dst), src.size());
+            aether::copy(dst, src);
+            return;
+        }
+        const bool srcPageable = src.device().type() == kDLCPU, dstPageable = dst.device().type() == kDLCPU;
+        if (!srcPageable && !dstPageable) {
+            aether::copyAsync(dst, src, stream);
+            return;
+        }
+        const std::size_t bytes = src.size();
+        if (bytes == 0)
+            return;
+        const std::string where = detail::pathLabel(src, dst);
+        if (bounceBusy_) {
+            err::checkCuda(cudaStreamSynchronize(bounceStream_), "copyOrdered", where, bytes);
+            bounceBusy_ = false;
+        }
+        {
+            detail::RelaxedCapture relaxed;
+            bounce_.ensure(bytes);
+        }
+        Chunk stage = Chunk::borrow(bounce_.chunk().data(), bytes, bounce_.chunk().device());
+        if (srcPageable) {
+            std::memcpy(stage.data(), src.data(), bytes);
+            aether::copyAsync(dst, stage, stream);
+            bounceBusy_   = true;
+            bounceStream_ = stream;
+        } else {
+            aether::copyAsync(stage, src, stream);
+            err::checkCuda(cudaStreamSynchronize(stream), "copyOrdered", where, bytes);
+            std::memcpy(dst.data(), stage.data(), bytes);
+        }
+#else
+        (void)stream;
+        aether::copy(dst, src);
+#endif
+    }
+
 #ifdef AETHER_HAS_CUDA
     /**
      * @brief Async copy on `stream` (CUDA builds only): same STAGED-vs-
@@ -201,6 +264,9 @@ private:
 
     BounceBuffer bounce_;
     std::vector<cudaEvent_t> events_;
+    /** @brief `true` while the last staged upload may still be reading `bounce_` (on `bounceStream_`). */
+    bool bounceBusy_      = false;
+    Stream bounceStream_  = nullptr;
 #endif
     bool forceStaging_ = false;
 };

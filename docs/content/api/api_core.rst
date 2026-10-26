@@ -1,4 +1,4 @@
-API reference — core
+Core types
 =====================
 
 Scalar/device vocabulary and the shape machinery everything else indexes

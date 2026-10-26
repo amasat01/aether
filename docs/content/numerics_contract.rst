@@ -36,6 +36,30 @@ Division by a scalar
 rounded division per component: ``x * (1/s)`` can differ from ``x / s`` in the
 last bit, and a tiny ``s`` whose reciprocal overflows gives ``inf * x``.
 
+Per-lane linear algebra
+-----------------------
+
+``aether::linalg`` (``aether/linalg/``) factors and solves one small matrix
+per lane. A factorisation is not a fold of an item, so it states its own
+order:
+
+* Every sum runs in ascending index. LU reduces each entry by one finished
+  dot product (``acc += a_ik*a_kj``, then ``a_ij -= acc``), the order LAPACK's
+  ``getrf`` kernels use; the triangular solves and Cholesky subtract term by
+  term (``s -= l*x``).
+* A division by a diagonal entry is a correctly rounded division, except LU's
+  multipliers, which multiply by one reciprocal of the pivot.
+* Nothing is compensated inside a factorisation.
+* The pivot is the first entry of largest magnitude in its column; a zero
+  pivot is the singular test. Cholesky tests ``!(d > 0)``.
+* ``cholesky`` and ``eigh`` read ``0.5*a_ij + 0.5*a_ji``, so a symmetric
+  input is read unchanged. ``eigh`` runs a fixed number of Jacobi sweeps
+  (``eighSweeps``) in fixed order.
+
+The same bits follow wherever the translation unit does not contract
+products, as above; on the device the values agree to a few ulps and ``info``
+agrees exactly.
+
 Other fixed spellings
 ---------------------
 

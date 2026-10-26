@@ -55,8 +55,7 @@ const std::uint64_t kSeeds[] = {
 // (sample addressing is 32-bit, so 0xFFFFFFFF is a real, reachable id).
 const std::uint32_t kGlobals[] = { 0u, 1u, 3u, 17u, 1000u, 65535u, 4294967295u };
 
-// Sub-counters: 0..3 walk the intra-quad output positions, 4/7 straddle the
-// first quad boundary, 9/64/1000 exercise the low-counter bump.
+// Sub-counters: each owns its own block; the list spans small values and 1000.
 const std::uint64_t kCounters[] = { 0ull, 1ull, 2ull, 3ull, 4ull, 7ull, 9ull, 64ull, 1000ull };
 
 // Keying-chain coverage: stream ids and substream selectors.
@@ -99,9 +98,10 @@ int main()
     std::printf(" * visible without regenerating anything.\n");
     std::printf(" *\n");
     std::printf(" * PROVENANCE. Every `bits64`/`uniformDoubleBits`/`uniformFloatBits` value is\n");
-    std::printf(" * cuRAND's Philox4x32-10 stream at `(seed, subsequence = global, offset =\n");
-    std::printf(" * counter)` — certified BIT-EXACT against a linked `libcurand` host\n");
-    std::printf(" * generator by `tools/random/curand_host_probe.cpp`. The `normalDouble`/\n");
+    std::printf(" * the Philox4x32-10 block owned by `(seed, global, counter)` (cuRAND's\n");
+    std::printf(" * block at `(subsequence = global, word offset = 4 * counter)`; words certified\n");
+    std::printf(" * against a linked `libcurand` by `tools/random/curand_host_probe.cpp`).\n");
+    std::printf(" * `uniform*` values are aether's open-interval (0,1) conversion. The `normalDouble`/\n");
     std::printf(" * `normalFloat` values are aether's Box-Muller over `aether::math`, which is\n");
     std::printf(" * TIER-TOL against cuRAND's `sincospi`/`__sincosf` — the tests compare them\n");
     std::printf(" * within a documented tolerance, never exactly.\n");
@@ -113,8 +113,8 @@ int main()
     std::printf("/** @brief One golden draw of the three core primitives at `(seed, global, counter)`. */\n");
     std::printf("struct CoreRow {\n");
     std::printf("    std::uint64_t seed;      ///< generator seed fed straight to the backend\n");
-    std::printf("    std::uint32_t global;    ///< global sample id (Philox subsequence)\n");
-    std::printf("    std::uint64_t counter;   ///< sub-counter (Philox offset)\n");
+    std::printf("    std::uint32_t global;    ///< global sample id (Philox counter words 2-3)\n");
+    std::printf("    std::uint64_t counter;   ///< sub-counter (Philox counter words 0-1)\n");
     std::printf("    std::uint64_t bits64;            ///< randomBits64 — EXACT\n");
     std::printf("    std::uint64_t uniformDoubleBits; ///< uniform01<double> bit pattern — EXACT\n");
     std::printf("    std::uint32_t uniformFloatBits;  ///< uniform01<float>  bit pattern — EXACT\n");

@@ -137,8 +137,6 @@ content/examples
 :hidden:
 
 content/concepts
-content/numerics_contract
-content/advanced
 ```
 
 ```{toctree}
@@ -148,6 +146,7 @@ content/advanced
 
 content/api/api_reference
 content/python/aether_dsc
+content/python/arrays
 content/glossary
 ```
 

@@ -12,9 +12,14 @@
  * No host/device split: aether runs the same `detail::PhiloxStream` code on
  * both arms (`detail/Philox.h`), so a seed names one stream everywhere. The
  * invariant is unconditional cross-mode bit-identity of the bits and
- * uniform streams; and because the shared code reproduces cuRAND's
- * positioning exactly, the device stream matches the real cuRAND device
- * stream bit-for-bit.
+ * uniform streams.
+ *
+ * Positioning: every `(seed, global, counter)` owns ONE Philox block,
+ * `philox4x32_10({lo(counter), hi(counter), lo(global), hi(global)}, seed)` —
+ * cuRAND's block at (subsequence = global, word offset = 4 * counter). A draw
+ * reads only the words of its own block, so neighbouring counters share no
+ * word and the draws are independent. The raw block words equal cuRAND's;
+ * the uniform conversion is aether's own open-interval one (below).
  *
  * No SoftDouble arm: aether carries no SoftDouble/Banded scalar backend in
  * this module yet — that is not yet implemented.
@@ -24,15 +29,12 @@
  * `INDEX_FREE_DOMAIN` are fixed constants, never re-derived.
  *
  * Transforms:
- *  - `uniform01<double>` = `(w + 1) * 2^-32` from one Philox word — cuRAND's
- *    `_curand_uniform_double(unsigned int)`, which is what
- *    `curand_uniform_double(curandStatePhilox4_32_10_t*)` calls. (cuRAND's
- *    higher-quality two-word `_curand_uniform_double_hq` conversion is used
- *    here too — inside the double Box-Muller below, which reaches it
- *    through `curand_normal_double`.) Range `(0, 1]`, so `log(u)` is always
- *    safe and no host-only lower-endpoint guard is needed on either arm.
- *  - `uniform01<float>` = `w * 2^-32f + 2^-33f` — cuRAND's `_curand_uniform`.
- *    Also `(0, 1]`.
+ *  - `uniform01<double>` = `w * 2^-32 + 2^-33` from one Philox word, in the
+ *    OPEN interval `(0,1)` (never 0, never 1; exact).
+ *  - `uniform01<float>` = `(2*(w>>9) + 1) * 2^-24`, also `(0,1)` (exact; the
+ *    cuRAND float form rounds to 1.0f for the top words).
+ *    Open on both sides, so `log(u)` and `log(1-u)` are always finite.
+ *    (The double Box-Muller below uses cuRAND's two-word `_curand_uniform_double_hq`.)
  *  - `standardNormal` mirrors cuRAND's Box-Muller structure
  *    (`sqrt(-2 log u)`, angle from the second uniform) but routes the
  *    transcendentals through `aether::math::{log,sqrt,sincos}` — the FP64
@@ -116,16 +118,35 @@ inline constexpr float kTwoPow32InvFloat = 2.3283064e-10f;
  *         at compile time exactly as the macro is. */
 inline constexpr float kTwoPow32Inv2PiFloat = 2.3283064e-10f * 6.2831855f;
 
-/** @brief cuRAND's `_curand_uniform_double(unsigned int)`: `(w+1) * 2^-32`, in `(0,1]`. */
+/** @brief One word to a double in the OPEN interval `(0,1)`: `w * 2^-32 + 2^-33`
+ *         (exact; spans `[2^-33, 1 - 2^-33]`, so neither 0 nor 1 is reachable). */
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() double uniformDoubleFromWord(std::uint32_t w)
 {
-    return w * kTwoPow32InvDouble + kTwoPow32InvDouble;
+    return w * kTwoPow32InvDouble + (kTwoPow32InvDouble / 2.0);
 }
 
-/** @brief cuRAND's `_curand_uniform(unsigned int)`: `w * 2^-32 + 2^-33`, in `(0,1]`. */
+/** @brief One word to a float in the OPEN interval `(0,1)`: `(2*(w>>9) + 1) * 2^-24`
+ *         (23 bits of resolution, exact; spans `[2^-24, 1 - 2^-24]`). The plain
+ *         `w * 2^-32 + 2^-33` of cuRAND rounds to exactly 1.0f for the top words. */
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() float uniformFloatFromWord(std::uint32_t w)
 {
-    return w * kTwoPow32InvFloat + (kTwoPow32InvFloat / 2.0f);
+    return static_cast<float>(((w >> 9) << 1) | 1u) * 5.9604645e-8f; // 2^-24
+}
+
+/**
+ * @brief The Philox block owned by `(seed, global, counter)`.
+ *
+ * Counter words `{lo(counter), hi(counter), lo(global), hi(global)}` under key
+ * `seed` — the block cuRAND reaches at `(subsequence = global, offset = 4 *
+ * counter)`. Every draw reads only the four words of its own block, so
+ * neighbouring counters never share a word.
+ */
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() Uint4 philoxBlock(std::uint64_t seed, offset_t global, std::uint64_t counter)
+{
+    const std::uint64_t g = static_cast<std::uint64_t>(global);
+    return philox4x32_10(Uint4{ static_cast<std::uint32_t>(counter), static_cast<std::uint32_t>(counter >> 32),
+                             static_cast<std::uint32_t>(g), static_cast<std::uint32_t>(g >> 32) },
+        static_cast<std::uint32_t>(seed), static_cast<std::uint32_t>(seed >> 32));
 }
 
 /** @brief cuRAND's `_curand_uniform_double_hq(x, y)`: 53 bits spliced from two
@@ -148,29 +169,28 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() double uniformDoubleHq(std::uint32_t x,
  */
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() std::uint64_t randomBits64(std::uint64_t seed, offset_t global, std::uint64_t counter)
 {
-    PhiloxStream st(seed, static_cast<std::uint64_t>(global), counter);
-    const std::uint32_t lo = st.next();
-    const std::uint32_t hi = st.next();
+    const Uint4 x          = philoxBlock(seed, global, counter);
+    const std::uint32_t lo = x.x;
+    const std::uint32_t hi = x.y;
     return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
 }
 
 /**
- * @brief Draw a uniform value in `(0, 1]`.
+ * @brief Draw a uniform value in the open interval `(0, 1)`.
  *
- * Pure function of `(seed, global, counter)`: the Philox stream is positioned
- * at `(seed, subsequence = global, offset = counter)` and ONE word is
- * consumed — identical on both arms.
+ * Pure function of `(seed, global, counter)`: word 0 of the `(seed, global,
+ * counter)` Philox block — identical on both arms.
  */
 template<typename Real>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real uniform01(std::uint64_t seed, offset_t global, std::uint64_t counter)
 {
     static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
         "aether::random: Real must be float or double (SoftDouble support is not yet implemented)");
-    PhiloxStream st(seed, static_cast<std::uint64_t>(global), counter);
+    const Uint4 x = philoxBlock(seed, global, counter);
     if constexpr (std::is_same_v<Real, double>) {
-        return uniformDoubleFromWord(st.next());
+        return uniformDoubleFromWord(x.x);
     } else {
-        return uniformFloatFromWord(st.next());
+        return uniformFloatFromWord(x.x);
     }
 }
 
@@ -179,7 +199,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real uniform01(std::uint64_t seed, offs
  *
  * Pure function of `(seed, global, counter)`. Box-Muller, mirroring cuRAND's
  * `_curand_box_muller_double` / `_curand_box_muller` structure and word
- * consumption (four words for `double` via one `next4()`, two words for
+ * consumption (all four words of the block for `double`, two for
  * `float`), with the transcendentals routed through `aether::math` — see the
  * file docstring for why, and for the TIER-TOL consequence. Only the FIRST
  * of Box-Muller's two normals is returned; cuRAND caches the second in its
@@ -191,9 +211,8 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real standardNormal(std::uint64_t seed,
 {
     static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
         "aether::random: Real must be float or double (SoftDouble support is not yet implemented)");
-    PhiloxStream st(seed, static_cast<std::uint64_t>(global), counter);
+    const Uint4 x = philoxBlock(seed, global, counter);
     if constexpr (std::is_same_v<Real, double>) {
-        const Uint4 x = st.next4();
         const double u = uniformDoubleHq(x.x, x.y);
         // cuRAND's angle variable lives in (0,2) and is fed to sincospi();
         // `v * kPiDouble` is the same angle for a sincos() that takes radians.
@@ -205,9 +224,8 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real standardNormal(std::uint64_t seed,
         math::sincos(v * kPiDouble, &sinv, &cosv);
         return s * sinv;
     } else {
-        const std::uint32_t xw = st.next();
-        const std::uint32_t yw = st.next();
-        const float u = xw * kTwoPow32InvFloat + (kTwoPow32InvFloat / 2.0f);
+        const std::uint32_t yw = x.y;
+        const float u = uniformFloatFromWord(x.x);
         const float v = yw * kTwoPow32Inv2PiFloat + (kTwoPow32Inv2PiFloat / 2.0f);
         const float s = math::sqrt(-2.0f * math::log(u));
         float sinv = 0.0f;

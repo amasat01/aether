@@ -88,8 +88,13 @@ AETHER_DEVICEHOST() constexpr working_type_t<elem_t<A>> squaredNormW(const A& a)
     return reduce<aether::detail::SumOp<W>, aether::detail::SquareOp<W>, W>(a);
 }
 
-/** @brief `out (=|+=|-=) m * v`, rows ascending, `acc = m(r,0)*v(0); acc = m(r,k)*v(k) + acc`. */
-template<AssignOp Op, class Out, class M, class V>
+/**
+ * @brief `out (=|+=|-=) m * v`, rows ascending, `acc = m(r,0)*v(0); acc = m(r,k)*v(k) + acc`.
+ *        `Registers` picks the contraction of the first two terms the static form takes
+ *        for its operands: over views `m(r,1)*v(1) + m(r,0)*v(0)`, over `Item`s (register
+ *        caches) `m(r,1)*v(1) + acc` with `acc = m(r,0)*v(0)` rounded first, as `matMat` does.
+ */
+template<AssignOp Op, bool Registers = false, class Out, class M, class V>
 AETHER_DEVICEHOST() constexpr void matVec(Out&& out, const M& m, const V& v)
 {
     static_assert(ext_t<M>::Rank == 2 && ext_t<V>::Rank == 1, "rt::matVec: m must be rank-2, v rank-1");
@@ -102,7 +107,9 @@ AETHER_DEVICEHOST() constexpr void matVec(Out&& out, const M& m, const V& v)
     AETHER_NO_UNROLL()
     for (std::size_t r = 0; r < Rows; ++r) {
         W acc = toWorkingValue(at(m, r, std::size_t{ 0 })) * toWorkingValue(at(v, std::size_t{ 0 }));
-        if constexpr (K > 1) {
+        if constexpr (K > 1 && Registers) {
+            acc = toWorkingValue(at(m, r, std::size_t{ 1 })) * toWorkingValue(at(v, std::size_t{ 1 })) + acc;
+        } else if constexpr (K > 1) {
             acc = toWorkingValue(at(m, r, std::size_t{ 1 })) * toWorkingValue(at(v, std::size_t{ 1 }))
                 + toWorkingValue(at(m, r, std::size_t{ 0 })) * toWorkingValue(at(v, std::size_t{ 0 }));
         }
@@ -150,6 +157,69 @@ AETHER_DEVICEHOST() constexpr void matMat(Out&& out, const L& l, const R& r)
 }
 
 } // namespace detail
+
+/**
+ * @brief A rank-2 operand read transposed: `at(r, c)` is `x.at(c, r)`. Holds `x` by
+ *        reference, so it lives within the statement that names it.
+ */
+template<class X>
+class Transposed {
+public:
+    using element_type    = typename std::remove_cvref_t<X>::element_type;
+    using element_extents = extents<detail::ext_t<X>::static_extent(1), detail::ext_t<X>::static_extent(0)>;
+
+    AETHER_DEVICEHOST() constexpr explicit Transposed(const X& x)
+        : x_(x)
+    {
+        static_assert(detail::ext_t<X>::Rank == 2, "rt::transposed: only rank-2 operands are supported");
+    }
+
+    AETHER_DEVICEHOST() constexpr decltype(auto) at(std::size_t r, std::size_t c) const
+    {
+        return detail::at(x_, c, r);
+    }
+
+private:
+    const X& x_;
+};
+
+/** @brief `x` read as its transpose, for an operand of `matVec`/`matMat`: the twin of `x.transpose()`. */
+template<class X>
+AETHER_DEVICEHOST() constexpr Transposed<X> transposed(const X& x)
+{
+    return Transposed<X>(x);
+}
+
+/**
+ * @brief `out = x` element by element, rolled: twin of `view[i] = x` for an operand `x` (an `Item`)
+ *        of the same extents. The static assignment unrolls one load and one store per element,
+ *        and a wide `x` keeps a register for each; the loop keeps one.
+ */
+template<class Out, class X>
+AETHER_DEVICEHOST() constexpr void store(Out&& out, const X& x)
+{
+    static_assert(detail::ext_t<X>::Rank == 1 || detail::ext_t<X>::Rank == 2, "rt::store: only rank-1 and rank-2 operands are supported");
+    static_assert(std::is_same_v<detail::ext_t<Out>, detail::ext_t<X>>, "rt::store: operand element_extents must match");
+    static_assert(std::is_same_v<detail::elem_t<Out>, detail::elem_t<X>>, "rt::store: operand element_type must match");
+    using detail::at;
+    if constexpr (detail::ext_t<X>::Rank == 1) {
+        constexpr std::size_t N = detail::ext_t<X>::static_extent(0);
+        AETHER_NO_UNROLL()
+        for (std::size_t k = 0; k < N; ++k) {
+            at(out, k) = at(x, k);
+        }
+    } else {
+        constexpr std::size_t R = detail::ext_t<X>::static_extent(0);
+        constexpr std::size_t C = detail::ext_t<X>::static_extent(1);
+        AETHER_NO_UNROLL()
+        for (std::size_t i = 0; i < R; ++i) {
+            AETHER_NO_UNROLL()
+            for (std::size_t j = 0; j < C; ++j) {
+                at(out, i, j) = at(x, i, j);
+            }
+        }
+    }
+}
 
 /** @brief Dot product of two rank-1 operands; twin of `Expression::dot`. */
 template<class A, class B>
@@ -279,6 +349,12 @@ template<class Out, class M, class V>
 AETHER_DEVICEHOST() constexpr void matVec(Out&& out, const M& m, const V& v)
 {
     detail::matVec<detail::AssignOp::Set>(out, m, v);
+}
+/** @brief `out = m * v` of register operands; twin of `view[i] = m.get() * v.get()` (the contraction differs, see `detail::matVec`). */
+template<class Out, class M, class V>
+AETHER_DEVICEHOST() constexpr void matVecItems(Out&& out, const M& m, const V& v)
+{
+    detail::matVec<detail::AssignOp::Set, true>(out, m, v);
 }
 /** @brief `out += m * v`. */
 template<class Out, class M, class V>

@@ -1,8 +1,8 @@
 Python API — ``aether_dsc``
 =============================
 
-aether itself ships no Python package. ``aether_dsc`` (``dsc/``, distributed
-as ``aether-dsc``) is the one Python-facing surface in this repository: a
+The ``aether-dsc`` wheel (``dsc/``) carries two Python packages. ``aether`` is the
+CPU/GPU arrays (:doc:`arrays`). ``aether_dsc``, described here, is a
 sealed, digest-named copy of aether's own headers (plus the few ``rtc/``
 shims and eagle's plugin layout header) for consumers that compile device
 kernels with NVRTC, or any file-only host compiler, without reading or
@@ -15,3 +15,14 @@ payload.
    :recursive:
 
    aether_dsc
+
+The names the package exports at the top level:
+
+.. autosummary::
+   :toctree: generated
+
+   aether_dsc.Payload
+   aether_dsc.version
+   aether_dsc.PAYLOAD_DIR
+
+``aether_dsc.seal`` is both a function and a submodule; its page is the submodule's.

@@ -22,8 +22,11 @@
 // CPU-SIMD packet-equivalence checks, a free-function one-liner check, plus
 // the two `Golden_*` device-vs-host bit-identity tests.
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include <gtest/gtest.h>
 
@@ -287,7 +290,16 @@ TEST_F(RandomTest, PacketEquivalence_MultivariateNormal)
     auto pv = p.hostView();
     aether::packetEval(pv, rng.multivariateNormal<double, 3>(mean, L));
 
-    expectIdentical(s.hostView(), p.hostView(), pn);
+    // `mean + L z` is a sum of products that the scalar and packet instantiations may contract
+    // into FMAs differently (-march=x86-64-v3, the sanitize build's -O1): a few ulp, not the same bits.
+    const auto sv = s.hostView();
+    const auto qv = p.hostView();
+    for (std::size_t k = 0; k < pn; ++k)
+        for (int d = 0; d < 3; ++d) {
+            const double a = comp(sv, k, d), b = comp(qv, k, d);
+            const double scale = std::max({ std::abs(a), std::abs(b), 8.0 });
+            ASSERT_LE(std::abs(a - b), 4.0 * std::numeric_limits<double>::epsilon() * scale) << "k=" << k << " d=" << d;
+        }
 }
 
 TEST_F(RandomTest, FreeFunctions)

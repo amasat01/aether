@@ -1,0 +1,4 @@
+{
+  global: aether_memory_v1;
+  local: *;
+};

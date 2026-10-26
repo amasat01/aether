@@ -1,4 +1,4 @@
-API reference — backend and interop
+Backend and interop
 ======================================
 
 The device-residency surface: CPU SIMD packets, the CUDA multi-lane
