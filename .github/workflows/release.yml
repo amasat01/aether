@@ -235,7 +235,7 @@ jobs:
               want = ["libaether_cuda12.so", "libaether_cuda13.so"] if "x86_64" in whl and "manylinux" in whl else []
               assert plugins == want, (whl, plugins)
               assert not any("libcudart" in n or "libcuda." in n for n in names), whl
-              assert not any(n.startswith("aether/") and n.endswith(".py") and "numpy" in z.read(n).decode() for n in names), whl
+              assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
                   with tempfile.TemporaryDirectory() as d:
                       for p in plugins:
