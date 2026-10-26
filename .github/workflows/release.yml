@@ -201,7 +201,8 @@ jobs:
       # doxygen (breathe's XML source) + sphinx -W --keep-going: 0 warnings.
       - run: make -C docs strict
       - name: every public name has a page
-        run: python tools/docs_inventory_check.py docs/_build/html/objects.inv aether_dsc --allow seal
+        # aether_dsc from the source tree, as docs/conf.py reads it
+        run: PYTHONPATH=dsc python tools/docs_inventory_check.py docs/_build/html/objects.inv aether_dsc --allow seal
 
       - uses: actions/upload-artifact@v7
         with:
