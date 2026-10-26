@@ -28,11 +28,19 @@ __all__ = ["main"]
 
 def main(argv: list[str] | None = None) -> int:
     """Seal this checkout, gate it on the NVRTC-clean check, write the
-    blob. Prints the outcome; exit 0 on a written blob, 1 on a gate
+    blob. ``--layout-header PATH`` names eagle's ``plugin/gref_layout.h``
+    when eagle is not the sibling checkout. Prints the outcome; exit 0 on a written blob, 1 on a gate
     failure or a missing input file."""
-    gate = "--no-gate" not in (sys.argv[1:] if argv is None else argv)
+    args = list(sys.argv[1:] if argv is None else argv)
+    gate = "--no-gate" not in args
+    layout_header = None
+    for i, a in enumerate(args):
+        if a == "--layout-header" and i + 1 < len(args):
+            layout_header = args[i + 1]
+        elif a.startswith("--layout-header="):
+            layout_header = a.split("=", 1)[1]
     try:
-        p = seal()
+        p = seal(layout_header=layout_header)
     except FileNotFoundError as exc:
         print(f"RED: {exc}", file=sys.stderr)
         return 1
