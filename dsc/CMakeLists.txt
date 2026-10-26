@@ -81,7 +81,11 @@ function(_aether_plugin major)
   target_compile_definitions(aether_cuda${major} PRIVATE AETHER_HAS_CUDA=1)
   target_compile_options(aether_cuda${major} PRIVATE -fno-gnu-unique)
   target_link_libraries(aether_cuda${major} PRIVATE "${_cudart_${major}}" ${CMAKE_DL_LIBS} rt pthread)
-  target_link_options(aether_cuda${major} PRIVATE -Wl,--exclude-libs,ALL -Wl,--no-undefined -Wl,--as-needed)
+  # The version script keeps the export list to the seam alone: hidden visibility does not cover the libstdc++
+  # template symbols some toolchains (manylinux gcc-toolset) leave in the plugin.
+  target_link_options(aether_cuda${major} PRIVATE -Wl,--exclude-libs,ALL -Wl,--no-undefined -Wl,--as-needed
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/plugin.map")
+  set_property(TARGET aether_cuda${major} APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin.map")
   install(TARGETS aether_cuda${major} LIBRARY DESTINATION aether)
   message(STATUS "aether: CUDA ${major} plugin from ${_cudart_${major}}")
 endfunction()
