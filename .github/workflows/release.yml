@@ -280,7 +280,7 @@ jobs:
         run: |
           python -m venv venv
           . venv/bin/activate
-          pip install --quiet --no-index --find-links ../dist aether-dsc   # the wheels are at the repo root; this step runs in dsc/
+          pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" aether-dsc
           pip check
           pip install --quiet pytest
           python - <<'PY'
@@ -310,10 +310,11 @@ jobs:
           rm venv/lib/python*/site-packages/aether/_core*.so
           python -c "import aether_dsc; aether_dsc.payload()"
           python -c "import aether" 2>&1 | grep -q "_core is not built" 
-          pip install --quiet --no-index --find-links ../dist --force-reinstall aether-dsc
-          cd tests
+          pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" --force-reinstall aether-dsc
+          cd "$GITHUB_WORKSPACE/dsc/tests"
           python -m pytest -q -c /dev/null --rootdir . test_arrays.py test_ft_payload.py -p no:cacheprovider
-        working-directory: dsc
+        # outside the checkout: from dsc/ the source folder dsc/aether (no _core) would shadow the installed wheel
+        working-directory: ${{ runner.temp }}
 
   # the sdist builds `_core` from source on a machine with a C++ compiler and no CUDA toolkit
   sdist-install:
