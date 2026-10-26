@@ -1,4 +1,4 @@
-API reference — expression templates
+Expression templates
 =======================================
 
 Every leaf and composite node in aether derives from ``Expression``; the

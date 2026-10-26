@@ -102,7 +102,7 @@ protected:
 };
 
 /**
- * @brief `lo + (hi - lo) * U(0,1]` per component.
+ * @brief `lo + (hi - lo) * U(0,1)` per component.
  *
  * `LoE`/`HiE` are each either `Real` (broadcast scalar) or `Item<Real,VD>`.
  * The salt decorrelates this distribution's stream from every other one
@@ -305,7 +305,7 @@ private:
 /**
  * @brief `-log(u) / lambda` per component.
  *
- * No lower-endpoint guard is needed: `uniform01` is `(0,1]` on both arms, so
+ * No lower-endpoint guard is needed: `uniform01` is `(0,1)` on both arms, so
  * `u` is always strictly positive and `log(u)` is always safe.
  */
 template<class Real, std::size_t VD, class LambdaE>

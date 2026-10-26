@@ -202,7 +202,7 @@ def build_trig_spec() -> str:
     # `uniform`): in_domain interior, the (2^16,2^24] degraded band, and a
     # short stretch past the 2^24 guard (rejected).
     lines.append("# bulk in-domain SAMPLE, both signs")
-    lines.append(f"uniform -65536.0 65536.0 500")
+    lines.append("uniform -65536.0 65536.0 500")
     lines.append("# bulk DEGRADED band (past the default-margin edge, short of the guard), both signs")
     lines.append(f"uniform 65536.0 {K_BAND_TRIG_SAT_MAX} 150")
     lines.append(f"uniform -{K_BAND_TRIG_SAT_MAX} -65536.0 150")

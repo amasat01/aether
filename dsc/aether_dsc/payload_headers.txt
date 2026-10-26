@@ -30,6 +30,7 @@ aether/expr/Assign.h
 aether/expr/Expression.h
 aether/expr/Operations.h
 aether/expr/Reduce.h
+aether/expr/Rt.h
 aether/expr/nodes/Arithmetic.h
 aether/expr/nodes/Constant.h
 aether/expr/nodes/Elementwise.h
@@ -44,6 +45,12 @@ aether/index/SampleIndex.h
 aether/layout/Extents.h
 aether/layout/Layout.h
 aether/layout/detail/Carray.h
+aether/linalg/Cholesky.h
+aether/linalg/Eigh.h
+aether/linalg/Lu.h
+aether/linalg/Triangular.h
+aether/linalg/detail/Common.h
+aether/linalg/linalg.h
 aether/macros.h
 aether/math/detail/BandedFwd.h
 aether/math/detail/BoundedTrig.h

@@ -66,6 +66,11 @@ jobs:
       # gates that same header as strict C99 (compiled with $CC)
       - run: tests/c_core/check_c99.sh
 
+      # pyflakes rules over every .py (ruleset in ruff.toml)
+      - run: |
+          python3 -m pip install --user --only-binary=:all: ruff==0.15.18
+          python3 -m ruff check
+
       # pins the generator on shapes beyond the corpus (only test_c_core.py: the sibling dsc tests need the sealed payload and raptor)
       - run: python3 -m pip install --user pytest && PYTHONPATH=dsc python3 -m pytest dsc/tests/test_c_core.py -q
 

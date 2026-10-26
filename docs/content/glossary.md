@@ -16,6 +16,11 @@ Chunk
   out of scope, or wraps memory you already own without freeing it. See
   {doc}`memory_ownership`.
 
+Array (Python)
+  The device array of `import aether`: one typed buffer on one CUDA device, shared
+  through DLPack. Host arrays are plain numpy. Not the C++ `aether::Array`. See
+  {doc}`python/arrays`.
+
 View
   A lightweight, non-owning handle over memory, indexed like a small tensor
   as `v(component, sample)`. Building one copies nothing. See

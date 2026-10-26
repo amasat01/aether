@@ -171,8 +171,10 @@ int main()
             }
 
             // B -- uniform floats, cuRAND's `_curand_uniform`.
-            const float f = aether::random::detail::uniform01<float>(
-                seed, static_cast<aether::offset_t>(sub), off);
+            // (cuRAND's own float conversion of aether's word; aether's uniform01<float>
+            // is the open-interval form and is no longer cuRAND's, so it is not compared.)
+            const float f = word(seed, sub, off) * aether::random::detail::kTwoPow32InvFloat
+                + (aether::random::detail::kTwoPow32InvFloat / 2.0f);
             ++compared;
             if (f != refFloats[k]) {
                 std::snprintf(mine, sizeof(mine), "%.9g", static_cast<double>(f));
@@ -182,8 +184,15 @@ int main()
 
             // D -- aether's one-word `uniform01<double>` conversion applied at
             // the position whose word cuRAND itself produced (see the header).
-            const double d = aether::random::detail::uniform01<double>(
-                seed, static_cast<aether::offset_t>(sub), off);
+            const double d = aether::random::detail::uniformDoubleFromWord(word(seed, sub, off));
+            // Block placement: counter c owns cuRAND's block at word offset 4*c.
+            if (off == 0) {
+                ++compared;
+                if (aether::random::detail::philoxBlock(seed, static_cast<aether::offset_t>(sub), k % 7u).x
+                    != word(seed, sub, 4u * (k % 7u))) {
+                    reportFirst("philoxBlock", seed, sub, 4u * (k % 7u), "block", "word");
+                }
+            }
             const double dRef = aether::random::detail::uniformDoubleFromWord(refWords[k]);
             ++compared;
             if (d != dRef) {

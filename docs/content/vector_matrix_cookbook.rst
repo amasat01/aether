@@ -93,6 +93,6 @@ basis vectors, checked directly against ``.cross()``:
 .. aether-example-end::
 
 Here ``x``, ``y`` and ``z`` are ``Vec3d`` values standing for the unit
-basis vectors ``(1,0,0)``, ``(0,1,0)`` and ``(0,0,1)``. :doc:`quaternions`
+basis vectors ``(1,0,0)``, ``(0,1,0)`` and ``(0,0,1)``. :doc:`examples/quaternion_rotation`
 picks up where this page leaves off, for rotating a vector rather than
 combining two of them.

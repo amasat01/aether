@@ -279,6 +279,255 @@ void checkMatMat()
     checkAllModes<Array<double, R, K>, Array<double, K, C>, Array<double, R, C>>("matMat", "matMatAdd", "matMatSub");
 }
 
+// ---------------------------------------------------------------------------
+// Products of register operands (what hawk's static text multiplies): `s[i] = l.get() * x.get()`
+// against `matVecItems` / `matMat` over the planes' proxies.
+// ---------------------------------------------------------------------------
+
+template<class VL, class VR, class VO>
+struct ItemProductBody {
+    VL l;
+    VR x;
+    VO s, r;
+    AETHER_DEVICEHOST() void operator()(const SampleIndex& i)
+    {
+        constexpr bool vec = VR::element_extents::Rank == 1;
+        const auto il      = l[i].get();
+        const auto ix      = x[i].get();
+        s[i]               = il * ix;
+        if constexpr (vec) aether::rt::matVecItems(r[i], l[i], x[i]);
+        else aether::rt::matMat(r[i], l[i], x[i]);
+    }
+};
+
+template<std::size_t R, std::size_t K, std::size_t C>
+void checkItemProduct()
+{
+    // `C == 0`: a matrix-vector product
+    using AL = Array<double, R, K>;
+    using AX = std::conditional_t<C == 0, Array<double, K>, Array<double, K, C>>;
+    using AO = std::conditional_t<C == 0, Array<double, R>, Array<double, R, C>>;
+    AL l(kSamples);
+    AX x(kSamples);
+    AO s(kSamples), r(kSamples);
+    fill(l, 83);
+    fill(x, 89);
+    runSamples(ItemProductBody<typename AL::ViewT, typename AX::ViewT, typename AO::ViewT>{
+        l.deviceView(), x.deviceView(), s.deviceView(), r.deviceView() });
+    expectSameBits(s, r, "register-operand product");
+}
+
+// ---------------------------------------------------------------------------
+// `rt::store(out[i], item)` against `out[i] = item`.
+// ---------------------------------------------------------------------------
+
+template<class VX, class VO>
+struct StoreBody {
+    VX x;
+    VO s, r;
+    AETHER_DEVICEHOST() void operator()(const SampleIndex& i)
+    {
+        const auto ix = x[i].get();
+        s[i]          = ix;
+        aether::rt::store(r[i], ix);
+    }
+};
+
+template<std::size_t... Es>
+void checkStore()
+{
+    using A = Array<double, Es...>;
+    A x(kSamples), s(kSamples), r(kSamples);
+    fill(x, 97);
+    runSamples(StoreBody<typename A::ViewT, typename A::ViewT>{ x.deviceView(), s.deviceView(), r.deviceView() });
+    expectSameBits(s, r, "store");
+}
+
+// ---------------------------------------------------------------------------
+// `rt::transposed(l[i])` as an operand against the static `l.get().transpose() * x`.
+// ---------------------------------------------------------------------------
+
+template<class VL, class VR, class VO>
+struct TransposedBody {
+    VL l;
+    VR x;
+    VO s, r;
+    AETHER_DEVICEHOST() void operator()(const SampleIndex& i)
+    {
+        constexpr bool vec = VR::element_extents::Rank == 1;
+        const auto il      = l[i].get();
+        const auto ix      = x[i].get();
+        s[i]               = il.transpose() * ix;
+        if constexpr (vec) aether::rt::matVecItems(r[i], aether::rt::transposed(l[i]), x[i]);
+        else aether::rt::matMat(r[i], aether::rt::transposed(l[i]), x[i]);
+    }
+};
+
+template<std::size_t K, std::size_t R, std::size_t C>
+void checkTransposed()
+{
+    // l is K x R, so `l^T x` is R x C (a matrix) or R (a vector, C == 0)
+    using AL = Array<double, K, R>;
+    using AX = std::conditional_t<C == 0, Array<double, K>, Array<double, K, C>>;
+    using AO = std::conditional_t<C == 0, Array<double, R>, Array<double, R, C>>;
+    AL l(kSamples);
+    AX x(kSamples);
+    AO s(kSamples), r(kSamples);
+    fill(l, 53);
+    fill(x, 59);
+    runSamples(TransposedBody<typename AL::ViewT, typename AX::ViewT, typename AO::ViewT>{
+        l.deviceView(), x.deviceView(), s.deviceView(), r.deviceView() });
+    expectSameBits(s, r, "transposed operand");
+}
+
+// ---------------------------------------------------------------------------
+// aether::linalg through plane proxies and Items against the pointer entry
+// points: the same bits, on the special-value corpus (a failed factorisation
+// zero-fills, NaN and inf flow through).
+// ---------------------------------------------------------------------------
+
+namespace la = aether::linalg;
+
+// A matrix per sample for `cholesky`: G G^T + N I (random samples), the corpus for the rest.
+template<std::size_t N>
+void fillSpd(Array<double, N, N>& a, unsigned seed)
+{
+    std::mt19937 rng(seed);
+    auto v = a.hostView();
+    for (std::size_t g = 0; g < kSamples; ++g) {
+        double gm[N][N];
+        for (std::size_t r = 0; r < N; ++r)
+            for (std::size_t c = 0; c < N; ++c)
+                gm[r][c] = value(rng, g, r * N + c, N * N);
+        for (std::size_t r = 0; r < N; ++r)
+            for (std::size_t c = 0; c < N; ++c) {
+                double acc = r == c ? double(N) : 0.0;
+                for (std::size_t k = 0; k < N; ++k)
+                    acc += gm[r][k] * gm[c][k];
+                elemRef(v, r * N + c, g) = g < 6 ? gm[r][c] : acc;
+            }
+    }
+    a.upload();
+}
+
+// Per sample: lu (N*N), solve K=3 (3N), solveT (N), inverse (N*N), chol (N*N), choSolve K=2 (2N),
+// triLower (N), triUpperT K=3 (3N), w (N), v (N*N), info (3).
+template<std::size_t N>
+inline constexpr std::size_t kLinalgWidth = 4 * N * N + 11 * N + 3;
+
+template<std::size_t N, class VM, class VB, class VO>
+struct LinalgBody {
+    VM a, s;
+    VB b;
+    VO p, q; // the pointer path, the proxy and Item path
+
+    template<class Out, class T, std::size_t... Es>
+    AETHER_DEVICEHOST() static void put(Out& o, std::size_t& at, std::size_t g, const aether::Item<T, Es...>& x)
+    {
+        constexpr std::size_t n = (Es * ... * std::size_t{ 1 });
+        for (std::size_t k = 0; k < n; ++k)
+            o(at + k, g) = x.data()[k];
+        at += n;
+    }
+
+    // `Pointers`: operands as `.data()` of Items; else the planes' proxies and Items.
+    template<bool Pointers, class I, class P>
+    AETHER_DEVICEHOST() static decltype(auto) pick(const I& item, const P& proxy)
+    {
+        if constexpr (Pointers) return item.data();
+        else return proxy;
+    }
+    template<bool Pointers, class I>
+    AETHER_DEVICEHOST() static decltype(auto) target(I& item)
+    {
+        if constexpr (Pointers) return item.data();
+        else return (item);
+    }
+
+    template<bool Pointers, class Out>
+    AETHER_DEVICEHOST() static void run(const SampleIndex& i, const VM& a, const VM& s, const VB& b, Out& o)
+    {
+        const std::size_t g = i.global();
+        std::size_t at      = 0;
+        const auto ia = a[i].get(), is = s[i].get();
+        const auto ib = b[i].get();
+        const auto pa = a[i];
+        const auto ps = s[i];
+        const auto pb = b[i];
+        la::Lu<double, N> f;
+        la::lu<N>(f, pick<Pointers>(ia, pa));
+        aether::Item<double, N, N> luA;
+        for (std::size_t k = 0; k < N * N; ++k)
+            luA.data()[k] = f.a[k];
+        aether::Item<double, N, 3> x3, t3, rhs3;
+        aether::Item<double, N> xt, th;
+        aether::Item<double, N, N> inv, lc;
+        aether::Item<double, N, 2> c2;
+        // the right-hand sides: N x 3 from the matrix's first columns, the vector plane, N x 2 from the SPD one
+        
+        for (std::size_t r = 0; r < N; ++r)
+            for (std::size_t c = 0; c < 3; ++c)
+                rhs3.data()[r * 3 + c] = ia.data()[r * N + (c % N)];
+        la::luSolve<3>(f, rhs3.data(), target<Pointers>(x3));
+        la::luSolveT<1>(f, pick<Pointers>(ib, pb), target<Pointers>(xt));
+        la::luInverse(f, target<Pointers>(inv));
+        la::Cholesky<double, N> ch;
+        la::cholesky<N>(ch, pick<Pointers>(is, ps));
+        la::choleskyFactor(ch, target<Pointers>(lc));
+        aether::Item<double, N, 2> rhs2;
+        for (std::size_t r = 0; r < N; ++r)
+            for (std::size_t c = 0; c < 2; ++c)
+                rhs2.data()[r * 2 + c] = is.data()[r * N + (c % N)];
+        la::choSolve<2>(ch, rhs2.data(), target<Pointers>(c2));
+        la::triLower<N, 1>(ch.l, pick<Pointers>(ib, pb), target<Pointers>(th));
+        la::triUpperT<N, 3>(ch.l, rhs3.data(), target<Pointers>(t3));
+        la::Eigh<double, N> e;
+        la::eigh<N>(e, pick<Pointers>(ia, pa));
+        aether::Item<double, N> w;
+        aether::Item<double, N, N> v;
+        for (std::size_t k = 0; k < N; ++k)
+            w.data()[k] = e.w[k];
+        for (std::size_t k = 0; k < N * N; ++k)
+            v.data()[k] = e.v[k];
+        aether::Item<double, 3> info;
+        info.data()[0] = f.info;
+        info.data()[1] = ch.info;
+        info.data()[2] = e.info;
+        put(o, at, g, luA);
+        put(o, at, g, x3);
+        put(o, at, g, xt);
+        put(o, at, g, inv);
+        put(o, at, g, lc);
+        put(o, at, g, c2);
+        put(o, at, g, th);
+        put(o, at, g, t3);
+        put(o, at, g, w);
+        put(o, at, g, v);
+        put(o, at, g, info);
+    }
+
+    AETHER_DEVICEHOST() void operator()(const SampleIndex& i)
+    {
+        run<true>(i, a, s, b, p);
+        run<false>(i, a, s, b, q);
+    }
+};
+
+template<std::size_t N>
+void checkLinalgProxies()
+{
+    using Body = LinalgBody<N, typename Array<double, N, N>::ViewT, typename Array<double, N>::ViewT,
+        typename Array<double, kLinalgWidth<N>>::ViewT>;
+    Array<double, N, N> a(kSamples), s(kSamples);
+    Array<double, N> b(kSamples);
+    Array<double, kLinalgWidth<N>> p(kSamples), q(kSamples);
+    fill(a, 61 + N);
+    fillSpd(s, 67 + N);
+    fill(b, 71 + N);
+    runSamples(Body{ a.deviceView(), s.deviceView(), b.deviceView(), p.deviceView(), q.deviceView() });
+    expectSameBits(p, q, "linalg proxies");
+}
+
 } // namespace
 
 TEST(ExprRt, ReductionsN1) { checkAllReductions<1>(); }
@@ -316,6 +565,41 @@ TEST(ExprRt, MatMat)
     checkMatMat<3, 7, 2>();
     checkMatMat<16, 16, 3>();
     checkMatMat<2, 144, 2>(); // long K; a 16x144 left operand costs minutes of nvcc per mode
+}
+
+TEST(ExprRt, Store)
+{
+    checkStore<1>();
+    checkStore<20>();
+    checkStore<1, 1>();
+    checkStore<6, 7>();
+    checkStore<24, 24>();
+}
+
+TEST(ExprRt, RegisterOperandProducts)
+{
+    checkItemProduct<3, 3, 0>();
+    checkItemProduct<6, 4, 0>();
+    checkItemProduct<5, 18, 0>(); // a fold past the static threshold
+    checkItemProduct<3, 3, 3>();
+    checkItemProduct<4, 5, 6>();
+    checkItemProduct<6, 18, 6>();
+}
+
+TEST(ExprRt, LinalgProxiesMatchPointers)
+{
+    checkLinalgProxies<2>();
+    checkLinalgProxies<5>();
+}
+
+TEST(ExprRt, TransposedOperand)
+{
+    checkTransposed<3, 3, 0>();
+    checkTransposed<4, 6, 0>();
+    checkTransposed<18, 5, 0>(); // a fold past the static threshold
+    checkTransposed<3, 3, 3>();
+    checkTransposed<5, 4, 6>();
+    checkTransposed<18, 6, 6>();
 }
 
 } // namespace expr_rt
