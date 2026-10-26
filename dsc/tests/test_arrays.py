@@ -98,7 +98,10 @@ def test_added_dtypes_allocate_fill_and_roundtrip_through_dlpack(name, value, ra
 
 
 def test_added_dtype_buffer_protocol():
-    assert memoryview(aether.full(3, 1.5, "float16")).tolist() == [1.5] * 3
+    half = memoryview(aether.full(3, 1.5, "float16"))
+    assert (half.format, half.itemsize, half.nbytes) == ("e", 2, 6)
+    if sys.version_info >= (3, 12):             # memoryview reads format "e" from 3.12 on
+        assert half.tolist() == [1.5] * 3
     assert memoryview(aether.full(3, -4, "int8")).tolist() == [-4] * 3
     with pytest.raises(BufferError):
         memoryview(aether.zeros(2, "bfloat16"))
