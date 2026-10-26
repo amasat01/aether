@@ -282,7 +282,7 @@ jobs:
           . venv/bin/activate
           pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" aether-dsc
           pip check
-          pip install --quiet pytest
+          pip install --quiet pytest "raptor-core>=0.7,<0.8"   # test-only: test_ft_payload uses raptor's free-threading rows
           python - <<'PY'
           import aether_dsc, aether
           p = aether_dsc.payload()
