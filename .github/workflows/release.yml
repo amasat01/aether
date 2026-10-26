@@ -111,6 +111,8 @@ jobs:
         run: |
           python -m venv venv
           . venv/bin/activate
+          # the one runtime dependency comes from PyPI; the package itself only from dist
+          pip install --quiet --prefer-binary numpy
           pip install --quiet --no-index --find-links dist aether-dsc
           pip check
           python - <<'PY'
