@@ -79,7 +79,11 @@ function(_aether_plugin major)
   target_include_directories(aether_cuda${major} PRIVATE src "${_root}")
   target_include_directories(aether_cuda${major} SYSTEM PRIVATE "${_cudainc_${major}}")
   target_compile_definitions(aether_cuda${major} PRIVATE AETHER_HAS_CUDA=1)
-  target_compile_options(aether_cuda${major} PRIVATE -fno-gnu-unique)
+  # GCC marks some inline statics STB_GNU_UNIQUE, which keeps a dlopen'ed plugin from unloading; clang emits no
+  # such symbols and does not know the flag
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(aether_cuda${major} PRIVATE -fno-gnu-unique)
+  endif()
   target_link_libraries(aether_cuda${major} PRIVATE "${_cudart_${major}}" ${CMAKE_DL_LIBS} rt pthread)
   # The version script keeps the export list to the seam alone: hidden visibility does not cover the libstdc++
   # template symbols some toolchains (manylinux gcc-toolset) leave in the plugin.
