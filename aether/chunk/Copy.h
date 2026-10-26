@@ -31,11 +31,6 @@
 
 namespace aether {
 
-#ifdef AETHER_HAS_CUDA
-/** @brief CUDA stream alias — declared only when this build has a CUDA backend. */
-using Stream = cudaStream_t;
-#endif
-
 namespace detail {
 
 enum class CopyPath {

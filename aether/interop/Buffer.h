@@ -348,6 +348,8 @@ inline std::string dtypeName(const DType& dt)
             return "int" + std::to_string(bits);
         case kDLUInt:
             return "uint" + std::to_string(bits);
+        case kDLBfloat:
+            return "bfloat" + std::to_string(bits);
         case kDLBool:
             return "bool";
         default:

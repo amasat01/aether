@@ -1,6 +1,7 @@
 # aether-dsc
 
-The sealed AETHER header payload.
+The sealed AETHER header payload (`aether_dsc`) and CPU/GPU arrays for Python (`aether`), in one wheel.
+No runtime dependencies. `python -m aether_dsc.seal` takes `--layout-header PATH` when eagle is not the sibling checkout.
 
 ## What the payload is
 

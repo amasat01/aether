@@ -14,3 +14,7 @@ docs/content/python/generated/
 
 # sealed at build time by `python -m aether_dsc.seal` (see dsc/README.md)
 dsc/aether_dsc/_payload/
+
+# in-tree dev build of the arrays binding and its plugins
+dsc/aether/*.so
+dsc/_sdist_include/

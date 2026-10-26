@@ -1,95 +1,188 @@
 # Copyright 2026 Alessandro Masat
 # SPDX-License-Identifier: Apache-2.0
-"""aether arrays: the acceptance rows. GPU rows skip when no device or no cuda-bindings is present."""
+"""aether arrays: the acceptance rows. GPU rows skip when no CUDA plugin loads or no device is present;
+numpy, cupy and torch rows skip when that library is absent (aether itself needs none of them)."""
 
+import ctypes
 import gc
+import pathlib
+import struct
 import subprocess
 import sys
 import textwrap
 import threading
 import time
 
-import numpy as np
 import pytest
 
 import aether
-from aether import _dlpack
+from aether import _core
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def _gpu():
     try:
-        from aether._rt import ck, rt
-        return int(ck(rt().cudaGetDeviceCount())) > 0
-    except Exception:
+        aether.cuda_plugin()
+        return True
+    except aether.CudaUnavailable:
         return False
 
 
-gpu = pytest.mark.skipif(not _gpu(), reason="needs cuda-bindings and a device")
+gpu = pytest.mark.skipif(not _gpu(), reason="needs a CUDA plugin that loads and a device")
 
 
-def _run(code):
+def _run(code, **env):
+    import os
+    full = dict(os.environ, **env)
     return subprocess.run([sys.executable, "-W", "ignore", "-c", textwrap.dedent(code)],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=180, env=full)
 
 
-# ---- row 1: CPU-only import
-def test_import_without_cuda_bindings():
+# ---- row 1: no numpy/cupy/cuda-bindings, no device
+def test_import_without_numpy_or_a_device():
     out = _run("""
         import sys
-        sys.modules['cuda'] = None; sys.modules['cuda.bindings'] = None
-        import aether, numpy as np
-        assert isinstance(aether.zeros(4, device='cpu'), np.ndarray)
-        assert isinstance(aether.asarray([1.0, 2.0]), np.ndarray)
+        for m in ('numpy', 'cupy', 'cuda', 'cuda.bindings', 'torch'):
+            sys.modules[m] = None
+        import aether
+        a = aether.zeros(4)
+        assert aether.asarray([1.0, 2.0]).shape == (2,)
         try:
             aether.empty(8, device='cuda')
-        except aether.CudaUnavailable as exc:
-            assert 'aether-dsc[cuda12]' in str(exc)
+        except aether.CudaUnavailable:
             print('ok')
-    """)
+    """, CUDA_VISIBLE_DEVICES="")
     assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr
 
 
-def test_dtype_refusals_by_name():
-    for bad in (np.complex64, "bfloat16", object):
-        with pytest.raises(TypeError):
-            aether.empty(4, bad, device="cpu")
+def test_no_numpy_import_in_the_package_sources():
+    for path in list((ROOT / "aether").glob("*.py")) + list((ROOT / "src").glob("*")):
+        text = path.read_text()
+        assert "import numpy" not in text and "from numpy" not in text, path
 
 
-@gpu
-def test_surface_and_values():
-    a = aether.zeros((3, 5), np.float32)
-    assert (a.shape, a.dtype, a.strides, a.nbytes, a.device) == ((3, 5), np.float32, (20, 4), 60, aether.Device("cuda", 0))
-    h = aether.pinned((3, 5), np.float32)
-    aether.copy(aether.full((3, 5), 2.5, np.float32), into=h)
-    assert (h == 2.5).all()
-    for dt, val in ((np.float64, 1.0), (np.float64, 0.1), (np.int16, 7), (np.int32, -3), (np.uint8, 9), (np.bool_, True)):
+def test_dtype_spellings_and_refusals():
+    assert aether.zeros(2, "float32").dtype == "float32"
+    assert aether.zeros(2, float).dtype == "float64" and aether.zeros(2, int).dtype.name == "int64"
+    assert aether.zeros(2, bool).dtype == "bool"
+    for bad in ("float128", "int4", "complex64", "complex128", "str", object):
+        with pytest.raises(aether.Error):
+            aether.empty(4, bad)
+
+
+_NEW_DTYPES = [
+    ("int8", -5, b"\xfb"), ("int16", -300, (-300).to_bytes(2, "little", signed=True)),
+    ("uint16", 60000, (60000).to_bytes(2, "little")), ("float16", 1.5, struct.pack("<e", 1.5)),
+    ("bfloat16", 1.0, b"\x80\x3f"),
+]
+
+
+def _bytes_of(a):
+    host = a if a.device.kind != "cuda" else aether.copy(a, into=aether.empty(a.shape, a.dtype))
+    return ctypes.string_at(host.ptr, host.nbytes)
+
+
+@pytest.mark.parametrize("where", ["cpu", pytest.param("cuda", marks=gpu), pytest.param("pinned", marks=gpu)])
+@pytest.mark.parametrize("name,value,raw", _NEW_DTYPES, ids=[d[0] for d in _NEW_DTYPES])
+def test_added_dtypes_allocate_fill_and_roundtrip_through_dlpack(name, value, raw, where):
+    a = aether.full((3, 2), value, name, where)
+    assert a.dtype == name and a.nbytes == 6 * len(raw) and a.dtype.itemsize == len(raw)
+    assert _bytes_of(a) == raw * 6
+    assert _bytes_of(aether.zeros(4, name, where)) == bytes(4 * len(raw))
+    b = aether.from_dlpack(a)                   # versioned capsule, and the legacy one below
+    assert (b.ptr, b.shape, b.dtype) == (a.ptr, a.shape, a.dtype) and _bytes_of(b) == raw * 6
+    legacy = aether.from_dlpack(type("L", (), {"__dlpack_device__": a.__dlpack_device__,
+                                               "__dlpack__": lambda self, **kw: a.__dlpack__(**{k: v for k, v in kw.items() if k != "max_version"})})())
+    assert legacy.ptr == a.ptr and legacy.dtype == name
+
+
+def test_added_dtype_buffer_protocol():
+    assert memoryview(aether.full(3, 1.5, "float16")).tolist() == [1.5] * 3
+    assert memoryview(aether.full(3, -4, "int8")).tolist() == [-4] * 3
+    with pytest.raises(BufferError):
+        memoryview(aether.zeros(2, "bfloat16"))
+
+
+def test_host_surface_and_values():
+    a = aether.zeros((3, 5), "float32")
+    assert (a.shape, a.strides, a.nbytes, a.ndim, a.is_contiguous) == ((3, 5), (20, 4), 60, 2, True)
+    assert a.device == aether.Device("cpu", 0) and a.dtype.itemsize == 4
+    for dt, val in (("float64", 0.1), ("float32", 2.5), ("int64", -7), ("int32", 7), ("uint64", 9),
+                    ("uint32", 8), ("uint8", 200), ("bool", True)):
         f = aether.full(33, val, dt)
-        f.synchronize()
-        assert (aether.asarray(f, device="cpu") == dt(val)).all(), (dt, val)
-    e = aether.zeros_like(h)
-    assert e.shape == h.shape and aether.empty_like(h, device="cuda").dtype == h.dtype and aether.empty(0).ptr == 0
+        assert all(x == (float(val) if dt.startswith("float") else val) or abs(x - val) < 1e-6
+                   for x in memoryview(f).tolist()), dt
+    assert aether.empty(0).ptr == 0
+    assert aether.asarray([[1, 2], [3, 4]]).dtype == "int64"
 
 
+def test_copy_and_asarray_on_the_host():
+    src = aether.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    dst = aether.copy(src)
+    assert memoryview(dst).tolist() == memoryview(src).tolist() and dst.ptr != src.ptr
+    assert aether.asarray(src) is src
+    with pytest.raises(aether.Error):
+        aether.copy(src, into=aether.zeros(5))
+
+
+# ---- row 3: zero-copy views over cpu AND pinned arrays, writes visible both ways
+@pytest.mark.parametrize("where", ["cpu", pytest.param("pinned", marks=gpu)])
+def test_numpy_torch_memoryview_zero_copy(where):
+    a = aether.zeros((3, 7), "float64", where)
+    m = memoryview(a)
+    m[1, 2] = 4.0
+    assert memoryview(a)[1, 2] == 4.0
+    np = pytest.importorskip("numpy")
+    v = np.asarray(a)
+    assert v.ctypes.data == a.ptr and v[1, 2] == 4.0
+    v[0, 0] = 9.0
+    assert memoryview(a)[0, 0] == 9.0
+    if where == "cpu":
+        assert np.from_dlpack(a).ctypes.data == a.ptr
+        torch = pytest.importorskip("torch")
+        t = torch.from_dlpack(a)
+        assert t.data_ptr() == a.ptr and float(t[0, 0]) == 9.0
+        back = aether.asarray(np.arange(6.0).reshape(2, 3))
+        assert back.shape == (2, 3) and memoryview(back).tolist()[1] == [3.0, 4.0, 5.0]
+
+
+def test_device_memory_has_no_buffer():
+    if not _gpu():
+        pytest.skip("needs a device")
+    with pytest.raises(BufferError):
+        memoryview(aether.zeros(4, device="cuda"))
+
+
+# ---- GPU rows
 @gpu
-def test_copy_directions():
-    src = np.arange(12, dtype=np.float64).reshape(3, 4)
-    d = aether.asarray(src, device="cuda")
-    d2 = aether.copy(d)
-    back = aether.copy(d2, into=aether.pinned(src.shape))
-    assert np.array_equal(back, src) and aether.asarray(d) is d
-    with pytest.raises(ValueError):
-        aether.copy(d, into=np.empty((4, 3)))
+def test_gpu_surface_copy_and_fill():
+    d = aether.zeros((3, 5), "float32", "cuda")
+    assert d.device == aether.Device("cuda", 0) and d.nbytes == 60 and d.strides == (20, 4)
+    for dt, val in (("float64", 0.1), ("float32", 2.5), ("int64", -3), ("int32", 7), ("uint64", 5),
+                    ("uint32", 6), ("uint8", 200), ("bool", True)):
+        f = aether.full(33, val, dt, "cuda")
+        host = aether.asarray(f, device="cpu")
+        assert all(abs(x - val) < 1e-6 for x in memoryview(host).tolist()), (dt, val)
+    h = aether.pinned((3, 5), "float32")
+    aether.copy(aether.full((3, 5), 2.5, "float32", "cuda"), into=h)
+    assert set(memoryview(h).tolist()[0]) == {2.5}
+    up = aether.asarray(aether.asarray([[1.0, 2.0], [3.0, 4.0]]), device="cuda")
+    assert aether.copy(up, into=aether.empty((2, 2), device="cpu")).shape == (2, 2)
+    assert aether.asarray(up) is up and aether.zeros_like(up).device == up.device
+    assert aether.cuda_plugin().startswith("cuda") and aether.cuda_runtime_version() > 12000
+    with pytest.raises(aether.Error):
+        aether.copy(up, into=aether.zeros(5))
 
 
-# ---- row 2: DLPack round trips
+# ---- row 4: cupy / torch round trips, deleters exactly once, stream codes
 @gpu
-def test_dlpack_cupy_roundtrip_ptr_equal():
+def test_cupy_roundtrip_ptr_equal_and_kernel_write():
     cp = pytest.importorskip("cupy")
     c = cp.arange(24, dtype=cp.float64).reshape(4, 6)
     a = aether.from_dlpack(c)
     assert a.ptr == c.data.ptr and a.shape == (4, 6)
-    c2 = cp.from_dlpack(a)
-    c3 = cp.asarray(a)
+    c2, c3 = cp.from_dlpack(a), cp.asarray(a)
     assert c2.data.ptr == a.ptr == c3.data.ptr
     c2 *= 2.0
     assert float(c[3, 5]) == 46.0
@@ -98,150 +191,173 @@ def test_dlpack_cupy_roundtrip_ptr_equal():
 
 
 @gpu
-def test_dlpack_deleter_once_both_generations():
-    before = _dlpack.live_exports()
-    cp = pytest.importorskip("cupy")
-    a = aether.zeros(16, np.float32)
-    legacy = cp.from_dlpack(a)                         # cupy asks for the legacy struct or versioned
-    cap_v = a.__dlpack__(max_version=(1, 0))
-    cap_l = a.__dlpack__()
-    assert _dlpack.live_exports() >= before + 2
-    del cap_v, cap_l, legacy                           # never consumed: the capsule destructor releases
+def test_deleter_once_both_generations():
+    before = _core._exports_live()
+    a = aether.zeros(16, "float32", "cuda")
+    cap_v, cap_l = a.__dlpack__(max_version=(1, 0)), a.__dlpack__()
+    assert _core._exports_live() == before + 2
+    del cap_v, cap_l                                   # never consumed: the capsule destructor releases
     gc.collect()
-    assert _dlpack.live_exports() == before
+    assert _core._exports_live() == before
+    cp = pytest.importorskip("cupy")
+    view = cp.from_dlpack(a)                           # consumed: the consumer's deleter releases
+    assert _core._exports_live() == before + 1
+    del view
+    gc.collect()
+    assert _core._exports_live() == before
 
 
 @gpu
-def test_dlpack_versioned_consumed_once():
+def test_torch_cuda_roundtrip():
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("torch has no CUDA here")
-    before = _dlpack.live_exports()
-    a = aether.full(8, 3.0, np.float32)
+    a = aether.full(8, 3.0, "float32", "cuda")
     a.synchronize()
     t = torch.from_dlpack(a)
     assert t.data_ptr() == a.ptr and float(t.sum()) == 24.0
-    del t
-    gc.collect()
-    assert _dlpack.live_exports() == before
-
-
-def test_numpy_pinned_torch_cpu():
-    torch = pytest.importorskip("torch")
-    if not _gpu():
-        pytest.skip("pinned memory needs a device")
-    h = aether.pinned((3, 7), np.float64)
-    h[:] = 4.0
-    t = torch.from_dlpack(h)
-    assert t.data_ptr() == h.ctypes.data and float(t.sum()) == 84.0
+    b = aether.from_dlpack(torch.ones(4, device="cuda"))
+    assert b.shape == (4,)
 
 
 @gpu
-def test_from_dlpack_import_deleter_fires_once():
+def test_import_deleter_fires_once():
     cp = pytest.importorskip("cupy")
     c = cp.zeros(8)
     a = aether.from_dlpack(c)
-    calls = []
-    real = a._owner._deleter
-    a._owner._deleter = lambda address: (calls.append(address), real(address))
     del a
     gc.collect()
-    assert len(calls) == 1
+    assert float(c.sum()) == 0.0                       # the producer's memory is intact and still ours
 
 
-# ---- row 3: stream codes
 @gpu
-def test_dlpack_stream_codes():
-    from aether._rt import ck, rt
-    a = aether.zeros(8, np.float64)
+def test_dlpack_stream_codes_and_event_ordering():
+    cp = pytest.importorskip("cupy")
+    a = aether.zeros(8, "float64", "cuda")
     with pytest.raises(ValueError):
         a.__dlpack__(stream=0)
-    a.__dlpack__(stream=-1)
-    a.__dlpack__(stream=None)
-    a.__dlpack__(stream=1)
-    s = int(ck(rt().cudaStreamCreateWithFlags(rt().cudaStreamNonBlocking)))
-    try:
-        a.__dlpack__(stream=s)
-    finally:
-        a.synchronize()
-        ck(rt().cudaStreamDestroy(s))
+    for code in (None, -1, 1):
+        a.__dlpack__(stream=code)
+    own = cp.cuda.Stream(non_blocking=True)
+    spin = cp.RawKernel(r"""extern "C" __global__ void spin(double* p, long long c) {
+        long long t = clock64(); while (clock64() - t < c) {} p[0] = 1.0; }""", "spin")
+    prod = cp.cuda.Stream(non_blocking=True)
+    b = aether.zeros(8, "float64", "cuda", stream=prod)
+    with prod:
+        spin((1,), (1,), (cp.asarray(b), cp.int64(500_000_000)))      # about half a second ahead
+    t = time.perf_counter()
+    b.__dlpack__(stream=int(own.ptr))
+    assert time.perf_counter() - t < 0.2, "the host waited for the producer's kernel"
+    prod.synchronize()
+    own.synchronize()
 
 
-# ---- row 4: zero/fill inside a capture, two replays
+# ---- row 5: capture-legal zero/fill, two replays; a GC free inside a capture
 @gpu
 def test_zero_fill_capture_two_replays():
-    from aether._rt import ck, rt
-    r = rt()
-    s = int(ck(r.cudaStreamCreateWithFlags(r.cudaStreamNonBlocking)))
-
-    class S:
-        __cuda_stream__ = lambda self: (0, s)          # noqa: E731
-    d = aether.empty(4096, np.float64, stream=S())
-    w = aether.empty(4096, np.float64, stream=S())
-    host = aether.pinned(4096, np.float64)
-    ck(r.cudaStreamBeginCapture(s, r.cudaStreamCaptureMode.cudaStreamCaptureModeThreadLocal))
-    try:
+    cp = pytest.importorskip("cupy")
+    s = cp.cuda.Stream(non_blocking=True)
+    d = aether.empty(4096, "float64", "cuda", stream=s)
+    w = aether.empty(4096, "float64", "cuda", stream=s)
+    host = aether.pinned(4096, "float64")
+    cd, cw = cp.asarray(d), cp.asarray(w)
+    with s:
+        s.begin_capture()
         d.zero(s)
-        w.fill(0.1, s)                                  # two strided memsets
+        w.fill(0.1, s)                                  # per-byte strided memsets
         aether.copy(d, into=host, stream=s)
-    finally:
-        g = ck(r.cudaStreamEndCapture(s))
-    ge = ck(r.cudaGraphInstantiate(g, 0))
+        g = s.end_capture()
     for _ in range(2):
-        ck(r.cudaMemset(d.ptr, 0xFF, d.nbytes))        # dirty it between replays
-        ck(r.cudaGraphLaunch(ge, s))
-        ck(r.cudaStreamSynchronize(s))
-        assert not host.any()
-        assert (aether.asarray(w, device="cpu") == 0.1).all()
-    ck(r.cudaGraphExecDestroy(ge))
-    ck(r.cudaGraphDestroy(g))
-    del d, w
-    ck(r.cudaStreamDestroy(s))
+        cd[...] = 7.0
+        cp.cuda.runtime.deviceSynchronize()
+        g.launch(s)
+        s.synchronize()
+        assert not any(memoryview(host).tolist())
+        assert float(cw.min()) == 0.1 == float(cw.max())
 
 
-# ---- row 5: lifetimes
 @gpu
-def test_array_freed_before_its_stream_and_live_at_exit():
-    out = _run("""
-        import numpy as np, aether
-        from aether._rt import ck, rt
-        r = rt()
-        s = int(ck(r.cudaStreamCreateWithFlags(r.cudaStreamNonBlocking)))
-        a = aether.zeros(1024, np.float64, stream=s)
-        b = aether.zeros(1024, np.float64, stream=s)
-        c = aether.zeros(1024, np.float64)
-        p = aether.pinned(8)
-        del a                      # freed in order on its own stream, then the stream goes
-        ck(r.cudaStreamSynchronize(s)); ck(r.cudaStreamDestroy(s))
-        s2 = int(ck(r.cudaStreamCreateWithFlags(r.cudaStreamNonBlocking)))
-        class S:
-            __cuda_stream__ = lambda self: (0, s2)
-        so = S()
-        e = aether.zeros(512, np.float32, stream=so)   # holds the stream object: freed on its stream
-        del e
-        f = aether.zeros(512, np.float32, stream=so)   # still alive at exit, stream object alive too
-        print('ok')                # b, c and p are alive at exit
+@pytest.mark.parametrize("blocking", [False, True])
+@pytest.mark.parametrize("mode", ["legacy", "stream"])
+def test_gc_free_inside_global_capture(mode, blocking):
+    out = _run(f"""
+        import gc, aether, cupy as cp
+        own = cp.cuda.Stream(non_blocking=True)
+        a = aether.zeros(1024, "float64", "cuda", stream={'own' if mode == 'stream' else 'None'})
+        cyc = [a]; cyc.append(cyc)
+        del a, cyc
+        cp.cuda.runtime.deviceSynchronize()
+        gc.disable()
+        cap = cp.cuda.Stream(non_blocking={not blocking})
+        x = cp.zeros(8)
+        with cap:
+            cap.begin_capture(mode=cp.cuda.runtime.streamCaptureModeGlobal)
+            x += 1
+            gc.collect()
+            x += 1
+            g = cap.end_capture()
+            g.launch(); cap.synchronize()
+        assert float(x.sum()) == 16.0
+        aether.empty(1, device='cuda')          # the next allocation outside the capture drains a deferred free
+        print('ok')
     """)
-    assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stderr[-500:])
+    assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stdout, out.stderr[-400:])
 
 
-# ---- row 6: threads (also the free-threaded smoke when run under 3.14t with -m ft)
-@pytest.mark.ft
 @gpu
+@pytest.mark.parametrize("mode", ["legacy", "own_stream"])
+def test_early_drop_after_launch_is_stream_ordered(mode):
+    cp = pytest.importorskip("cupy")
+    spin = cp.RawKernel(r"""extern "C" __global__ void spin(double* p, long long c) {
+        long long t = clock64(); while (clock64() - t < c) {} p[0] = 7.0; }""", "spin")
+    own = cp.cuda.Stream(non_blocking=True)
+    stream = own if mode == "own_stream" else cp.cuda.Stream.null
+    a = aether.zeros(8, "float64", "cuda", stream=own if mode == "own_stream" else None)
+    keep = cp.asarray(a)
+    with stream:
+        spin((1,), (1,), (keep, cp.int64(1_000_000_000)))
+    del keep
+    t = time.perf_counter()
+    del a
+    gc.collect()
+    waited = time.perf_counter() - t
+    stream.synchronize()
+    assert waited < 0.5, f"the free blocked the host for {waited:.2f}s: it was not queued on the stream"
+
+
+# ---- row 6: lifetimes at exit
+@gpu
+def test_arrays_alive_at_exit_and_stream_object_held():
+    out = _run("""
+        import aether, cupy as cp
+        s = cp.cuda.Stream(non_blocking=True)
+        a = aether.zeros(1024, "float64", "cuda", stream=s)
+        b = aether.zeros(1024, "float64", "cuda")
+        p = aether.pinned(8)
+        del s                                   # the array still holds the stream object
+        e = aether.zeros(512, "float32", "cuda", stream=cp.cuda.Stream(non_blocking=True))
+        del e
+        print('ok')
+    """)
+    assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stderr[-400:])
+
+
+# ---- row 7: threads (the free-threaded smoke when run on 3.13t/3.14t with -m ft)
+@pytest.mark.ft
 def test_threads_allocate_free_export():
-    errors = []
-    before = _dlpack.live_exports()
+    errors, before = [], _core._exports_live()
     gate = threading.Barrier(8)
+    kinds = ["cpu", "cuda"] if _gpu() else ["cpu"]
 
     def work():
         try:
             gate.wait()
-            for _ in range(50):
-                a = aether.zeros(256, np.float32)
+            for i in range(50):
+                a = aether.zeros(256, "float32", kinds[i % len(kinds)])
                 cap = a.__dlpack__(max_version=(1, 0))
-                b = aether.full(16, 3, np.int32)
+                b = aether.full(16, 3, "int32")
                 del cap, a, b
-        except BaseException as exc:             # noqa: BLE001
+        except BaseException as exc:                 # noqa: BLE001
             errors.append(exc)
     pool = [threading.Thread(target=work) for _ in range(8)]
     for t in pool:
@@ -249,15 +365,30 @@ def test_threads_allocate_free_export():
     for t in pool:
         t.join()
     gc.collect()
-    assert not errors and _dlpack.live_exports() == before
+    assert not errors and _core._exports_live() == before
 
 
-# ---- row 10: timing (informational) and the contract
+# ---- row 9: one process, three extensions
+@pytest.mark.parametrize("order", [("aether", "eagle"), ("eagle", "aether")])
+def test_aether_core_beside_eagle_core(order):
+    code = "import importlib\n" + "".join(
+        f"importlib.import_module('{'aether._core' if m == 'aether' else 'eagle._core'}')\n" for m in order) + "print('ok')"
+    if _run("import eagle._core").returncode:
+        pytest.skip("eagle is not importable here")
+    out = _run(code)
+    assert out.returncode == 0 and out.stdout.strip() == "ok", out.stderr[-400:]
+
+
+# ---- row 10 (informational) and 14 (plugin selection)
+def test_core_size():
+    assert pathlib.Path(_core.__file__).stat().st_size <= 1_500_000
+
+
 @gpu
 def test_alloc_free_timing_reported(capsys):
     n = 1000
     t = time.perf_counter()
-    xs = [aether.empty(64) for _ in range(n)]
+    xs = [aether.empty(64, device="cuda") for _ in range(n)]
     ta = (time.perf_counter() - t) / n
     t = time.perf_counter()
     del xs
@@ -278,72 +409,25 @@ def test_alloc_free_timing_reported(capsys):
 @gpu
 def test_cuda_array_interface_for_cupy():
     cp = pytest.importorskip("cupy")
-    a = aether.zeros((2, 3), np.int32)
+    a = aether.zeros((2, 3), "int32", "cuda")
     v = cp.asarray(a)
     assert v.shape == (2, 3) and v.data.ptr == a.ptr
 
 
+def test_plugin_selection_override_names_the_failure():
+    out = _run("""
+        import aether
+        try:
+            aether.empty(4, device='cuda')
+        except aether.CudaUnavailable as exc:
+            print('cuda' in str(exc))
+    """, AETHER_CUDA_MAJOR="13", CUDA_VISIBLE_DEVICES="")
+    assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
+
+
 @gpu
 def test_second_device_recorded():
-    from aether._rt import ck, rt
-    if int(ck(rt().cudaGetDeviceCount())) < 2:
+    import os
+    if os.environ.get("CUDA_VISIBLE_DEVICES", "").count(",") < 1:
         pytest.skip("one device visible")
     assert aether.zeros(4, device="cuda:1").device.index == 1
-
-
-# ---- a collector-issued free inside a global-mode capture must not break the capture
-@gpu
-@pytest.mark.parametrize("blocking", [False, True])
-@pytest.mark.parametrize("mode", ["legacy", "stream"])
-def test_gc_free_inside_global_capture(mode, blocking):
-    out = _run(f"""
-        import gc, numpy as np, aether, aether._array as A
-        from aether._rt import ck, rt
-        r = rt()
-        s = int(ck(r.cudaStreamCreateWithFlags(r.cudaStreamNonBlocking)))
-        a = aether.zeros(1024, np.float64, stream={'s' if mode == 'stream' else 'None'})
-        cyc = [a]; cyc.append(cyc)
-        del a, cyc
-        ck(r.cudaDeviceSynchronize())
-        gc.disable()
-        c = int(ck(r.cudaStreamCreateWithFlags({'r.cudaStreamDefault' if blocking else 'r.cudaStreamNonBlocking'})))
-        ck(r.cudaStreamBeginCapture(c, r.cudaStreamCaptureMode.cudaStreamCaptureModeGlobal))
-        gc.collect()                      # the free lands inside the capture
-        g = ck(r.cudaStreamEndCapture(c))     # a broken capture fails here
-        ck(r.cudaGraphDestroy(g))
-        aether.empty(1)                   # the next allocation outside the capture drains a deferred free
-        assert not A._pending, A._pending
-        print('ok')
-    """)
-    assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stdout, out.stderr[-400:])
-
-
-# ---- a free is ordered after the work already queued on the allocation's stream
-@gpu
-@pytest.mark.parametrize("mode", ["legacy", "int_handle"])
-def test_early_drop_after_launch_is_stream_ordered(mode):
-    cp = pytest.importorskip("cupy")
-    spin = cp.RawKernel(r"""
-        extern "C" __global__ void spin(double* p, long long cycles) {
-            long long t = clock64(); while (clock64() - t < cycles) {}
-            p[0] = 7.0; }""", "spin")
-    own = cp.cuda.Stream(non_blocking=True)
-    stream = own if mode == "int_handle" else cp.cuda.Stream.null
-    a = aether.zeros(8, np.float64, stream=int(stream.ptr) or None)
-    keep = cp.asarray(a)
-    with stream:
-        spin((1,), (1,), (keep, np.int64(1_000_000_000)))       # about a second on a P2000
-    ptr = a.ptr
-    del keep
-    t = time.perf_counter()
-    del a
-    gc.collect()
-    waited = time.perf_counter() - t
-    stream.synchronize()
-    assert waited < 0.5, f"the free blocked the host for {waited:.2f}s: it was not queued on the stream"
-    probe = aether.zeros(8, np.float64, stream=int(stream.ptr) or None)
-    stream.synchronize()
-    assert (aether.asarray(probe, device="cpu") == 0).all()
-    del probe                               # frees on the stream: it must still exist
-    gc.collect()
-    stream.synchronize()

@@ -17,8 +17,8 @@ Chunk
   {doc}`memory_ownership`.
 
 Array (Python)
-  The device array of `import aether`: one typed buffer on one CUDA device, shared
-  through DLPack. Host arrays are plain numpy. Not the C++ `aether::Array`. See
+  The array of `import aether`: one typed buffer on one device (cpu, pinned or
+  CUDA), shared through the buffer protocol and DLPack. Not the C++ `aether::Array`. See
   {doc}`python/arrays`.
 
 View

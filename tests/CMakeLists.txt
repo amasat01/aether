@@ -270,7 +270,20 @@ target_compile_options(
 )
 endif()
 
-# Sanitizer flags (empty AETHER_SANITIZERS = no-op) go LAST so their -O1 follows the -O3 above;
+# Under sanitizers the two heaviest host TUs (the C-core corpus and the aether::rt rows, whose
+# static folds instantiate very deep Product.h recursions) are built -O1 with line tables only:
+# at -O3 -g each took 20+ minutes and 190-250 MB of objects and stalled the sanitize job; at
+# -O1 -g1 each takes ~4. The sanitizers still check the same code paths (source options come
+# after the target's, so these win over -O3 and -g).
+if (AETHER_CPP_MODE AND AETHER_SANITIZERS)
+  foreach(heavy test_CCore.cpp test_ExprRt.cpp)
+    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${heavy})
+      set_property(SOURCE ${heavy} APPEND PROPERTY COMPILE_OPTIONS "-O1;-g1")
+    endif()
+  endforeach()
+endif()
+
+# Sanitizer flags (empty AETHER_SANITIZERS = no-op) go LAST, after the -O3 above;
 # the host/device canaries are built in the same configure. See sanitize/README.md.
 include(${CMAKE_CURRENT_SOURCE_DIR}/sanitize/sanitizers.cmake)
 aether_apply_sanitizers(aether_tests)

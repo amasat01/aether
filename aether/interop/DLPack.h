@@ -30,9 +30,9 @@
  * add no stream synchronization of their own.
  *
  * REJECTIONS (all a HOST throw of `aether::Error`): unsupported
- * dtype code (only the `dtype_of<T>()`-supported set — `double`/`float`/
- * `bool`/`int64`/`int32`/`uint64`/`uint32`/`uint8`, lanes==1 — passes; `bool`
- * maps to `kDLBool`), rank > `RuntimeRankCap` (6),
+ * dtype code (only float64/32/16, bfloat16, int64/32/16/8, uint64/32/16/8
+ * and bool, lanes==1, passes; `bool` maps to `kDLBool`; complex is refused),
+ * rank > `RuntimeRankCap` (6),
  * `byte_offset != 0`, an unknown/unsupported-for-this-build device type. A
  * REJECTED import still calls the producer's deleter EXACTLY ONCE (the
  * import path takes ownership the moment it is handed the pointer; refusing
@@ -144,13 +144,14 @@ inline bool dtypeIsSupported(DLDataType dt)
         return false;
     switch (dt.code) {
     case kDLFloat:
-        return dt.bits == 64 || dt.bits == 32;
+        return dt.bits == 64 || dt.bits == 32 || dt.bits == 16;
+    case kDLBfloat:
+        return dt.bits == 16;
     case kDLBool:
         return dt.bits == 8;
     case kDLInt:
-        return dt.bits == 64 || dt.bits == 32;
     case kDLUInt:
-        return dt.bits == 64 || dt.bits == 32 || dt.bits == 8;
+        return dt.bits == 64 || dt.bits == 32 || dt.bits == 16 || dt.bits == 8;
     default:
         return false;
     }
