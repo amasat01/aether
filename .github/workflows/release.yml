@@ -157,7 +157,9 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             args+=(--str "manylinux_2_28 $(docker buildx imagetools inspect "quay.io/pypa/manylinux_2_28_$(uname -m)" --format '{{.Manifest.Digest}}' 2>/dev/null || true)")
           fi
-          echo "key=wheels-v1-$PLAT-$(aether/.github/ci_digest.sh "${args[@]}")" >> "$GITHUB_OUTPUT"
+          digest=$(aether/.github/ci_digest.sh "${args[@]}") || exit 1
+          [ -n "$digest" ] || { echo "::error::empty digest"; exit 1; }
+          echo "key=wheels-v2-$PLAT-$digest" >> "$GITHUB_OUTPUT"
       - id: wh
         uses: actions/cache@v6
         with:

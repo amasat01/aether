@@ -126,12 +126,14 @@ jobs:
       # the job succeeds without building.
       - id: memo
         run: |
-          echo "digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)")" >> "$GITHUB_OUTPUT"
+          digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)") || exit 1
+          [ -n "$digest" ] || { echo "::error::empty digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - id: pass
         uses: actions/cache/restore@v6
         with:
           path: ci-pass
-          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
+          key: ci-pass-v2-sanitize-cpp-${{ steps.memo.outputs.digest }}
           lookup-only: true
       - id: plan
         env:
@@ -216,7 +218,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ci-pass
-          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
+          key: ci-pass-v2-sanitize-cpp-${{ steps.memo.outputs.digest }}
 
   # AETHER_HOST_VECTOR_MATH on three GCC majors from the distribution's own
   # packages: the reproducer and the vectorisation check under the default
