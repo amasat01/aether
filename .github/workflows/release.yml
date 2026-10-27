@@ -103,17 +103,22 @@ jobs:
         'nanobind>=3.1,<4; python_version >= "3.10"'
         'nanobind>=2.2,<3; python_version < "3.10"'
       # The headers sit one directory above the package, outside cibuildwheel's copy: bind-mount the checkout.
-      CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro"
-      CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA12_ROOT=/usr/local/cuda-12.9 AETHER_CUDA13_ROOT=/usr/local/cuda-13.0 CMAKE_BUILD_PARALLEL_LEVEL=2"
-      CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether"
+      CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro --volume ${{ github.workspace }}/.ccache-cibw:/ccache"
+      CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA12_ROOT=/usr/local/cuda-12.9 AETHER_CUDA13_ROOT=/usr/local/cuda-13.0 CMAKE_BUILD_PARALLEL_LEVEL=2 CCACHE_DIR=/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+      CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
       # Static cudart for both majors, x86_64 only (headers + libcudart_static.a, no compiler)
+      # ccache from EPEL (AlmaLinux 8); EPEL mirrors fail often on aarch64: retry, then run uncached through a pass-through ccache stand-in
       CIBW_BEFORE_ALL_LINUX: >-
         git config --global --add safe.directory '*';
+        for i in 1 2 3; do dnf install -y epel-release && dnf install -y ccache && break; dnf clean all; done;
+        command -v ccache >/dev/null || { printf '%s\n' '#!/bin/sh' 'case $1 in -*) exit 0;; esac' 'exec "$@"' > /usr/local/bin/ccache;
+        chmod +x /usr/local/bin/ccache; };
+        CCACHE_DIR=/ccache ccache -z;
         if [ "$(uname -m)" = x86_64 ]; then
         curl -fsSL -o /etc/yum.repos.d/cuda-rhel8.repo
         https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo &&
         dnf install -y --setopt=install_weak_deps=False cuda-cudart-devel-12-9 cuda-crt-12-9 cuda-cudart-devel-13-0 cuda-crt-13-0; fi
-      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
+      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair -w {dest_dir} {wheel}"
       CIBW_TEST_SKIP: "*"
     steps:
       - uses: actions/checkout@v7
@@ -139,7 +144,42 @@ jobs:
           echo "SETUPTOOLS_SCM_PRETEND_VERSION=$v" >> "$GITHUB_ENV"
           echo "CIBW_ENVIRONMENT_PASS_LINUX=SETUPTOOLS_SCM_PRETEND_VERSION" >> "$GITHUB_ENV"
 
+      # The finished wheels are remembered under a digest of everything that goes into them: this tree, the sealed payload
+      # (which carries the eagle headers), the version, this workflow (cibuildwheel and CUDA pins) and the platform. A hit
+      # skips the build; the checks downstream run on what is restored.
+      - id: wk
+        env:
+          PLAT: ${{ matrix.plat }}
+        run: |
+          args=(--tree aether --skip docs/ --skip .github/ --file aether/.github/workflows/release.yml --str "$PLAT $RUNNER_OS $RUNNER_ARCH $SETUPTOOLS_SCM_PRETEND_VERSION")
+          while read -r f; do args+=(--file "$f"); done < <(find aether/dsc/aether_dsc/_payload -type f | sort)
+          if [ "$RUNNER_OS" = Linux ]; then
+            args+=(--str "manylinux_2_28 $(docker buildx imagetools inspect "quay.io/pypa/manylinux_2_28_$(uname -m)" --format '{{.Manifest.Digest}}' 2>/dev/null || true)")
+          fi
+          echo "key=wheels-v1-$PLAT-$(aether/.github/ci_digest.sh "${args[@]}")" >> "$GITHUB_OUTPUT"
+      - id: wh
+        uses: actions/cache@v6
+        with:
+          path: dist
+          key: ${{ steps.wk.outputs.key }}
+      - if: steps.wh.outputs.cache-hit == 'true'
+        run: ls -l dist
+
+      # ccache inside the manylinux container (the runner directory is bind-mounted at /ccache); on macOS the build reads it in place
+      - if: steps.wh.outputs.cache-hit != 'true'
+        run: mkdir -p .ccache-cibw
+      - if: steps.wh.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: brew install ccache
+      - uses: actions/cache@v6
+        if: steps.wh.outputs.cache-hit != 'true'
+        with:
+          path: ${{ github.workspace }}/.ccache-cibw
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-cibw-aether-${{ hashFiles('aether/**/*.h', 'aether/**/*.hpp', 'aether/**/*.cpp', 'aether/**/CMakeLists.txt') }}
+          restore-keys: |
+            ccache-v2-${{ runner.os }}-${{ runner.arch }}-cibw-aether-
+
       - name: Build wheels (cibuildwheel 3.x; CPython 3.9-3.14 plus free-threaded 3.13t/3.14t)
+        if: steps.wh.outputs.cache-hit != 'true'
         uses: pypa/cibuildwheel@v3.4.1
         with:
           package-dir: aether/dsc
@@ -148,6 +188,7 @@ jobs:
           CIBW_ENABLE: cpython-freethreading
           CIBW_BUILD: "cp39-${{ matrix.plat }} cp310-${{ matrix.plat }} cp311-${{ matrix.plat }} cp312-${{ matrix.plat }} cp313-${{ matrix.plat }} cp314-${{ matrix.plat }} cp313t-${{ matrix.plat }} cp314t-${{ matrix.plat }}"
       - name: Build the CPython 3.15 and 3.15t wheels (cibuildwheel 4.x)
+        if: steps.wh.outputs.cache-hit != 'true'
         uses: pypa/cibuildwheel@v4.3.3
         with:
           package-dir: aether/dsc
@@ -155,6 +196,11 @@ jobs:
         env:
           CIBW_ENABLE: ""
           CIBW_BUILD: "cp315-${{ matrix.plat }} cp315t-${{ matrix.plat }}"
+      # on Linux the stats are printed inside the container, before each repair
+      - if: always() && steps.wh.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-cibw
+        run: ccache -s
 
       - uses: actions/upload-artifact@v7
         with:

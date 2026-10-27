@@ -122,7 +122,30 @@ jobs:
         with:
           fetch-depth: 0   # the version comes from the git tag (cmake/GitVersion.cmake)
 
+      # A pass is remembered under a digest of every input this job reads: the tree, this workflow and the toolchain. On a hit
+      # the job succeeds without building.
+      - id: memo
+        run: |
+          echo "digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)")" >> "$GITHUB_OUTPUT"
+      - id: pass
+        uses: actions/cache/restore@v6
+        with:
+          path: ci-pass
+          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
+          lookup-only: true
+      - id: plan
+        env:
+          HIT: ${{ steps.pass.outputs.cache-hit }}
+          DIGEST: ${{ steps.memo.outputs.digest }}
+        run: |
+          if [ "$HIT" = true ]; then
+            echo "sanitize-cpp: passed earlier on digest $DIGEST" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo run=true >> "$GITHUB_OUTPUT"
+          fi
+
       - run: sudo apt-get update && sudo apt-get install -y g++-13 ccache
+        if: steps.plan.outputs.run == 'true'
 
       - uses: actions/cache@v6
         with:
@@ -130,7 +153,9 @@ jobs:
           key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitize-cpp-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-sanitize-cpp-
+        if: steps.plan.outputs.run == 'true'
       - run: ccache -z
+        if: steps.plan.outputs.run == 'true'
 
       - run: |
           cmake -B build \
@@ -139,7 +164,9 @@ jobs:
             -DAETHER_DEBUG_MODE=ON \
             -DAETHER_CPP_MODE=ON \
             -DAETHER_SANITIZERS=address,undefined .
+        if: steps.plan.outputs.run == 'true'
       - run: cmake --build build -j"$(nproc)"
+        if: steps.plan.outputs.run == 'true'
 
       # Non-vacuity (i): the binary must actually carry the ASan runtime.
       - name: sanitizer runtime is linked
@@ -147,6 +174,7 @@ jobs:
           cd .
           { nm -D build/tests/aether_tests; nm build/tests/aether_tests; } 2>/dev/null | grep -q __asan_init \
             || { echo "RED: aether_tests carries no __asan_init — this job is not sanitizing"; exit 1; }
+        if: steps.plan.outputs.run == 'true'
 
       # Non-vacuity (ii): each canary mode must exit non-zero AND print its banner.
       - name: canaries trip
@@ -169,6 +197,7 @@ jobs:
             fi
           done
           exit $fail
+        if: steps.plan.outputs.run == 'true'
 
       # Non-vacuity (iii): the manifest gate, with the sanitizer environment.
       - name: suite under check_gate
@@ -178,14 +207,65 @@ jobs:
         run: |
           cd .
           LSAN_OPTIONS="suppressions=$PWD/tests/sanitize/lsan.supp" tests/check_gate.sh cpp build/tests/aether_tests --config debug
-      - if: always()
+        if: steps.plan.outputs.run == 'true'
+      - if: always() && steps.plan.outputs.run == 'true'
         run: ccache -s
+      - if: steps.plan.outputs.run == 'true'
+        run: mkdir -p ci-pass && touch ci-pass/sanitize-cpp
+      - if: hashFiles('ci-pass/*') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: ci-pass
+          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
 
   # AETHER_HOST_VECTOR_MATH on three GCC majors from the distribution's own
   # packages: the reproducer and the vectorisation check under the default
   # macro rule, plus (13 and 14) a necessity step proving the rule is not
   # vacuous: with masked variants forced on, the compiler must miscompile the
   # conditional-call loop. The step passes only if the mismatch is reported.
+  # The arrays binding and its CUDA 12 plugin built with clang (the wheels use gcc): a source build with clang and a
+  # CUDA toolkit must work, and the plugin must export only the seam.
+  clang-plugins:
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_COMPILERCHECK: content
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
+          restore-keys: |
+            ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-
+      - name: clang, ninja and the CUDA 12.6 runtime headers + static cudart (no driver, no GPU)
+        run: |
+          curl -fsSL -o /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          python3 -m pip install --user "nanobind>=3.1,<4"
+      - run: ccache -z
+      - name: build _core and the plugin with clang, zero warnings
+        env:
+          CC: clang
+          CXX: clang++
+          AETHER_CUDA12_ROOT: /usr/local/cuda-12.6
+        run: |
+          cmake -S dsc -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -Dnanobind_DIR="$(python3 -c 'import nanobind; print(nanobind.cmake_dir())')" -DPython_EXECUTABLE="$(command -v python3)"
+          cmake --build build-clang
+          syms=$(nm -D --defined-only build-clang/libaether_cuda12.so | awk '{print $NF}')
+          [ "$syms" = aether_memory_v1 ] || { echo "::error::the plugin exports more than the seam: $syms"; exit 1; }
+      - if: always()
+        run: ccache -s
+
   host-gcc:
     runs-on: ubuntu-latest
     strategy:
