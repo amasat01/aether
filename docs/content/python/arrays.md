@@ -4,7 +4,7 @@
 maths: no operators, no indexing. Use numpy, cupy, torch or your own kernels for that.
 
 It ships in the `aether-dsc` wheel next to `aether_dsc`, and needs nothing else:
-no numpy, no cuda-bindings, no extras. On Linux x86_64 the wheel carries two CUDA
+no numpy, no cuda-bindings, no extras. On Linux x86_64 and aarch64 the wheel carries two CUDA
 plugins, one for CUDA 13 and one for CUDA 12. The first device call loads the first
 one your driver accepts, so a GPU user installs nothing more. `AETHER_CUDA_MAJOR=12`
 or `13` forces one. With no GPU or no driver, `import aether` still works and a device

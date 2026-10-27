@@ -72,7 +72,7 @@ jobs:
           retention-days: 7
           path: aether/dsc/aether_dsc/_payload/
 
-  # One leg per platform. Every leg builds `aether._core` (plain C++, no CUDA); the x86_64 leg also builds the
+  # One leg per platform. Every leg builds `aether._core` (plain C++, no CUDA); the x86_64 and aarch64 legs also build the
   # two CUDA plugins (static cudart 12.9 and 13.0, compiled by g++, no nvcc). The CUDA 13 plugin is built
   # here and exercised by test-wheel, which is the CI row for it.
   wheels:
@@ -106,7 +106,7 @@ jobs:
       CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro --volume ${{ github.workspace }}/.ccache-cibw:/ccache"
       CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA12_ROOT=/usr/local/cuda-12.9 AETHER_CUDA13_ROOT=/usr/local/cuda-13.0 CMAKE_BUILD_PARALLEL_LEVEL=2 CCACHE_DIR=/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
       CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
-      # Static cudart for both majors, x86_64 only (headers + libcudart_static.a, no compiler)
+      # Static cudart for both majors, x86_64 and aarch64 (headers + libcudart_static.a, no compiler); NVIDIA's aarch64 repo is `sbsa`
       # ccache from EPEL (AlmaLinux 8); EPEL mirrors fail often on aarch64: retry, then run uncached through a pass-through ccache stand-in
       CIBW_BEFORE_ALL_LINUX: >-
         git config --global --add safe.directory '*';
@@ -114,9 +114,10 @@ jobs:
         command -v ccache >/dev/null || { printf '%s\n' '#!/bin/sh' 'case $1 in -*) exit 0;; esac' 'exec "$@"' > /usr/local/bin/ccache;
         chmod +x /usr/local/bin/ccache; };
         CCACHE_DIR=/ccache ccache -z;
-        if [ "$(uname -m)" = x86_64 ]; then
+        case "$(uname -m)" in x86_64) cuda_repo_arch=x86_64;; aarch64) cuda_repo_arch=sbsa;; *) cuda_repo_arch=;; esac;
+        if [ -n "$cuda_repo_arch" ]; then
         curl -fsSL -o /etc/yum.repos.d/cuda-rhel8.repo
-        https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo &&
+        "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/$cuda_repo_arch/cuda-rhel8.repo" &&
         dnf install -y --setopt=install_weak_deps=False cuda-cudart-devel-12-9 cuda-crt-12-9 cuda-cudart-devel-13-0 cuda-crt-13-0; fi
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair -w {dest_dir} {wheel}"
       CIBW_TEST_SKIP: "*"
@@ -268,7 +269,7 @@ jobs:
           # the companion check lives in the hawk repo's own CI; here the lines must stay what the header says
           grep -c 'CIBW_BUILD: "cp39-' aether/.github/workflows/release.yml
 
-      - name: Wheel contents - zero Requires-Dist, plugins on x86_64 only, only the seam exported
+      - name: Wheel contents - zero Requires-Dist, both plugins on x86_64 and aarch64, right ELF arch, only the seam exported
         run: |
           python - <<'PY'
           import glob, zipfile, subprocess, tempfile, os, re
@@ -278,16 +279,25 @@ jobs:
               meta = next(n for n in names if n.endswith(".dist-info/METADATA"))
               assert not [l for l in z.read(meta).decode().splitlines() if l.startswith("Requires-Dist") and "extra ==" not in l], whl
               plugins = sorted(os.path.basename(n) for n in names if re.search(r"aether/libaether_cuda\d+\.so$", n))
-              want = ["libaether_cuda12.so", "libaether_cuda13.so"] if "x86_64" in whl and "manylinux" in whl else []
+              linux_cuda = "manylinux" in whl and ("x86_64" in whl or "aarch64" in whl)
+              want = ["libaether_cuda12.so", "libaether_cuda13.so"] if linux_cuda else []
               assert plugins == want, (whl, plugins)
               assert not any("libcudart" in n or "libcuda." in n for n in names), whl
               assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
+                  machine = 62 if "x86_64" in whl else 183   # ELF e_machine: x86-64 / AArch64
                   with tempfile.TemporaryDirectory() as d:
                       for p in plugins:
-                          open(f"{d}/{p}", "wb").write(z.read(f"aether/{p}"))
-                          out = subprocess.run(["nm", "-D", "--defined-only", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
-                          syms = {l.split()[-1].split("@")[0] for l in out.splitlines() if l.strip()}
+                          blob = z.read(f"aether/{p}")
+                          assert int.from_bytes(blob[18:20], "little") == machine, (whl, p)
+                          open(f"{d}/{p}", "wb").write(blob)
+                          # readelf, not nm: it reads any ELF, so the x86 runner can check the aarch64 plugin
+                          out = subprocess.run(["readelf", "--dyn-syms", "--wide", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
+                          syms = set()
+                          for l in out.splitlines():
+                              f = l.split()
+                              if len(f) >= 8 and f[0][:-1].isdigit() and f[6] != "UND" and f[3] != "SECTION":
+                                  syms.add(f[7].split("@")[0])
                           assert syms == {"aether_memory_v1"}, (p, syms)
           print("OK")
           PY
@@ -308,10 +318,12 @@ jobs:
 
   test-wheel:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    name: test-wheel (${{ matrix.runner }}, ${{ matrix.python-version }})
     strategy:
       fail-fast: false
       matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t"]
     steps:
       - uses: actions/checkout@v7
