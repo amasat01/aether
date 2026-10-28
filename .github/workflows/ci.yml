@@ -251,7 +251,7 @@ jobs:
             https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i /tmp/cuda-keyring.deb
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          sudo apt-get install -y --no-install-recommends clang libomp-dev ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
           python3 -m pip install --user "nanobind>=3.1,<4"
       - run: ccache -z
       - name: build _core and the plugin with clang, zero warnings

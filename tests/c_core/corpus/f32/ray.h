@@ -7,7 +7,7 @@
 // part: f32 ray -- included by tests/c_core/aether_c_corpus.h
 // mint: python3 tools/c_core/mint_golden.py
 
-// ---8<--- CORE BEGIN (md5 = 0bab04fc9317d7be9cb0eaaff6437ec9) ---8<---
+// ---8<--- CORE BEGIN (md5 = 7e7150fb58ea556f0c1e44a027c991fc) ---8<---
 #ifndef AETHER_C_F32_T
 #define AETHER_C_F32_T
 typedef float aether_c_f32_t;
@@ -39,9 +39,10 @@ static inline aether_c_f32_vec4_t aether_c_f32_ray_tri(aether_c_f32_vec3_t o, ae
     const aether_c_f32_t p1 = ((d2 * e2_0) - (d0 * e2_2));
     const aether_c_f32_t p2 = ((d0 * e2_1) - (d1 * e2_0));
     const aether_c_f32_t det = (((e1_0 * p0) + (e1_1 * p1)) + (e1_2 * p2));
-    const int ok = (det > ((aether_c_f32_t)0.0)) || (det < ((aether_c_f32_t)0.0));
-    const aether_c_f32_t dets = ok ? det : ((aether_c_f32_t)1.0);
-    const aether_c_f32_t inv = ok ? (((aether_c_f32_t)1.0) / dets) : ((aether_c_f32_t)0.0);
+    int ok = 0;
+    if ((det > ((aether_c_f32_t)0.0)) || (det < ((aether_c_f32_t)0.0))) { ok = 1; }
+    const aether_c_f32_t dets = (ok != 0) ? det : ((aether_c_f32_t)1.0);
+    const aether_c_f32_t inv = (ok != 0) ? (((aether_c_f32_t)1.0) / dets) : ((aether_c_f32_t)0.0);
     const aether_c_f32_t s0 = (o.v[0] - a.v[0]);
     const aether_c_f32_t s1 = (o.v[1] - a.v[1]);
     const aether_c_f32_t s2 = (o.v[2] - a.v[2]);
@@ -51,7 +52,8 @@ static inline aether_c_f32_vec4_t aether_c_f32_ray_tri(aether_c_f32_vec3_t o, ae
     const aether_c_f32_t q2 = ((s0 * e1_1) - (s1 * e1_0));
     const aether_c_f32_t v = (inv * (((d0 * q0) + (d1 * q1)) + (d2 * q2)));
     const aether_c_f32_t t = (inv * (((e2_0 * q0) + (e2_1 * q1)) + (e2_2 * q2)));
-    const int hit = ok && (u >= ((aether_c_f32_t)0.0)) && (v >= ((aether_c_f32_t)0.0)) && ((u + v) <= ((aether_c_f32_t)1.0)) && (t >= ((aether_c_f32_t)0.0)) && (t <= tmax);
+    int hit = 0;
+    if (ok && (u >= ((aether_c_f32_t)0.0)) && (v >= ((aether_c_f32_t)0.0)) && ((u + v) <= ((aether_c_f32_t)1.0)) && (t >= ((aether_c_f32_t)0.0)) && (t <= tmax)) { hit = 1; }
     aether_c_f32_vec4_t out;
     out.v[0] = hit ? ((aether_c_f32_t)1.0) : ((aether_c_f32_t)0.0);
     out.v[1] = t;
@@ -63,23 +65,26 @@ static inline aether_c_f32_vec4_t aether_c_f32_ray_tri(aether_c_f32_vec3_t o, ae
 /* aether-c: ray_aabb () f32 aether-c/1 */
 static inline aether_c_f32_vec4_t aether_c_f32_ray_aabb(aether_c_f32_vec3_t o, aether_c_f32_vec3_t d, aether_c_f32_vec3_t lo, aether_c_f32_vec3_t hi, aether_c_f32_t tmax)
 {
-    const int ok0 = (d.v[0] > ((aether_c_f32_t)0.0)) || (d.v[0] < ((aether_c_f32_t)0.0));
-    const aether_c_f32_t ds0 = ok0 ? d.v[0] : ((aether_c_f32_t)1.0);
-    const aether_c_f32_t inv0 = ok0 ? (((aether_c_f32_t)1.0) / ds0) : copysignf((aether_c_f32_t)1e18, d.v[0]);
+    int ok0 = 0;
+    if ((d.v[0] > ((aether_c_f32_t)0.0)) || (d.v[0] < ((aether_c_f32_t)0.0))) { ok0 = 1; }
+    const aether_c_f32_t ds0 = (ok0 != 0) ? d.v[0] : ((aether_c_f32_t)1.0);
+    const aether_c_f32_t inv0 = (ok0 != 0) ? (((aether_c_f32_t)1.0) / ds0) : copysignf((aether_c_f32_t)1e18, d.v[0]);
     const aether_c_f32_t a0 = ((lo.v[0] - o.v[0]) * inv0);
     const aether_c_f32_t b0 = ((hi.v[0] - o.v[0]) * inv0);
     const aether_c_f32_t n0 = (a0 < b0) ? a0 : b0;
     const aether_c_f32_t f0 = (a0 < b0) ? b0 : a0;
-    const int ok1 = (d.v[1] > ((aether_c_f32_t)0.0)) || (d.v[1] < ((aether_c_f32_t)0.0));
-    const aether_c_f32_t ds1 = ok1 ? d.v[1] : ((aether_c_f32_t)1.0);
-    const aether_c_f32_t inv1 = ok1 ? (((aether_c_f32_t)1.0) / ds1) : copysignf((aether_c_f32_t)1e18, d.v[1]);
+    int ok1 = 0;
+    if ((d.v[1] > ((aether_c_f32_t)0.0)) || (d.v[1] < ((aether_c_f32_t)0.0))) { ok1 = 1; }
+    const aether_c_f32_t ds1 = (ok1 != 0) ? d.v[1] : ((aether_c_f32_t)1.0);
+    const aether_c_f32_t inv1 = (ok1 != 0) ? (((aether_c_f32_t)1.0) / ds1) : copysignf((aether_c_f32_t)1e18, d.v[1]);
     const aether_c_f32_t a1 = ((lo.v[1] - o.v[1]) * inv1);
     const aether_c_f32_t b1 = ((hi.v[1] - o.v[1]) * inv1);
     const aether_c_f32_t n1 = (a1 < b1) ? a1 : b1;
     const aether_c_f32_t f1 = (a1 < b1) ? b1 : a1;
-    const int ok2 = (d.v[2] > ((aether_c_f32_t)0.0)) || (d.v[2] < ((aether_c_f32_t)0.0));
-    const aether_c_f32_t ds2 = ok2 ? d.v[2] : ((aether_c_f32_t)1.0);
-    const aether_c_f32_t inv2 = ok2 ? (((aether_c_f32_t)1.0) / ds2) : copysignf((aether_c_f32_t)1e18, d.v[2]);
+    int ok2 = 0;
+    if ((d.v[2] > ((aether_c_f32_t)0.0)) || (d.v[2] < ((aether_c_f32_t)0.0))) { ok2 = 1; }
+    const aether_c_f32_t ds2 = (ok2 != 0) ? d.v[2] : ((aether_c_f32_t)1.0);
+    const aether_c_f32_t inv2 = (ok2 != 0) ? (((aether_c_f32_t)1.0) / ds2) : copysignf((aether_c_f32_t)1e18, d.v[2]);
     const aether_c_f32_t a2 = ((lo.v[2] - o.v[2]) * inv2);
     const aether_c_f32_t b2 = ((hi.v[2] - o.v[2]) * inv2);
     const aether_c_f32_t n2 = (a2 < b2) ? a2 : b2;
@@ -88,7 +93,8 @@ static inline aether_c_f32_vec4_t aether_c_f32_ray_aabb(aether_c_f32_vec3_t o, a
     const aether_c_f32_t tout1 = (f1 < f0) ? f1 : f0;
     const aether_c_f32_t tin = (n2 > tin1) ? n2 : tin1;
     const aether_c_f32_t tout = (f2 < tout1) ? f2 : tout1;
-    const int hit = (tin <= tout) && (tout >= ((aether_c_f32_t)0.0)) && (tin <= tmax);
+    int hit = 0;
+    if ((tin <= tout) && (tout >= ((aether_c_f32_t)0.0)) && (tin <= tmax)) { hit = 1; }
     aether_c_f32_vec4_t out;
     out.v[0] = hit ? ((aether_c_f32_t)1.0) : ((aether_c_f32_t)0.0);
     out.v[1] = tin;
@@ -110,14 +116,16 @@ static inline aether_c_f32_vec4_t aether_c_f32_ray_sphere(aether_c_f32_vec3_t o,
     const aether_c_f32_t hb = (((oc0 * d0) + (oc1 * d1)) + (oc2 * d2));
     const aether_c_f32_t qc = ((((oc0 * oc0) + (oc1 * oc1)) + (oc2 * oc2)) - (r * r));
     const aether_c_f32_t disc = ((hb * hb) - (qa * qc));
-    const int ok = (qa > ((aether_c_f32_t)0.0)) && (disc >= ((aether_c_f32_t)0.0));
+    int ok = 0;
+    if ((qa > ((aether_c_f32_t)0.0)) && (disc >= ((aether_c_f32_t)0.0))) { ok = 1; }
     const aether_c_f32_t qas = (qa > ((aether_c_f32_t)0.0)) ? qa : ((aether_c_f32_t)1.0);
-    const aether_c_f32_t ds = ok ? disc : ((aether_c_f32_t)1.0);
+    const aether_c_f32_t ds = (ok != 0) ? disc : ((aether_c_f32_t)1.0);
     const aether_c_f32_t sq = sqrtf(ds);
     const aether_c_f32_t inv = (((aether_c_f32_t)1.0) / qas);
-    const aether_c_f32_t t0 = ok ? (((-hb) - sq) * inv) : ((aether_c_f32_t)0.0);
-    const aether_c_f32_t t1 = ok ? (((-hb) + sq) * inv) : ((aether_c_f32_t)0.0);
-    const int hit = ok && (t1 >= ((aether_c_f32_t)0.0)) && (t0 <= tmax);
+    const aether_c_f32_t t0 = (ok != 0) ? (((-hb) - sq) * inv) : ((aether_c_f32_t)0.0);
+    const aether_c_f32_t t1 = (ok != 0) ? (((-hb) + sq) * inv) : ((aether_c_f32_t)0.0);
+    int hit = 0;
+    if (ok && (t1 >= ((aether_c_f32_t)0.0)) && (t0 <= tmax)) { hit = 1; }
     aether_c_f32_vec4_t out;
     out.v[0] = hit ? ((aether_c_f32_t)1.0) : ((aether_c_f32_t)0.0);
     out.v[1] = t0;
