@@ -98,14 +98,17 @@ function(_aether_plugin)
   set_target_properties(aether_driver_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
   target_include_directories(aether_driver_runtime PRIVATE "${_root}")
   target_include_directories(aether_driver_runtime SYSTEM PRIVATE "${_aether_cuda_inc}")
+  # -fno-gnu-unique is a GCC flag (it keeps the plugin unloadable); clang rejects it
+  set(_xcompiler "-fPIC,-fvisibility=hidden")
   if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(aether_driver_runtime PRIVATE -fno-gnu-unique)
+    string(APPEND _xcompiler ",-fno-gnu-unique")
   endif()
   set(_plugin_o "${CMAKE_CURRENT_BINARY_DIR}/aether_plugin.o")
   set(_plugin_so "${CMAKE_CURRENT_BINARY_DIR}/libaether_cuda.so")
   set(_nvcc_common -ccbin "${CMAKE_CXX_COMPILER}" -std=c++20 -O2 -cudart none ${_gencode})
   add_custom_command(OUTPUT "${_plugin_o}"
-    COMMAND "${_aether_nvcc}" ${_nvcc_common} -x cu -c -Xcompiler -fPIC,-fvisibility=hidden,-fno-gnu-unique
+    COMMAND "${_aether_nvcc}" ${_nvcc_common} -x cu -c -Xcompiler ${_xcompiler}
             -DAETHER_HAS_CUDA=1 -I "${CMAKE_CURRENT_SOURCE_DIR}/src" -I "${_root}" "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin.cpp" -o "${_plugin_o}"
     DEPENDS src/plugin.cpp src/cufft_plan.h src/seam.h VERBATIM)
   # The version script keeps the export list to the seam alone: hidden visibility does not cover the libstdc++
