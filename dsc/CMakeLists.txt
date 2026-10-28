@@ -54,6 +54,54 @@ target_compile_definitions(_core PRIVATE AETHER_CPP_MODE=1)
 find_package(OpenMP REQUIRED COMPONENTS CXX)   # the host FFT runs its lines on an OpenMP team
 target_link_libraries(_core PRIVATE ${CMAKE_DL_LIBS} OpenMP::OpenMP_CXX)
 install(TARGETS _core LIBRARY DESTINATION aether)
+
+# ---------------------------------------------------------------- the OpenMP runtime: ONE, owned by this package
+# aether-dsc ships the runtime the build linked, under a stable name in aether/_omp/, and `_core` finds it by a relative
+# rpath. Wheel repair tools are told to leave it (auditwheel --exclude, delocate --exclude), so no other wheel (eagle,
+# hawk's host kernels) vendors a second copy: two OpenMP runtimes in one process abort on macOS and oversubscribe on
+# Linux. Dependents ask `aether_dsc.openmp()` for the file and link that one.
+if(UNIX)
+  set(_omp_real "")
+  foreach(_l IN LISTS OpenMP_CXX_LIBRARIES)
+    if(_l MATCHES "lib(gomp|omp)[^/]*\\.(so|dylib)" AND EXISTS "${_l}")
+      file(REAL_PATH "${_l}" _omp_real)
+      break()
+    endif()
+  endforeach()
+  if(NOT _omp_real)
+    message(FATAL_ERROR "no libgomp/libomp among OpenMP_CXX_LIBRARIES (${OpenMP_CXX_LIBRARIES}): cannot ship the runtime")
+  endif()
+  if(APPLE)
+    set(_omp_name libomp.dylib)
+    set_target_properties(_core PROPERTIES INSTALL_RPATH "@loader_path/_omp")
+  else()
+    set(_omp_name libgomp.so.1)
+    set_target_properties(_core PROPERTIES INSTALL_RPATH "$ORIGIN/_omp")
+  endif()
+  message(STATUS "OpenMP runtime shipped as aether/_omp/${_omp_name}: ${_omp_real}")
+  install(FILES "${_omp_real}" DESTINATION aether/_omp RENAME ${_omp_name})
+  if(APPLE)
+    # The linker recorded the runtime's own install name (Homebrew: an absolute path). Point `_core` and the shipped
+    # copy at @rpath/libomp.dylib, and ship omp.h so a dependent can compile OpenMP code against it.
+    foreach(_d IN LISTS OpenMP_CXX_INCLUDE_DIRS)
+      if(EXISTS "${_d}/omp.h")
+        install(FILES "${_d}/omp.h" DESTINATION aether/_omp/include)
+        break()
+      endif()
+    endforeach()
+    install(CODE "
+      set(_dest \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/aether\")
+      execute_process(COMMAND otool -D \"${_omp_real}\" OUTPUT_VARIABLE _id_out)
+      string(REGEX REPLACE \"^[^\\n]*\\n\" \"\" _id \"\${_id_out}\")
+      string(STRIP \"\${_id}\" _id)
+      execute_process(COMMAND install_name_tool -id @rpath/libomp.dylib \"\${_dest}/_omp/libomp.dylib\" COMMAND_ERROR_IS_FATAL ANY)
+      file(GLOB _cores \"\${_dest}/_core*.so\")
+      foreach(_c IN LISTS _cores)
+        execute_process(COMMAND install_name_tool -change \"\${_id}\" @rpath/libomp.dylib \"\${_c}\" COMMAND_ERROR_IS_FATAL ANY)
+      endforeach()
+    ")
+  endif()
+endif()
 install(FILES aether/__init__.py aether/_dtype.py aether/fft.py DESTINATION aether)
 
 # ------------------------------------------------------------------ the CUDA plugins (linux x86_64 and aarch64)

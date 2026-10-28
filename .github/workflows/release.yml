@@ -108,6 +108,8 @@ jobs:
       # copies into the wheel (Linux: auditwheel bundles libgomp). Its deployment target is the runner's macOS, so the
       # wheels declare that too.
       CIBW_BEFORE_ALL_MACOS: "brew install libomp"
+      # The wheel ships the OpenMP runtime itself, once, at aether/_omp/ (dsc/CMakeLists.txt); repair must not vendor another.
+      CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v --exclude libomp.dylib {wheel}"
       CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether MACOSX_DEPLOYMENT_TARGET=14.0 OpenMP_ROOT=/opt/homebrew/opt/libomp CMAKE_PREFIX_PATH=/opt/homebrew/opt/libomp CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
       # nvcc 12.9 + the runtime headers for the plugin (compiled with -cudart none: no CUDA runtime library is linked or shipped), x86_64 and aarch64 (NVIDIA's aarch64 repo is `sbsa`)
       # ccache from EPEL (AlmaLinux 8); EPEL mirrors fail often on aarch64: retry, then run uncached through a pass-through ccache stand-in
@@ -122,7 +124,7 @@ jobs:
         curl -fsSL -o /etc/yum.repos.d/cuda-rhel8.repo
         "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/$cuda_repo_arch/cuda-rhel8.repo" &&
         dnf install -y --setopt=install_weak_deps=False cuda-nvcc-12-9 cuda-cudart-devel-12-9 cuda-crt-12-9; fi
-      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair -w {dest_dir} {wheel}"
+      CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair --exclude libgomp.so.1 -w {dest_dir} {wheel}"
       CIBW_TEST_SKIP: "*"
     steps:
       - uses: actions/checkout@v7
@@ -287,9 +289,11 @@ jobs:
               want = ["libaether_cuda.so"] if "manylinux" in whl and ("x86_64" in whl or "aarch64" in whl) else []
               assert plugins == want, (whl, plugins)
               assert not any("libcudart" in n or "libcuda." in n for n in names), whl
-              # the OpenMP runtime travels inside the wheel (there is no Requires-Dist for it)
-              omp = [n for n in names if re.search(r"\.libs/libgomp|\.dylibs/libomp", n)]
-              assert bool(omp) == ("manylinux" in whl or "macosx" in whl), (whl, omp)
+              # exactly ONE OpenMP runtime, at the stable path aether_dsc.openmp() reports (no Requires-Dist for it, and
+              # no copy vendored by auditwheel or delocate: eagle and hawk link this one)
+              omp = sorted(n for n in names if re.search(r"lib(gomp|omp|iomp)[^/]*\.(so|dylib)", n))
+              want_omp = ["aether/_omp/libgomp.so.1"] if "manylinux" in whl else ["aether/_omp/libomp.dylib"] if "macosx" in whl else []
+              assert omp == want_omp, (whl, omp)
               assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
                   machine = 62 if "x86_64" in whl else 183   # ELF e_machine: x86-64 / AArch64
