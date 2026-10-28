@@ -355,6 +355,11 @@ jobs:
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t"]
+        include:   # the macOS wheel: one regular and one free-threaded build
+          - runner: macos-14
+            python-version: "3.13"
+          - runner: macos-14
+            python-version: "3.13t"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -372,6 +377,7 @@ jobs:
           pip check
           pip install --quiet --prefer-binary pytest numpy "raptor-core>=0.7,<0.8"   # test-only: test_arrays compares with numpy, test_ft_payload uses raptor's free-threading rows
           python - <<'PY'
+          import sys
           import aether_dsc, aether
           p = aether_dsc.payload()
           assert p.headers and p.digest
@@ -381,7 +387,7 @@ jobs:
           try:
               aether.empty(8, device="cuda")
           except aether.CudaUnavailable as exc:
-              assert "CUDA driver" in str(exc), exc
+              assert sys.platform == "darwin" or "CUDA driver" in str(exc), exc   # macOS wheels carry no plugin
           print("OK")
           PY
           # the payload does not depend on the arrays
@@ -392,6 +398,35 @@ jobs:
           cd "$GITHUB_WORKSPACE/dsc/tests"
           python -m pytest -q -c /dev/null --rootdir . test_arrays.py test_ft_payload.py -p no:cacheprovider
         # outside the checkout: from dsc/ the source folder dsc/aether (no _core) would shadow the installed wheel
+        working-directory: ${{ runner.temp }}
+      # Apple silicon kills a binary whose signature install_name_tool invalidated, and two OpenMP runtimes in one
+      # process abort: check the installed macOS wheel as a real process sees it.
+      - name: macOS wheel, signatures, one OpenMP runtime, host FFT tests
+        if: runner.os == 'macOS'
+        run: |
+          . venv/bin/activate
+          site=$(python -c "import aether_dsc, os; print(os.path.dirname(os.path.dirname(aether_dsc.__file__)))")
+          for f in "$site"/aether/_core*.so "$site"/aether/_omp/libomp.dylib; do codesign --verify --strict "$f"; done
+          refs=$(otool -L "$site"/aether/_core*.so | awk 'NR > 1 {print $1}' | grep -E 'lib(g|i)?omp[0-9]*\.dylib$' || true)
+          [ "$refs" = "@rpath/libomp.dylib" ] || { echo "OpenMP references of _core: ${refs:-none}"; exit 1; }
+          python - <<'PY'
+          import ctypes, os, re
+          import aether, aether_dsc
+          from aether import fft
+          fft.fft(aether.zeros((64, 4096, 2), "float64"))   # the first OpenMP region runs here
+          libsystem = ctypes.CDLL(None)
+          libsystem._dyld_image_count.restype = ctypes.c_uint32
+          libsystem._dyld_get_image_name.restype = ctypes.c_char_p
+          libsystem._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+          names = [libsystem._dyld_get_image_name(i).decode() for i in range(libsystem._dyld_image_count())]
+          omp = [n for n in names if re.search(r"lib(g|i)?omp[0-9]*\.dylib$", n)]
+          shipped = os.path.realpath(aether_dsc.openmp().library)
+          assert [os.path.realpath(n) for n in omp] == [shipped], omp
+          assert ctypes.CDLL(shipped).omp_get_max_threads() > 1
+          print("OK", omp)
+          PY
+          cd "$GITHUB_WORKSPACE/dsc/tests"
+          python -m pytest -q -c /dev/null --rootdir . test_fft.py -p no:cacheprovider
         working-directory: ${{ runner.temp }}
 
   # the sdist builds `_core` from source on a machine with a C++ compiler and no CUDA toolkit
