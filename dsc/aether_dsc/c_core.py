@@ -404,6 +404,11 @@ def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
         lines.extend(f"const {t} {name}{k} = {v}.v[{k}];" for k in range(3))
         return name
 
+    def flag(name: str, cond: str) -> list:
+        """``int name`` set to 1 when ``cond`` holds: a statement, not a conditional expression, so no
+        composite expression is assigned to the wider ``int``."""
+        return [f"int {name} = 0;", f"if ({cond}) {{ {name} = 1; }}"]
+
     libm: tuple[str, ...] = ()
     if kind == "ray_tri":
         params = f"{v3} o, {v3} d, {v3} a, {v3} b, {v3} c, {t} tmax"
@@ -411,7 +416,7 @@ def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
         sub("e1_", "b", "a"); sub("e2_", "c", "a")
         cross("p", d, "e2_")
         lines += [f"const {t} det = {dot('e1_', 'p')};",
-                  f"const int ok = ((det > {c(0.0)}) || (det < {c(0.0)})) ? 1 : 0;",
+                  *flag("ok", f"(det > {c(0.0)}) || (det < {c(0.0)})"),
                   f"const {t} dets = (ok != 0) ? det : {c(1.0)};",
                   f"const {t} inv = (ok != 0) ? ({c(1.0)} / dets) : {c(0.0)};"]
         sub("s", "o", "a")
@@ -419,14 +424,14 @@ def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
         cross("q", "s", "e1_")
         lines += [f"const {t} v = (inv * {dot(d, 'q')});",
                   f"const {t} t = (inv * {dot('e2_', 'q')});",
-                  f"const int hit = (ok && (u >= {c(0.0)}) && (v >= {c(0.0)}) && ((u + v) <= {c(1.0)})"
-                  f" && (t >= {c(0.0)}) && (t <= tmax)) ? 1 : 0;"]
+                  *flag("hit", f"ok && (u >= {c(0.0)}) && (v >= {c(0.0)}) && ((u + v) <= {c(1.0)})"
+                                f" && (t >= {c(0.0)}) && (t <= tmax)")]
         out = ["t", "u", "v"]
     elif kind == "ray_aabb":
         params = f"{v3} o, {v3} d, {v3} lo, {v3} hi, {t} tmax"
         libm = (f"copysign{s}",)
         for k in range(3):
-            lines += [f"const int ok{k} = ((d.v[{k}] > {c(0.0)}) || (d.v[{k}] < {c(0.0)})) ? 1 : 0;",
+            lines += [*flag(f"ok{k}", f"(d.v[{k}] > {c(0.0)}) || (d.v[{k}] < {c(0.0)})"),
                       f"const {t} ds{k} = (ok{k} != 0) ? d.v[{k}] : {c(1.0)};",
                       f"const {t} inv{k} = (ok{k} != 0) ? ({c(1.0)} / ds{k}) : copysign{s}(({t})1e18, d.v[{k}]);",
                       f"const {t} a{k} = ((lo.v[{k}] - o.v[{k}]) * inv{k});",
@@ -435,7 +440,7 @@ def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
                       f"const {t} f{k} = (a{k} < b{k}) ? b{k} : a{k};"]
         lines += [f"const {t} tin1 = (n1 > n0) ? n1 : n0;", f"const {t} tout1 = (f1 < f0) ? f1 : f0;",
                   f"const {t} tin = (n2 > tin1) ? n2 : tin1;", f"const {t} tout = (f2 < tout1) ? f2 : tout1;",
-                  f"const int hit = ((tin <= tout) && (tout >= {c(0.0)}) && (tin <= tmax)) ? 1 : 0;"]
+                  *flag("hit", f"(tin <= tout) && (tout >= {c(0.0)}) && (tin <= tmax)")]
         out = ["tin", "tout", c(0.0)]
     else:  # ray_sphere
         params = f"{v3} o, {v3} d, {v3} c, {t} r, {t} tmax"
@@ -445,14 +450,14 @@ def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
         lines += [f"const {t} qa = {dot('d', 'd')};", f"const {t} hb = {dot('oc', 'd')};",
                   f"const {t} qc = ({dot('oc', 'oc')} - (r * r));",
                   f"const {t} disc = ((hb * hb) - (qa * qc));",
-                  f"const int ok = ((qa > {c(0.0)}) && (disc >= {c(0.0)})) ? 1 : 0;",
+                  *flag("ok", f"(qa > {c(0.0)}) && (disc >= {c(0.0)})"),
                   f"const {t} qas = (qa > {c(0.0)}) ? qa : {c(1.0)};",
                   f"const {t} ds = (ok != 0) ? disc : {c(1.0)};",
                   f"const {t} sq = sqrt{s}(ds);",
                   f"const {t} inv = ({c(1.0)} / qas);",
                   f"const {t} t0 = (ok != 0) ? (((-hb) - sq) * inv) : {c(0.0)};",
                   f"const {t} t1 = (ok != 0) ? (((-hb) + sq) * inv) : {c(0.0)};",
-                  f"const int hit = (ok && (t1 >= {c(0.0)}) && (t0 <= tmax)) ? 1 : 0;"]
+                  *flag("hit", f"ok && (t1 >= {c(0.0)}) && (t0 <= tmax)")]
         out = ["t0", "t1", c(0.0)]
     lines += [f"{v4} out;", f"out.v[0] = hit ? {c(1.0)} : {c(0.0)};"]
     lines += [f"out.v[{k + 1}] = {e};" for k, e in enumerate(out)]
