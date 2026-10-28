@@ -280,6 +280,24 @@ def test_zero_fill_capture_two_replays():
 
 
 @gpu
+def test_staged_upload_then_dropping_its_stream_does_not_break_the_next_copy():
+    """A pageable host to device copy on a user stream leaves the staging buffer busy; the next staged copy must
+    not wait on that stream, which the caller has since destroyed (it used to segfault)."""
+    out = _run("""
+        import aether, cupy as cp
+        s = cp.cuda.Stream(non_blocking=True)
+        d = aether.asarray([1.0, 2.0, 3.0, 4.0], device="cuda", stream=s)
+        s.synchronize()
+        del d, s
+        a = aether.zeros(8, "float64", "cuda")
+        h = aether.empty(8, "float64", "cpu")
+        aether.copy(a, into=h)
+        print("ok")
+    """)
+    assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stdout, out.stderr[-400:])
+
+
+@gpu
 @pytest.mark.parametrize("blocking", [False, True])
 @pytest.mark.parametrize("mode", ["legacy", "stream"])
 def test_gc_free_inside_global_capture(mode, blocking):
@@ -417,15 +435,42 @@ def test_cuda_array_interface_for_cupy():
     assert v.shape == (2, 3) and v.data.ptr == a.ptr
 
 
-def test_plugin_selection_override_names_the_failure():
+def test_the_retired_plugin_major_override_is_a_named_error():
+    out = _run("""
+        import aether
+        try:
+            aether.empty(4, device='cuda')
+        except aether.Error as exc:
+            print('AETHER_CUDA_MAJOR is no longer used' in str(exc))
+    """, AETHER_CUDA_MAJOR="13")
+    assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
+
+
+def test_without_a_driver_a_device_call_says_so():
     out = _run("""
         import aether
         try:
             aether.empty(4, device='cuda')
         except aether.CudaUnavailable as exc:
-            print('cuda' in str(exc))
-    """, AETHER_CUDA_MAJOR="13", CUDA_VISIBLE_DEVICES="")
-    assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
+            print('libcuda' in str(exc))
+    """, AETHER_CUDA_DRIVER_HIDE="libcuda.so.1")
+    if not _plugin_file().exists():
+        pytest.skip("no CUDA plugin in this build")
+    assert out.returncode == 0 and out.stdout.strip() == "True", (out.stdout, out.stderr[-300:])
+
+
+def _plugin_file():
+    return pathlib.Path(aether.__file__).parent / "libaether_cuda.so"
+
+
+def test_the_plugin_needs_the_driver_only():
+    plugin = _plugin_file()
+    if not plugin.exists():
+        pytest.skip("no CUDA plugin in this build")
+    dyn = subprocess.run(["readelf", "-d", str(plugin)], capture_output=True, text=True, check=True).stdout
+    assert "libcudart" not in dyn and "libcuda" not in dyn, dyn
+    undef = subprocess.run(["nm", "-D", "-u", str(plugin)], capture_output=True, text=True, check=True).stdout
+    assert not [l for l in undef.splitlines() if " cu" in l or "cuda" in l.lower()], undef
 
 
 @gpu

@@ -1,21 +1,24 @@
 # Arrays in Python: `import aether`
 
 `aether` makes CPU and GPU arrays that other libraries read without a copy. It does no
-maths: no operators, no indexing. Use numpy, cupy, torch or your own kernels for that.
+maths: no operators, no indexing (Fourier transforms are the one exception, below). Use numpy, cupy, torch or your own kernels for the rest.
 
 It ships in the `aether-dsc` wheel next to `aether_dsc`, and needs nothing else:
-no numpy, no cuda-bindings, no extras. On Linux x86_64 the wheel carries two CUDA
-plugins, one for CUDA 13 and one for CUDA 12. The first device call loads the first
-one your driver accepts, so a GPU user installs nothing more. `AETHER_CUDA_MAJOR=12`
-or `13` forces one. With no GPU or no driver, `import aether` still works and a device
-call raises `aether.CudaUnavailable`, naming what each plugin said.
+no numpy, no cuda-bindings, no extras. On Linux x86_64 and aarch64 the wheel carries one CUDA
+plugin, for CUDA 12 and 13 alike. It talks to the driver API only, so a GPU user needs
+the NVIDIA driver and nothing more: no CUDA toolkit, no CUDA runtime library. The first
+device call loads it. With no GPU or no driver, `import aether` still works and a device
+call raises `aether.CudaUnavailable`, naming what the driver said.
+`aether.cuda_runtime_version()` is the CUDA version the installed driver supports.
 
 ```
 pip install aether-dsc
 ```
 
-Without a wheel for your platform, pip builds from the source distribution: it needs a
-C++23 compiler, and gives you CPU arrays.
+Wheels: Linux x86_64 and aarch64, and macOS arm64 (CPython 3.9 to 3.15, free-threaded builds included).
+The Linux wheels carry the CUDA plugin; the aarch64 one is built and load-tested without a GPU and has not run on one.
+The macOS wheels run on the CPU and bundle libomp. Without a wheel for your platform, pip builds from the source
+distribution: it needs a C++23 compiler, and gives you CPU arrays.
 
 ## Making arrays
 
@@ -63,3 +66,27 @@ Others, complex included, are refused by name. `bfloat16` has no buffer-protocol
 
 This `Array` is one buffer on one device, like the C++ `Chunk` with a `RuntimeView`. It is not the
 C++ `aether::Array`, which is a host-mirrored structure of arrays.
+
+## Fourier transforms: `aether.fft`
+
+Batched transforms over arrays you already have, on the CPU and the GPU. There is no complex dtype: complex data is a
+`float32` or `float64` array whose last axis has extent 2, `(re, im)`. `axis` counts the data axes, not the 2.
+
+```python
+import aether
+import aether.fft as afft
+
+x = aether.zeros((64, 1024, 2), "float64")   # 64 signals of 1024 points
+X = afft.fft(x, axis=1)                      # same shape, forward
+y = afft.ifft(X, axis=1)                     # back; scaled by 1/n
+S = afft.rfft(aether.zeros((64, 1024), "float64"), axis=1)   # real input: 513 points
+```
+
+`fft`, `ifft`, `rfft`, `irfft` and the N-D `fftn`, `ifftn`, `rfftn`, `irfftn` take `norm="backward"` (default),
+`"forward"` or `"ortho"`, as NumPy does. For repeated work, `aether.fft.plan(...)` builds a plan once and
+`plan.execute(input, output, stream)` runs it without allocating, inside a stream capture if you like. Build the plan
+before the capture starts.
+
+The CPU transform is pocketfft with OpenMP across the batch, and gives the same bits for any thread count. The GPU
+transform is cuFFT, which aether does not bundle: `pip install "aether-dsc[cufft12]"` (or `[cufft13]`). Without it a GPU
+transform raises `aether.FftUnavailable`, naming the extra. The CPU and GPU results agree to rounding, not bit for bit.

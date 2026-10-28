@@ -202,10 +202,11 @@ _MAT_CWISE = tuple("mat_" + k[4:] for k, v in _VEC_KINDS.items()
 _MAT_OTHER = ("mat_sum", "mat_mv", "mat_mm", "mat_transpose", "vec_outer")
 _QUAT = ("quat_mul", "quat_conj", "quat_recip", "quat_rotate", "quat_as_pure", "quat_as_vec3")
 _SCALARS = ("rsqrt", "sign", "clip", "remainder")
+_RAYS = ("ray_tri", "ray_aabb", "ray_sphere")
 
 
 def kinds() -> tuple[str, ...]:
-    return _VEC_ORDER + _MAT_CWISE + _MAT_OTHER + _QUAT + _SCALARS
+    return _VEC_ORDER + _MAT_CWISE + _MAT_OTHER + _QUAT + _SCALARS + _RAYS
 
 
 def _render(kind: str, shape: tuple[int, ...], width: str, ret: str, name: str,
@@ -375,6 +376,91 @@ def _scalar_function(kind: str, width: str) -> CFunction:
     return _render(kind, (), width, t, f"aether_c_{width}_{kind}", params, body, (real.name,), libm)
 
 
+def _ray_function(kind: str, shape, shape2, width: str) -> CFunction:
+    """Ray primitives of ``aether/geometry/Ray.h``: a vec4 ``[hit, a, b, c]`` result, safe denominators.
+
+    Same expressions, same order as the header: dot is ``(x*x + y*y) + z*z`` and every
+    division or ``sqrt`` sees a guarded operand before the select.
+    """
+    if shape is not None or shape2 is not None:
+        raise ValueError(f"{kind} takes no shape, got shape={shape!r} shape2={shape2!r}")
+    t, w, s = _t(width), width, _WIDTH[width][1]
+    v3, v4 = _struct_name((3,), w), _struct_name((4,), w)
+    c = lambda x: f"(({t}){x})"
+    lines: list[str] = []
+
+    def sub(name: str, a: str, b: str) -> None:
+        lines.extend(f"const {t} {name}{k} = ({a}.v[{k}] - {b}.v[{k}]);" for k in range(3))
+
+    def dot(a: str, b: str) -> str:
+        return f"((({a}0 * {b}0) + ({a}1 * {b}1)) + ({a}2 * {b}2))"
+
+    def cross(name: str, a: str, b: str) -> None:
+        lines.extend([f"const {t} {name}0 = (({a}1 * {b}2) - ({a}2 * {b}1));",
+                      f"const {t} {name}1 = (({a}2 * {b}0) - ({a}0 * {b}2));",
+                      f"const {t} {name}2 = (({a}0 * {b}1) - ({a}1 * {b}0));"])
+
+    def vecs(name: str, v: str) -> str:
+        lines.extend(f"const {t} {name}{k} = {v}.v[{k}];" for k in range(3))
+        return name
+
+    libm: tuple[str, ...] = ()
+    if kind == "ray_tri":
+        params = f"{v3} o, {v3} d, {v3} a, {v3} b, {v3} c, {t} tmax"
+        d = vecs("d", "d")
+        sub("e1_", "b", "a"); sub("e2_", "c", "a")
+        cross("p", d, "e2_")
+        lines += [f"const {t} det = {dot('e1_', 'p')};",
+                  f"const int ok = ((det > {c(0.0)}) || (det < {c(0.0)})) ? 1 : 0;",
+                  f"const {t} dets = (ok != 0) ? det : {c(1.0)};",
+                  f"const {t} inv = (ok != 0) ? ({c(1.0)} / dets) : {c(0.0)};"]
+        sub("s", "o", "a")
+        lines.append(f"const {t} u = (inv * {dot('s', 'p')});")
+        cross("q", "s", "e1_")
+        lines += [f"const {t} v = (inv * {dot(d, 'q')});",
+                  f"const {t} t = (inv * {dot('e2_', 'q')});",
+                  f"const int hit = (ok && (u >= {c(0.0)}) && (v >= {c(0.0)}) && ((u + v) <= {c(1.0)})"
+                  f" && (t >= {c(0.0)}) && (t <= tmax)) ? 1 : 0;"]
+        out = ["t", "u", "v"]
+    elif kind == "ray_aabb":
+        params = f"{v3} o, {v3} d, {v3} lo, {v3} hi, {t} tmax"
+        libm = (f"copysign{s}",)
+        for k in range(3):
+            lines += [f"const int ok{k} = ((d.v[{k}] > {c(0.0)}) || (d.v[{k}] < {c(0.0)})) ? 1 : 0;",
+                      f"const {t} ds{k} = (ok{k} != 0) ? d.v[{k}] : {c(1.0)};",
+                      f"const {t} inv{k} = (ok{k} != 0) ? ({c(1.0)} / ds{k}) : copysign{s}(({t})1e18, d.v[{k}]);",
+                      f"const {t} a{k} = ((lo.v[{k}] - o.v[{k}]) * inv{k});",
+                      f"const {t} b{k} = ((hi.v[{k}] - o.v[{k}]) * inv{k});",
+                      f"const {t} n{k} = (a{k} < b{k}) ? a{k} : b{k};",
+                      f"const {t} f{k} = (a{k} < b{k}) ? b{k} : a{k};"]
+        lines += [f"const {t} tin1 = (n1 > n0) ? n1 : n0;", f"const {t} tout1 = (f1 < f0) ? f1 : f0;",
+                  f"const {t} tin = (n2 > tin1) ? n2 : tin1;", f"const {t} tout = (f2 < tout1) ? f2 : tout1;",
+                  f"const int hit = ((tin <= tout) && (tout >= {c(0.0)}) && (tin <= tmax)) ? 1 : 0;"]
+        out = ["tin", "tout", c(0.0)]
+    else:  # ray_sphere
+        params = f"{v3} o, {v3} d, {v3} c, {t} r, {t} tmax"
+        libm = (f"sqrt{s}",)
+        d = vecs("d", "d")
+        sub("oc", "o", "c")
+        lines += [f"const {t} qa = {dot('d', 'd')};", f"const {t} hb = {dot('oc', 'd')};",
+                  f"const {t} qc = ({dot('oc', 'oc')} - (r * r));",
+                  f"const {t} disc = ((hb * hb) - (qa * qc));",
+                  f"const int ok = ((qa > {c(0.0)}) && (disc >= {c(0.0)})) ? 1 : 0;",
+                  f"const {t} qas = (qa > {c(0.0)}) ? qa : {c(1.0)};",
+                  f"const {t} ds = (ok != 0) ? disc : {c(1.0)};",
+                  f"const {t} sq = sqrt{s}(ds);",
+                  f"const {t} inv = ({c(1.0)} / qas);",
+                  f"const {t} t0 = (ok != 0) ? (((-hb) - sq) * inv) : {c(0.0)};",
+                  f"const {t} t1 = (ok != 0) ? (((-hb) + sq) * inv) : {c(0.0)};",
+                  f"const int hit = (ok && (t1 >= {c(0.0)}) && (t0 <= tmax)) ? 1 : 0;"]
+        out = ["t0", "t1", c(0.0)]
+    lines += [f"{v4} out;", f"out.v[0] = hit ? {c(1.0)} : {c(0.0)};"]
+    lines += [f"out.v[{k + 1}] = {e};" for k, e in enumerate(out)]
+    lines.append("return out;")
+    return _render(kind, (), w, v4, f"aether_c_{w}_{kind}", params, lines,
+                   _deps(w, (3,), (4,)), libm)
+
+
 def function(kind: str, *, shape=None, shape2=None, width: str = "f64") -> CFunction:
     _check_width(width)
     if kind in _SCALARS:
@@ -383,6 +469,8 @@ def function(kind: str, *, shape=None, shape2=None, width: str = "f64") -> CFunc
         return _scalar_function(kind, width)
     if kind not in kinds():
         raise ValueError(f"unknown kind {kind!r}; known kinds: {', '.join(kinds())}")
+    if kind in _RAYS:
+        return _ray_function(kind, shape, shape2, width)
     if kind in _QUAT:
         return _quat_function(kind, shape, shape2, width)
     if shape is None:

@@ -15,11 +15,13 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "aether/chunk/Chunk.h"
 #include "aether/chunk/Fill.h"
+#include "aether/fft/Fft.h"
 #include "aether/interop/DLPack.h"
 #include "aether/interop/DLPackLegacy.h"
 #include "seam.h"
@@ -29,7 +31,7 @@ using namespace aether;
 
 namespace {
 
-nb::object g_error, g_unavailable;   // aether.Error, aether.CudaUnavailable
+nb::object g_error, g_unavailable, g_fft_unavailable;   // aether.Error, aether.CudaUnavailable, aether.FftUnavailable
 nb::object g_device_cls, g_dtype_cls;
 
 [[noreturn]] void fail(const std::string& m) { PyErr_SetString(g_error.ptr(), m.c_str()); throw nb::python_error(); }
@@ -88,27 +90,17 @@ std::string module_dir() {
 }
 
 void load_plugin() {
-    std::vector<int> order = {13, 12};
-    if (const char* forced = std::getenv("AETHER_CUDA_MAJOR")) {
-        std::string f = forced;
-        if (f != "12" && f != "13") fail("AETHER_CUDA_MAJOR must be 12 or 13, not '" + f + "'");
-        order = {std::stoi(f)};
-    }
-    std::string why;
-    for (int major : order) {
-        std::string path = module_dir() + "/libaether_cuda" + std::to_string(major) + ".so";
-        void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!h) { const char* e = dlerror(); why += "cuda" + std::to_string(major) + ": " + (e ? e : "not loadable") + "; "; continue; }
-        auto fn = reinterpret_cast<aether_memory_v1_fn>(dlsym(h, "aether_memory_v1"));
-        if (!fn || fn()->abi != AETHER_MEMORY_ABI) { why += "cuda" + std::to_string(major) + ": not an aether-memory/1 plugin; "; continue; }
-        int n = 0;
-        int code = fn()->probe(&n);
-        if (code != 0) { why += "cuda" + std::to_string(major) + " runtime: " + fn()->last_error() + "; "; continue; }
-        g_plugin.t = fn();
-        g_plugin.name = "cuda" + std::to_string(major);
-        return;
-    }
-    g_plugin.failure = why;
+    if (std::getenv("AETHER_CUDA_MAJOR"))
+        fail("AETHER_CUDA_MAJOR is no longer used: aether ships one CUDA plugin that serves CUDA 12 and 13 (it needs only the driver); unset it");
+    std::string path = module_dir() + "/libaether_cuda.so";
+    void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!h) { const char* e = dlerror(); g_plugin.failure = e ? e : "not loadable"; return; }
+    auto fn = reinterpret_cast<aether_memory_v1_fn>(dlsym(h, "aether_memory_v1"));
+    if (!fn || fn()->abi != AETHER_MEMORY_ABI) { g_plugin.failure = "not an aether-memory/" + std::to_string(AETHER_MEMORY_ABI) + " plugin"; return; }
+    int n = 0;
+    if (fn()->probe(&n) != 0) { g_plugin.failure = std::string("CUDA driver: ") + fn()->last_error(); return; }
+    g_plugin.t = fn();
+    g_plugin.name = "cuda";
 }
 
 const AetherMemoryV1* cuda() {
@@ -471,10 +463,99 @@ nb::object py_device(const Array& a) {
 
 }  // namespace
 
+// ---------------------------------------------------------------- FFT
+// A plan is a fixed transform of dense interleaved-pair arrays (see aether/fft/Fft.h for the layout and the
+// normalisation). On the host it runs pocketfft; on a device it owns a cuFFT plan built by the plugin at
+// construction, so `execute` allocates nothing and may run inside a stream capture.
+struct FftPlan {
+    int kind = 0, dt = 0, norm = 0, forward = 1, dev_kind = CPU, dev = 0;
+    std::vector<std::int64_t> shape, half;       // `shape`: complex shape (c2c) or the REAL side; `half`: the complex side
+    std::vector<std::int32_t> axes;
+    void* plan = nullptr;
+
+    ~FftPlan() { if (plan) g_plugin.t->fft_destroy(plan); }
+
+    std::vector<std::int64_t> in_shape() const { auto s = kind == AETHER_FFT_C2R ? half : shape; if (kind != AETHER_FFT_R2C) s.push_back(2); return s; }
+    std::vector<std::int64_t> out_shape() const { auto s = kind == AETHER_FFT_R2C ? half : shape; if (kind != AETHER_FFT_C2R) s.push_back(2); return s; }
+};
+
+void fft_check(const FftPlan& p, const Array& a, const std::vector<std::int64_t>& want, const char* which) {
+    if (a.dt != p.dt) fail(std::string("fft: the ") + which + " is " + kDtypes[a.dt].name + "; the plan wants " + kDtypes[p.dt].name);
+    if (a.st->kind == CUDA ? (p.dev_kind != CUDA || a.st->dev != p.dev) : p.dev_kind == CUDA)
+        fail(std::string("fft: the ") + which + " is not on the plan's device");
+    a.need_contiguous("fft");
+    bool same = a.view.rank == want.size();
+    for (std::size_t i = 0; same && i < want.size(); ++i) same = a.view.extents[i] == want[i];
+    if (!same) {
+        std::string w = "(";
+        for (std::size_t i = 0; i < want.size(); ++i) w += (i ? ", " : "") + std::to_string(want[i]);
+        fail(std::string("fft: the ") + which + " has the wrong shape; the plan wants " + w + ")");
+    }
+}
+
+std::shared_ptr<FftPlan> fft_plan(int kind, const std::string& dtype, int dev_kind, int dev, std::vector<std::int64_t> shape,
+                                  std::vector<std::int32_t> axes, bool forward, int norm, nb::object stream) {
+    auto p = std::make_shared<FftPlan>();
+    p->kind = kind; p->dt = dtype_index(dtype); p->norm = norm; p->forward = forward ? 1 : 0;
+    p->dev_kind = dev_kind; p->dev = dev;
+    if (p->dt > 1) fail("fft wants float32 or float64, not " + dtype);
+    if (kind < 0 || kind > 2) fail("fft: unknown transform kind");
+    if (norm < 0 || norm > 2) fail("fft: unknown norm");
+    if (axes.empty()) fail("fft: no axes to transform");
+    for (std::size_t i = 0; i < axes.size(); ++i) {
+        if (axes[i] < 0 || axes[i] >= int(shape.size())) fail("fft: axis out of range");
+        for (std::size_t j = 0; j < i; ++j) if (axes[j] == axes[i]) fail("fft: repeated axis");
+    }
+    for (auto v : shape) if (v < 0) fail("fft: negative extent");
+    p->shape = shape; p->half = shape; p->axes = axes;
+    if (kind != AETHER_FFT_C2C) p->half[axes.back()] = shape[axes.back()] / 2 + 1;
+    if (dev_kind == CUDA) {
+        void* h = nullptr;
+        int code = cuda()->fft_plan(dev, kind, p->dt == 0, norm, p->forward, int(shape.size()), shape.data(), int(axes.size()),
+                                    axes.data(), stream_handle(stream), &h);
+        if (code == 2) { PyErr_SetString(g_fft_unavailable.ptr(), cuda()->last_error()); throw nb::python_error(); }
+        check(code, "fft plan");
+        p->plan = h;
+    }
+    return p;
+}
+
+template <class T> void fft_host(const FftPlan& p, const void* in, void* out) {
+    std::vector<std::size_t> shape(p.shape.begin(), p.shape.end()), axes(p.axes.begin(), p.axes.end());
+    auto norm = static_cast<aether::fft::Norm>(p.norm);
+    auto i = static_cast<const T*>(in);
+    auto o = static_cast<T*>(out);
+    if (p.kind == AETHER_FFT_C2C) aether::fft::c2c<T>(i, o, shape, axes, p.forward != 0, norm);
+    else if (p.kind == AETHER_FFT_R2C) aether::fft::r2c<T>(i, o, shape, axes, norm);
+    else aether::fft::c2r<T>(i, o, shape, axes, norm);
+}
+
+void fft_execute(FftPlan& p, const Array& in, Array& out, nb::object stream) {
+    fft_check(p, in, p.in_shape(), "input");
+    fft_check(p, out, p.out_shape(), "output");
+    if (p.kind != AETHER_FFT_C2C && in.st->ptr == out.st->ptr && in.st->ptr) fail("fft: a real transform needs distinct input and output arrays");
+    if (!in.size() || !out.size()) return;
+    if (p.dev_kind == CUDA) {
+        void* h = stream.is_none() ? in.st->handle : stream_handle(stream);
+        check(cuda()->fft_exec(p.plan, in.st->ptr, out.st->ptr, h), "fft");
+        return;
+    }
+    std::string error;
+    {
+        nb::gil_scoped_release release;
+        try {
+            if (p.dt == 0) fft_host<double>(p, in.st->ptr, out.st->ptr); else fft_host<float>(p, in.st->ptr, out.st->ptr);
+        } catch (const std::exception& e) { error = e.what(); }
+    }
+    if (!error.empty()) fail(error);
+}
+
 NB_MODULE(_core, m) {
     g_error = nb::exception<aether::Error>(m, "Error", PyExc_RuntimeError);
     g_unavailable = nb::steal(PyErr_NewException("aether.CudaUnavailable", g_error.ptr(), nullptr));
     m.attr("CudaUnavailable") = g_unavailable;
+    g_fft_unavailable = nb::steal(PyErr_NewException("aether.FftUnavailable", g_error.ptr(), nullptr));
+    m.attr("FftUnavailable") = g_fft_unavailable;
     g_device_cls = nb::none();
     m.def("_register", [](nb::object device_cls, nb::object dtype_cls) { g_device_cls = device_cls; g_dtype_cls = dtype_cls; });
     m.def("_current_device", [] { int d = 0; check(cuda()->current_device(&d), "current device"); return d; });
@@ -489,6 +570,14 @@ NB_MODULE(_core, m) {
     m.def("_from_cai", &from_cai);
     m.def("_copy", [](const Array& s, Array& d, nb::object stream) { copy(s, d, stream); }, nb::arg("src"), nb::arg("dst"), nb::arg("stream").none());
     m.def("_drain", &drain);
+    nb::class_<FftPlan>(m, "FftPlan")
+        .def_prop_ro("kind", [](const FftPlan& p) { return p.kind; })
+        .def_prop_ro("input_shape", [](const FftPlan& p) { return nb::tuple(nb::cast(p.in_shape())); })
+        .def_prop_ro("output_shape", [](const FftPlan& p) { return nb::tuple(nb::cast(p.out_shape())); })
+        .def("execute", [](FftPlan& p, const Array& in, Array& out, nb::object stream) { fft_execute(p, in, out, stream); },
+             nb::arg("input"), nb::arg("output"), nb::arg("stream").none() = nb::none());
+    m.def("_fft_plan", &fft_plan, nb::arg("kind"), nb::arg("dtype"), nb::arg("device_kind"), nb::arg("device_index"), nb::arg("shape"),
+          nb::arg("axes"), nb::arg("forward"), nb::arg("norm"), nb::arg("stream").none() = nb::none());
     m.def("_exports_live", [] { return g_exports.load(); });
     nb::module_::import_("atexit").attr("register")(nb::cpp_function(&drain));
 

@@ -20,6 +20,7 @@
 #include "corpus/f64/mat3x2.h"
 #include "corpus/f64/quat.h"
 #include "corpus/f64/scalar.h"
+#include "corpus/f64/ray.h"
 #include "corpus/f32/vec1.h"
 #include "corpus/f32/vec2.h"
 #include "corpus/f32/vec3.h"
@@ -32,3 +33,4 @@
 #include "corpus/f32/mat3x2.h"
 #include "corpus/f32/quat.h"
 #include "corpus/f32/scalar.h"
+#include "corpus/f32/ray.h"

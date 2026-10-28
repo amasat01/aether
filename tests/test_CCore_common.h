@@ -80,6 +80,7 @@
 #include <aether/view/Item.h>
 
 #include "c_core/aether_c_corpus.h"
+#include "test_Ray_corpus.h"
 
 /// A shaped corpus function: `aether_c_<w>_<s>_<k>` (e.g. `AC(f64, vec3, dot)`,
 /// `AC(f32, mat2x3, mm_mat3x2)`, `AC(f64, quat, rotate)`).
@@ -489,6 +490,36 @@ void checkKind(const Corpus<T>& corpus, const char* w, const char* shape, const 
 CCORE_FAMILIES(f64, double)
 CCORE_FAMILIES(f32, float)
 
+// ---- ray primitives: aether/geometry/Ray.h against the ray_* C functions ----
+// Lanes are the ones of test_Ray_common.h (hand cases with signed zeros and
+// infinite `tmax`, then 256 random). The comparison is bit for bit.
+
+#define CCORE_RAY_CHECK(w, Real) \
+    inline void checkRays_##w() \
+    { \
+        using T = Real; \
+        const auto vec3 = [](const T(&x)[3]) { return aether_c_##w##_vec3_t{ { x[0], x[1], x[2] } }; }; \
+        const auto same = [](const aether::geometry::Vec4<T>& want, const aether_c_##w##_vec4_t& got) { \
+            for (int k = 0; k < 4; ++k) \
+                if (std::memcmp(&want.v[k], &got.v[k], sizeof(T)) != 0) \
+                    return false; \
+            return true; \
+        }; \
+        const auto lanes = ray::corpus<T>(); \
+        for (std::size_t i = 0; i < lanes.size(); ++i) { \
+            const auto& l = lanes[i]; \
+            EXPECT_TRUE(same(ray::tri(l), AS(w, ray_tri)(vec3(l.o), vec3(l.d), vec3(l.a), vec3(l.b), vec3(l.c), l.tmax))) \
+                << "ray_tri, " #w ", lane " << i; \
+            EXPECT_TRUE(same(ray::box(l), AS(w, ray_aabb)(vec3(l.o), vec3(l.d), vec3(l.a), vec3(l.b), l.tmax))) \
+                << "ray_aabb, " #w ", lane " << i; \
+            EXPECT_TRUE(same(ray::sph(l), AS(w, ray_sphere)(vec3(l.o), vec3(l.d), vec3(l.a), l.r, l.tmax))) \
+                << "ray_sphere, " #w ", lane " << i; \
+        } \
+    }
+
+CCORE_RAY_CHECK(f64, double)
+CCORE_RAY_CHECK(f32, float)
+
 } // namespace ccore
 } // namespace aether_tests
 
@@ -504,6 +535,8 @@ TEST(CCore, Mat_f64) { ASSERT_NO_FATAL_FAILURE(checkMat_f64(spread<double>())); 
 TEST(CCore, Mat_f32) { ASSERT_NO_FATAL_FAILURE(checkMat_f32(spread<float>())); }
 TEST(CCore, Quat_f64) { ASSERT_NO_FATAL_FAILURE(checkQuat_f64(spread<double>())); }
 TEST(CCore, Quat_f32) { ASSERT_NO_FATAL_FAILURE(checkQuat_f32(spread<float>())); }
+TEST(CCore, Rays_f64) { checkRays_f64(); }
+TEST(CCore, Rays_f32) { checkRays_f32(); }
 
 /// Every kind of every shape of both widths over the specials, every triple.
 TEST(CCore, SpecialValues)

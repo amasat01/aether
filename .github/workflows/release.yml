@@ -6,7 +6,7 @@
 # find and upload exactly what was tested here instead of rebuilding it.
 #
 # aether-dsc is one distribution with two packages: `aether_dsc` (the sealed payload) and `aether`
-# (CPU/GPU arrays, a compiled nanobind module plus, on linux x86_64, two CUDA plugins). One sdist and
+# (CPU/GPU arrays, a compiled nanobind module plus, on linux x86_64, the CUDA plugin). One sdist and
 # 30 wheels (the platforms and Pythons hawk ships). The payload is NOT source: `python -m aether_dsc.seal` must run
 # before the build, sealing THIS checkout's aether headers (manifest
 # `aether_dsc/payload_headers.txt`) plus the sibling eagle checkout's
@@ -72,9 +72,8 @@ jobs:
           retention-days: 7
           path: aether/dsc/aether_dsc/_payload/
 
-  # One leg per platform. Every leg builds `aether._core` (plain C++, no CUDA); the x86_64 leg also builds the
-  # two CUDA plugins (static cudart 12.9 and 13.0, compiled by g++, no nvcc). The CUDA 13 plugin is built
-  # here and exercised by test-wheel, which is the CI row for it.
+  # One leg per platform. Every leg builds `aether._core` (plain C++, no CUDA); the x86_64 and aarch64 legs also build the
+  # one CUDA plugin (compiled by nvcc 12.9 with -cudart none: it needs the driver and no CUDA runtime, and serves CUDA 12 and 13).
   wheels:
     needs: seal
     strategy:
@@ -104,9 +103,13 @@ jobs:
         'nanobind>=2.2,<3; python_version < "3.10"'
       # The headers sit one directory above the package, outside cibuildwheel's copy: bind-mount the checkout.
       CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro --volume ${{ github.workspace }}/.ccache-cibw:/ccache"
-      CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA12_ROOT=/usr/local/cuda-12.9 AETHER_CUDA13_ROOT=/usr/local/cuda-13.0 CMAKE_BUILD_PARALLEL_LEVEL=2 CCACHE_DIR=/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
-      CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
-      # Static cudart for both majors, x86_64 only (headers + libcudart_static.a, no compiler)
+      CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA_ROOT=/usr/local/cuda-12.9 CMAKE_BUILD_PARALLEL_LEVEL=2 CCACHE_DIR=/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+      # The host FFT runs on OpenMP and includes <omp.h>, which Apple's clang lacks: Homebrew's libomp, which delocate
+      # copies into the wheel (Linux: auditwheel bundles libgomp). Its deployment target is the runner's macOS, so the
+      # wheels declare that too.
+      CIBW_BEFORE_ALL_MACOS: "brew install libomp"
+      CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether MACOSX_DEPLOYMENT_TARGET=14.0 OpenMP_ROOT=/opt/homebrew/opt/libomp CMAKE_PREFIX_PATH=/opt/homebrew/opt/libomp CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
+      # nvcc 12.9 + the runtime headers for the plugin (compiled with -cudart none: no CUDA runtime library is linked or shipped), x86_64 and aarch64 (NVIDIA's aarch64 repo is `sbsa`)
       # ccache from EPEL (AlmaLinux 8); EPEL mirrors fail often on aarch64: retry, then run uncached through a pass-through ccache stand-in
       CIBW_BEFORE_ALL_LINUX: >-
         git config --global --add safe.directory '*';
@@ -114,10 +117,11 @@ jobs:
         command -v ccache >/dev/null || { printf '%s\n' '#!/bin/sh' 'case $1 in -*) exit 0;; esac' 'exec "$@"' > /usr/local/bin/ccache;
         chmod +x /usr/local/bin/ccache; };
         CCACHE_DIR=/ccache ccache -z;
-        if [ "$(uname -m)" = x86_64 ]; then
+        case "$(uname -m)" in x86_64) cuda_repo_arch=x86_64;; aarch64) cuda_repo_arch=sbsa;; *) cuda_repo_arch=;; esac;
+        if [ -n "$cuda_repo_arch" ]; then
         curl -fsSL -o /etc/yum.repos.d/cuda-rhel8.repo
-        https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo &&
-        dnf install -y --setopt=install_weak_deps=False cuda-cudart-devel-12-9 cuda-crt-12-9 cuda-cudart-devel-13-0 cuda-crt-13-0; fi
+        "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/$cuda_repo_arch/cuda-rhel8.repo" &&
+        dnf install -y --setopt=install_weak_deps=False cuda-nvcc-12-9 cuda-cudart-devel-12-9 cuda-crt-12-9; fi
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair -w {dest_dir} {wheel}"
       CIBW_TEST_SKIP: "*"
     steps:
@@ -156,7 +160,9 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then
             args+=(--str "manylinux_2_28 $(docker buildx imagetools inspect "quay.io/pypa/manylinux_2_28_$(uname -m)" --format '{{.Manifest.Digest}}' 2>/dev/null || true)")
           fi
-          echo "key=wheels-v1-$PLAT-$(aether/.github/ci_digest.sh "${args[@]}")" >> "$GITHUB_OUTPUT"
+          digest=$(aether/.github/ci_digest.sh "${args[@]}") || exit 1
+          [ -n "$digest" ] || { echo "::error::empty digest"; exit 1; }
+          echo "key=wheels-v2-$PLAT-$digest" >> "$GITHUB_OUTPUT"
       - id: wh
         uses: actions/cache@v6
         with:
@@ -268,7 +274,7 @@ jobs:
           # the companion check lives in the hawk repo's own CI; here the lines must stay what the header says
           grep -c 'CIBW_BUILD: "cp39-' aether/.github/workflows/release.yml
 
-      - name: Wheel contents - zero Requires-Dist, plugins on x86_64 only, only the seam exported
+      - name: Wheel contents - zero Requires-Dist, both plugins on x86_64 and aarch64, right ELF arch, only the seam exported
         run: |
           python - <<'PY'
           import glob, zipfile, subprocess, tempfile, os, re
@@ -277,18 +283,34 @@ jobs:
               names = z.namelist()
               meta = next(n for n in names if n.endswith(".dist-info/METADATA"))
               assert not [l for l in z.read(meta).decode().splitlines() if l.startswith("Requires-Dist") and "extra ==" not in l], whl
-              plugins = sorted(os.path.basename(n) for n in names if re.search(r"aether/libaether_cuda\d+\.so$", n))
-              want = ["libaether_cuda12.so", "libaether_cuda13.so"] if "x86_64" in whl and "manylinux" in whl else []
+              plugins = sorted(os.path.basename(n) for n in names if re.search(r"aether/libaether_cuda\.so$", n))
+              want = ["libaether_cuda.so"] if "manylinux" in whl and ("x86_64" in whl or "aarch64" in whl) else []
               assert plugins == want, (whl, plugins)
               assert not any("libcudart" in n or "libcuda." in n for n in names), whl
+              # the OpenMP runtime travels inside the wheel (there is no Requires-Dist for it)
+              omp = [n for n in names if re.search(r"\.libs/libgomp|\.dylibs/libomp", n)]
+              assert bool(omp) == ("manylinux" in whl or "macosx" in whl), (whl, omp)
               assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
+                  machine = 62 if "x86_64" in whl else 183   # ELF e_machine: x86-64 / AArch64
                   with tempfile.TemporaryDirectory() as d:
                       for p in plugins:
-                          open(f"{d}/{p}", "wb").write(z.read(f"aether/{p}"))
-                          out = subprocess.run(["nm", "-D", "--defined-only", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
-                          syms = {l.split()[-1].split("@")[0] for l in out.splitlines() if l.strip()}
+                          blob = z.read(f"aether/{p}")
+                          assert int.from_bytes(blob[18:20], "little") == machine, (whl, p)
+                          open(f"{d}/{p}", "wb").write(blob)
+                          # readelf, not nm: it reads any ELF, so the x86 runner can check the aarch64 plugin
+                          out = subprocess.run(["readelf", "--dyn-syms", "--wide", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
+                          syms = set()
+                          for l in out.splitlines():
+                              f = l.split()
+                              if len(f) >= 8 and f[0][:-1].isdigit() and f[6] != "UND" and f[3] != "SECTION":
+                                  syms.add(f[7].split("@")[0])
                           assert syms == {"aether_memory_v1"}, (p, syms)
+                          # the driver API only: no CUDA runtime library needed, no CUDA symbol left undefined
+                          dyn = subprocess.run(["readelf", "-d", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
+                          assert "libcudart" not in dyn and "libcuda" not in dyn, (p, dyn)
+                          undef = subprocess.run(["nm", "-D", "-u", f"{d}/{p}"], capture_output=True, text=True, check=True).stdout
+                          assert not [l for l in undef.splitlines() if " cu" in l or "cuda" in l.lower()], (p, undef)
           print("OK")
           PY
 
@@ -308,10 +330,12 @@ jobs:
 
   test-wheel:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    name: test-wheel (${{ matrix.runner }}, ${{ matrix.python-version }})
     strategy:
       fail-fast: false
       matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t"]
     steps:
       - uses: actions/checkout@v7
@@ -328,29 +352,19 @@ jobs:
           . venv/bin/activate
           pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" aether-dsc
           pip check
-          pip install --quiet pytest "raptor-core>=0.7,<0.8"   # test-only: test_ft_payload uses raptor's free-threading rows
+          pip install --quiet --prefer-binary pytest numpy "raptor-core>=0.7,<0.8"   # test-only: test_arrays compares with numpy, test_ft_payload uses raptor's free-threading rows
           python - <<'PY'
           import aether_dsc, aether
           p = aether_dsc.payload()
           assert p.headers and p.digest
           a = aether.zeros((2, 3), "float32")
           assert a.shape == (2, 3) and memoryview(a).nbytes == 24
-          # no GPU on this runner: both plugins load, their cudart answers "no device" or "driver too old",
-          # and the error names both
+          # no GPU (and here no driver) on this runner: the plugin loads, asks the driver, and the error names it
           try:
               aether.empty(8, device="cuda")
           except aether.CudaUnavailable as exc:
-              assert "cuda13" in str(exc) and "cuda12" in str(exc), exc
+              assert "CUDA driver" in str(exc), exc
           print("OK")
-          PY
-          # the CUDA 13 plugin is its own check: it must load and answer
-          AETHER_CUDA_MAJOR=13 python - <<'PY'
-          import aether
-          try:
-              aether.empty(8, device="cuda")
-          except aether.CudaUnavailable as exc:
-              assert "cuda13 runtime" in str(exc), exc
-              print("OK: the CUDA 13 plugin loaded and reported:", exc)
           PY
           # the payload does not depend on the arrays
           rm venv/lib/python*/site-packages/aether/_core*.so

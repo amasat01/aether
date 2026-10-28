@@ -50,7 +50,7 @@ def build_sdist(sdist_directory, config_settings=None):
     root = _HERE.parent
     shutil.rmtree(_INCLUDE, ignore_errors=True)
     _copy_closure(root, ["aether/interop/DLPack.h", "aether/interop/DLPackLegacy.h", "aether/chunk/Chunk.h",
-                         "aether/chunk/Fill.h", "aether/residency/Transport.h"])
+                         "aether/chunk/Fill.h", "aether/residency/Transport.h", "aether/fft/Fft.h", "aether/backend/cuda/DriverRuntime.inl"])
     try:
         return _build_sdist(sdist_directory, config_settings)
     finally:

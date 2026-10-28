@@ -7,10 +7,10 @@ One ``Array`` type for every place memory can live: ``device="cpu"``, ``"pinned"
 ``memoryview`` see them without a copy; every array speaks DLPack, and device arrays also
 ``__cuda_array_interface__``. No maths lives here. Nothing here imports numpy.
 
-``import aether`` needs no CUDA. The CUDA runtime comes from a plugin shipped in the wheel
-(``libaether_cuda13.so`` then ``libaether_cuda12.so``, the first the driver accepts;
-``AETHER_CUDA_MAJOR=12|13`` forces one) and loads on the first device call; without one a device call
-raises ``CudaUnavailable``.
+``import aether`` needs no CUDA. The GPU side is one plugin shipped in the wheel (``libaether_cuda.so``, for CUDA 12
+and 13 alike). It speaks to the driver API only: it needs ``libcuda.so.1`` and no CUDA runtime library or toolkit,
+and loads on the first device call; without a usable driver a device call raises ``CudaUnavailable``.
+``cuda_runtime_version()`` is the CUDA version the installed driver supports.
 
 Python ``aether.Array`` mirrors the C++ ``Chunk`` + ``RuntimeView`` (one buffer on one device), not the
 C++ ``aether::Array`` (a host-mirrored structure of arrays)."""
@@ -21,12 +21,12 @@ except ImportError as exc:                                   # pragma: no cover
     raise ImportError("aether: _core is not built for this interpreter (no wheel for this platform or "
                       "Python, and no source build); aether_dsc, the sealed payload, still works") from exc
 
-from ._core import Array, CudaUnavailable, Error, cuda_plugin, cuda_runtime_version
+from ._core import Array, CudaUnavailable, Error, FftUnavailable, cuda_plugin, cuda_runtime_version
 from ._dtype import Device, DType, parse as _dtype
 
 _core._register(Device, DType)
 
-__all__ = ["Array", "Device", "DType", "Error", "CudaUnavailable", "asarray", "copy", "cuda_plugin",
+__all__ = ["fft", "Array", "Device", "DType", "Error", "CudaUnavailable", "FftUnavailable", "asarray", "copy", "cuda_plugin",
            "cuda_runtime_version", "empty", "empty_like", "from_dlpack", "full", "pinned", "zeros", "zeros_like"]
 
 _KIND = {"cpu": 0, "cuda": 1, "pinned": 2}
@@ -158,3 +158,4 @@ def copy(src, into=None, stream=None):
     d = _view(into, None)
     _core._copy(s, d, stream)
     return into
+from . import fft  # noqa: E402  (batched FFTs; see aether/fft.py)

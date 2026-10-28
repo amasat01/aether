@@ -248,5 +248,26 @@ TEST_F(TransportOrderingTest, OrderingWitnessAcrossDevicesTwoGpuRedWithoutWaitGr
     ASSERT_EQ(cudaStreamDestroy(streamB), cudaSuccess);
 }
 
+/** @brief A staged (pageable host to device) copy leaves the transport's bounce buffer busy; the next staged copy
+ *         waits for it. That wait must not use the first copy's stream, which the caller may have destroyed. */
+TEST_F(TransportOrderingTest, StagedUploadSurvivesItsStreamBeingDestroyed)
+{
+    constexpr std::size_t n = 4096;
+    std::vector<double> host(n, 3.0), back(n, 0.0);
+    aether::Chunk dev = aether::Chunk::allocate(aether::Device(kDLCUDA, 0), n * sizeof(double), nullptr);
+    aether::Chunk hostChunk = aether::Chunk::borrow(host.data(), n * sizeof(double), aether::Device(kDLCPU));
+    aether::Chunk backChunk = aether::Chunk::borrow(back.data(), n * sizeof(double), aether::Device(kDLCPU));
+    aether::StreamTransport transport;
+
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    transport.copyOrdered(dev, hostChunk, stream);   // staged upload: the bounce buffer is now in use on `stream`
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+
+    transport.copyOrdered(backChunk, dev, nullptr);  // staged download: waits for the bounce buffer
+    for (double v : back) ASSERT_EQ(v, 3.0);
+}
+
 } // namespace
 } // namespace aether_tests

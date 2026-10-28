@@ -25,7 +25,9 @@
 
 #include <concepts>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "aether/chunk/Chunk.h"
@@ -161,7 +163,7 @@ public:
             return;
         const std::string where = detail::pathLabel(src, dst);
         if (bounceBusy_) {
-            err::checkCuda(cudaStreamSynchronize(bounceStream_), "copyOrdered", where, bytes);
+            err::checkCuda(cudaEventSynchronize(bounceDone_.get()), "copyOrdered", where, bytes);
             bounceBusy_ = false;
         }
         {
@@ -172,8 +174,14 @@ public:
         if (srcPageable) {
             std::memcpy(stage.data(), src.data(), bytes);
             aether::copyAsync(dst, stage, stream);
-            bounceBusy_   = true;
-            bounceStream_ = stream;
+            // An event, not the stream: the caller may destroy `stream` before the next staged copy waits.
+            if (!bounceDone_) {
+                cudaEvent_t ev;
+                err::checkCuda(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming), "cudaEventCreate", where, bytes);
+                bounceDone_.reset(ev);
+            }
+            err::checkCuda(cudaEventRecord(bounceDone_.get(), stream), "cudaEventRecord", where, bytes);
+            bounceBusy_ = true;
         } else {
             aether::copyAsync(stage, src, stream);
             err::checkCuda(cudaStreamSynchronize(stream), "copyOrdered", where, bytes);
@@ -264,9 +272,12 @@ private:
 
     BounceBuffer bounce_;
     std::vector<cudaEvent_t> events_;
-    /** @brief `true` while the last staged upload may still be reading `bounce_` (on `bounceStream_`). */
-    bool bounceBusy_      = false;
-    Stream bounceStream_  = nullptr;
+    struct EventDeleter {
+        void operator()(cudaEvent_t ev) const noexcept { cudaEventDestroy(ev); }
+    };
+    /** @brief `true` while the last staged upload may still be reading `bounce_`; `bounceDone_` completes with it. */
+    bool bounceBusy_ = false;
+    std::unique_ptr<std::remove_pointer_t<cudaEvent_t>, EventDeleter> bounceDone_;
 #endif
     bool forceStaging_ = false;
 };
