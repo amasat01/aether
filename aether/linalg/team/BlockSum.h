@@ -10,9 +10,9 @@
  *
  * The Gram matrix of a tall Jacobian (`J^T J`: `u = v = J`) and the gradient
  * `J^T r` (`v` one column wide). One thread owns each entry `G(i, j)` and adds the rows
- * in index order, serially: no atomics, no cross-thread floating reduction, so
- * the result equals the serial loop to the compiler's contraction and does not depend on the
- * team size.
+ * in index order, serially: no atomics, no cross-thread floating reduction, so the
+ * result does not depend on the team size. On the host each product is rounded before it
+ * is added (no contraction), so any two call shapes agree bit for bit.
  */
 
 #include "aether/linalg/team/Team.h"
@@ -53,7 +53,9 @@ AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, 
             const std::size_t sample = index != nullptr ? static_cast<std::size_t>(index[first + r]) : first + r;
             for (std::size_t q = 0; q < rowsPer; ++q) {
                 const std::size_t row = sample * rowsPer + q;
-                s += u[row * strideU + i] * v[row * strideV + j];
+                T prod = u[row * strideU + i] * v[row * strideV + j];
+                AETHER_FP_BARRIER(prod);  // never fused into the sum: the host rounds like every other build
+                s += prod;
             }
         }
         g[i * (strideGI != 0 ? strideGI : Q) + j * (strideGJ != 0 ? strideGJ : 1)] = s;
