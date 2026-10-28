@@ -131,6 +131,12 @@ if(UNIX)
           endforeach()
         endforeach()
       endforeach()
+      # install_name_tool invalidates the signatures, and Apple silicon kills a process that maps an invalid one:
+      # re-sign (ad hoc) what was rewritten.
+      foreach(_f IN LISTS _cores ITEMS "${_dest}/_omp/libomp.dylib")
+        execute_process(COMMAND codesign --force --sign - "${_f}" COMMAND_ERROR_IS_FATAL ANY)
+        execute_process(COMMAND codesign --verify "${_f}" COMMAND_ERROR_IS_FATAL ANY)
+      endforeach()
     ]])
   endif()
 endif()
