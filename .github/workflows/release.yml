@@ -303,7 +303,9 @@ jobs:
                           syms = set()
                           for l in out.splitlines():
                               f = l.split()
-                              if len(f) >= 8 and f[0][:-1].isdigit() and f[6] != "UND" and f[3] != "SECTION":
+                              # exported = defined and bindable (GLOBAL/WEAK/UNIQUE); a LOCAL entry the manylinux toolchain
+                              # leaves in .dynsym is not visible to a loader
+                              if len(f) >= 8 and f[0][:-1].isdigit() and f[6] != "UND" and f[3] != "SECTION" and f[4] != "LOCAL":
                                   syms.add(f[7].split("@")[0])
                           assert syms == {"aether_memory_v1"}, (p, syms)
                           # the driver API only: no CUDA runtime library needed, no CUDA symbol left undefined
