@@ -62,8 +62,9 @@ install(TARGETS _core LIBRARY DESTINATION aether)
 # Linux. Dependents ask `aether_dsc.openmp()` for the file and link that one.
 if(UNIX)
   set(_omp_real "")
-  if(NOT APPLE)
-    # In a gcc-toolset `libgomp.so` is a linker SCRIPT; ask the compiler for the real shared object.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # The runtime follows the compiler: GCC code calls libgomp (GOMP_*), clang code calls LLVM's libomp (__kmpc_*), and each
+    # lacks the other's symbols. In a gcc-toolset `libgomp.so` is a linker SCRIPT; ask the compiler for the real object.
     execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=libgomp.so.1
                     OUTPUT_VARIABLE _omp_cand OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(IS_ABSOLUTE "${_omp_cand}" AND EXISTS "${_omp_cand}")
@@ -85,13 +86,20 @@ if(UNIX)
     set(_omp_name libomp.dylib)
     set_target_properties(_core PROPERTIES INSTALL_RPATH "@loader_path/_omp")
   else()
-    set(_omp_name libgomp.so.1)
     set_target_properties(_core PROPERTIES INSTALL_RPATH "$ORIGIN/_omp")
   endif()
   # Refuse by name anything that is not a binary (a text linker script copied here fails at import: "invalid ELF header").
   file(READ "${_omp_real}" _omp_magic LIMIT 4 HEX)
   if(NOT (_omp_magic STREQUAL "7f454c46" OR _omp_magic STREQUAL "cffaedfe" OR _omp_magic STREQUAL "cafebabe"))
     message(FATAL_ERROR "the OpenMP runtime ${_omp_real} is not an ELF or Mach-O binary (magic ${_omp_magic}): a linker script?")
+  endif()
+  if(NOT APPLE)
+    # Ship it under its own SONAME so `_core`'s NEEDED entry resolves through the rpath (libgomp.so.1, libomp.so, ...).
+    execute_process(COMMAND readelf -d "${_omp_real}" OUTPUT_VARIABLE _omp_dyn ERROR_QUIET)
+    if(NOT _omp_dyn MATCHES "Library soname: \\[([^]]+)\\]")
+      message(FATAL_ERROR "the OpenMP runtime ${_omp_real} has no SONAME (readelf -d found none)")
+    endif()
+    set(_omp_name "${CMAKE_MATCH_1}")
   endif()
   message(STATUS "OpenMP runtime shipped as aether/_omp/${_omp_name}: ${_omp_real}")
   install(FILES "${_omp_real}" DESTINATION aether/_omp RENAME ${_omp_name})

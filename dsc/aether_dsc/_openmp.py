@@ -42,8 +42,11 @@ def openmp() -> OpenMP | None:
         return None
     for root in spec.submodule_search_locations:
         directory = Path(root) / "_omp"
-        name = "libomp.dylib" if sys.platform == "darwin" else "libgomp.so.1"
-        library = directory / name
+        if sys.platform == "darwin":
+            library = directory / "libomp.dylib"
+        else:   # libgomp.so.1 from a GCC build, libomp.so (LLVM) from a clang build: whichever the wheel carries
+            found = sorted(directory.glob("lib*omp*.so*")) if directory.is_dir() else []
+            library = found[0] if found else directory / "libgomp.so.1"
         if library.is_file():
             include = directory / "include"
             has_include = (include / "omp.h").is_file()
