@@ -294,6 +294,8 @@ jobs:
               omp = sorted(n for n in names if re.search(r"lib(gomp|omp|iomp)[^/]*\.(so|dylib)", n))
               want_omp = ["aether/_omp/libgomp.so.1"] if "manylinux" in whl else ["aether/_omp/libomp.dylib"] if "macosx" in whl else []
               assert omp == want_omp, (whl, omp)
+              for n in omp:   # a binary, not a linker script: ELF on Linux, Mach-O on macOS
+                  assert z.read(n)[:4] in (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"), (whl, n)
               assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
                   machine = 62 if "x86_64" in whl else 183   # ELF e_machine: x86-64 / AArch64
