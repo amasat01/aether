@@ -296,6 +296,16 @@ jobs:
               assert omp == want_omp, (whl, omp)
               for n in omp:   # a binary, not a linker script: ELF on Linux, Mach-O on macOS
                   assert z.read(n)[:4] in (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"), (whl, n)
+              if "macosx" in whl:   # `_core` reaches the runtime through @rpath, never an absolute (Homebrew) path
+                  blob = z.read(next(n for n in names if re.fullmatch(r"aether/_core\.[^/]*\.so", n)))
+                  assert blob[:4] == b"\xcf\xfa\xed\xfe", (whl, "a thin 64-bit Mach-O _core is expected")
+                  refs, off = [], 32
+                  for _ in range(int.from_bytes(blob[16:20], "little")):
+                      cmd, size = (int.from_bytes(blob[off + k:off + k + 4], "little") for k in (0, 4))
+                      if cmd in (0xC, 0x80000018, 0x8000001F):   # LOAD_DYLIB, LOAD_WEAK_DYLIB, REEXPORT_DYLIB
+                          refs.append(blob[off + int.from_bytes(blob[off + 8:off + 12], "little"):off + size].split(b"\0")[0].decode())
+                      off += size
+                  assert [r for r in refs if re.search(r"omp[^/]*\.dylib$", r)] == ["@rpath/libomp.dylib"], (whl, refs)
               assert not any(n.startswith("aether/") and n.endswith(".py") and re.search(r"^\s*(import|from)\s+numpy\b", z.read(n).decode(), re.M) for n in names), whl
               if want and "cp312-cp312-" in whl:
                   machine = 62 if "x86_64" in whl else 183   # ELF e_machine: x86-64 / AArch64
