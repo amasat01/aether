@@ -29,7 +29,7 @@
  * loop is kept rolled, so the working set sits in local memory at any size.
  *
  * Matrices too large for one lane (`N` up to 4096) are worked on by a team of
- * threads in caller-provided scratch: `aether/linalg/team/team.h`.
+ * threads in caller-provided scratch: `aether/linalg/team.h`.
  *
  * Failure policy: a failed factorisation reports `info > 0` and every solve,
  * inverse and determinant built on it returns zeros.
@@ -39,4 +39,4 @@
 #include "aether/linalg/Eigh.h"
 #include "aether/linalg/Lu.h"
 #include "aether/linalg/Triangular.h"
-#include "aether/linalg/team/team.h"
+#include "aether/linalg/team.h"

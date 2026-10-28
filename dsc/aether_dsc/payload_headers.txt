@@ -53,6 +53,7 @@ aether/linalg/Lu.h
 aether/linalg/Triangular.h
 aether/linalg/detail/Common.h
 aether/linalg/linalg.h
+aether/linalg/team.h
 aether/linalg/team/BlockSum.h
 aether/linalg/team/Cholesky.h
 aether/linalg/team/Eigh.h
@@ -60,7 +61,6 @@ aether/linalg/team/Lu.h
 aether/linalg/team/Qr.h
 aether/linalg/team/Team.h
 aether/linalg/team/Triangular.h
-aether/linalg/team/team.h
 aether/macros.h
 aether/math/detail/BandedFwd.h
 aether/math/detail/BoundedTrig.h
