@@ -12,8 +12,9 @@
  * sweeps, the same skip test) and one thread computes each rotation; the
  * team splits the rotation's `k` loop, whose entries are independent. Every
  * entry therefore sees the same arithmetic as in `linalg::eigh`: the result
- * agrees with the one-thread result to a few ulp (a compiler may contract the
- * two loops differently) and is bitwise independent of the team size. The rotations are sequential, so this is slow at large `N`.
+ * agrees with the one-thread result, and with another team size, to the ULP
+ * contract (`50 N eps`; a compiler may contract two call sites differently).
+ * The rotations are sequential, so this is slow at large `N`.
  * `info` is the same bit mask.
  *
  * Scratch: `w` `N`, `v` `N*N`, `work` `eighWorkSize(N)` elements, `info` 1.

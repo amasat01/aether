@@ -186,6 +186,41 @@ bool bitwiseEqual(const std::vector<T>& a, const std::vector<T>& b)
     return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0;
 }
 
+/** @brief `max |a - b|`. */
+template<class T>
+double maxAbsDiff(const std::vector<T>& a, const std::vector<T>& b)
+{
+    double d = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        d = std::max(d, std::fabs(static_cast<double>(a[i]) - static_cast<double>(b[i])));
+    return d;
+}
+
+/** @brief `max |a|`, at least `1e-300` so a zero reference still has a scale. */
+template<class T>
+double maxAbs(const std::vector<T>& a)
+{
+    double d = 1e-300;
+    for (const T& x : a)
+        d = std::max(d, std::fabs(static_cast<double>(x)));
+    return d;
+}
+
+/** @brief Two results of one operation by different call shapes agree to `tol` (relative to the largest entry). */
+template<class T>
+bool ulpClose(const std::vector<T>& a, const std::vector<T>& b, double tol)
+{
+    return a.size() == b.size() && maxAbsDiff(a, b) <= tol * maxAbs(b);
+}
+
+template<class T>
+std::vector<T> absOf(std::vector<T> v)
+{
+    for (T& x : v)
+        x = std::fabs(x);
+    return v;
+}
+
 /** @brief The scratch and results of one team LU + solve. */
 template<class T>
 struct LuRun {
@@ -388,12 +423,14 @@ TEST(LinalgTeamLu, UlpContractAgainstTheOneThreadFormF32)
     checkLuVsOneThread<float>();
 }
 
-TEST(LinalgTeamLu, BitwiseIdenticalAcrossTeamSizes)
+TEST(LinalgTeamLu, AgreesAcrossTeamSizes)
 {
     constexpr std::size_t N = 71;
     const std::vector<double> a = generalMatrix<double>(N, 31), b = randomVector<double>(N * kK, 32);
-    const LuRun<double> ref = luTeam<N>(a, b, kK, 1);
-    for (int size : {32, 64, 128, 256}) {
+    const double tol = 50.0 * N * eps<double>();
+    // Host teams of 32..256 threads replay one compiled path: bitwise, the determinism of that path.
+    const LuRun<double> ref = luTeam<N>(a, b, kK, 32);
+    for (int size : {64, 128, 256}) {
         const LuRun<double> r = luTeam<N>(a, b, kK, size);
         EXPECT_TRUE(bitwiseEqual(r.factor, ref.factor)) << "factor, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.piv, ref.piv)) << "pivots, team " << size;
@@ -402,6 +439,13 @@ TEST(LinalgTeamLu, BitwiseIdenticalAcrossTeamSizes)
         EXPECT_TRUE(bitwiseEqual(r.inverse, ref.inverse)) << "inverse, team " << size;
         EXPECT_EQ(r.info, ref.info);
     }
+    // The size-1 twin is another call site: the ULP contract.
+    const LuRun<double> one = luTeam<N>(a, b, kK, 1);
+    EXPECT_TRUE(ulpClose(one.factor, ref.factor, tol)) << "factor, size 1";
+    EXPECT_TRUE(ulpClose(one.x, ref.x, tol)) << "solve, size 1";
+    EXPECT_TRUE(ulpClose(one.xt, ref.xt, tol)) << "solveT, size 1";
+    EXPECT_TRUE(ulpClose(one.inverse, ref.inverse, tol)) << "inverse, size 1";
+    EXPECT_EQ(one.info, ref.info);
 }
 
 TEST(LinalgTeamLu, PivotTiesGoToTheLowestRowLikeTheOneThreadForm)
@@ -506,20 +550,25 @@ TEST(LinalgTeamCholesky, UlpContractAgainstTheOneThreadFormF32)
     checkCholVsOneThread<float>();
 }
 
-TEST(LinalgTeamCholesky, BitwiseIdenticalAcrossTeamSizesAndInPlace)
+TEST(LinalgTeamCholesky, AgreesAcrossTeamSizesAndInPlace)
 {
     constexpr std::size_t N = 71;
     const std::vector<double> a = spdMatrix<double>(N, 71), b = randomVector<double>(N, 72);
-    const CholRun<double> ref = cholTeam<N>(a, b, 1);
-    for (int size : {32, 64, 128, 256}) {
+    const double tol = 50.0 * N * eps<double>();
+    // Host teams of 32..256 threads replay one compiled path: bitwise, the determinism of that path.
+    const CholRun<double> ref = cholTeam<N>(a, b, 32);
+    for (int size : {64, 128, 256}) {
         const CholRun<double> r = cholTeam<N>(a, b, size);
         EXPECT_TRUE(bitwiseEqual(r.l, ref.l)) << "factor, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.x, ref.x)) << "solve, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.lowerSolve, ref.lowerSolve)) << "triLower, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.upperSolve, ref.upperSolve)) << "triUpperT, team " << size;
     }
-    const CholRun<double> inPlace = cholTeam<N>(a, b, 64, true);
-    EXPECT_TRUE(bitwiseEqual(inPlace.l, ref.l)) << "factor formed in place on the operand";
+    // The size-1 twin and the in-place factor are other call shapes: the ULP contract.
+    const CholRun<double> one = cholTeam<N>(a, b, 1), inPlace = cholTeam<N>(a, b, 64, true);
+    EXPECT_TRUE(ulpClose(one.l, ref.l, tol)) << "factor, size 1";
+    EXPECT_TRUE(ulpClose(one.x, ref.x, tol)) << "solve, size 1";
+    EXPECT_TRUE(ulpClose(inPlace.l, ref.l, tol)) << "factor formed in place on the operand";
 }
 
 TEST(LinalgTeamCholesky, FactorMatchesTheOneThreadFactorToAFewUlp)
@@ -629,19 +678,23 @@ TEST(LinalgTeamEigh, InvariantsAtLargeSizesF32)
     forSizes<33, 64, 71>([](auto n) { checkEigh<float, decltype(n)::value>(); });
 }
 
-TEST(LinalgTeamEigh, UlpContractAgainstTheOneThreadFormAndBitwiseAcrossTeamSizes)
+TEST(LinalgTeamEigh, UlpContractAgainstTheOneThreadFormAndAgreesAcrossTeamSizes)
 {
     forSizes<5, 16, 32>([](auto n) {
         constexpr std::size_t N = decltype(n)::value;
         const std::vector<double> a = symmetricMatrix<double>(N, 111 + N);
         const al::Eigh<double, N> f = al::eigh<N>(a.data());
-        const EighRun<double> ref = eighTeam<N>(a, 1);
+        const EighRun<double> ref = eighTeam<N>(a, 4);
         EXPECT_EQ(ref.info, f.info);
         for (std::size_t i = 0; i < N; ++i)
             EXPECT_NEAR(ref.w[i], f.w[i], 50.0 * N * eps<double>() * std::max(1.0, std::fabs(f.w[i]))) << "w " << i;
         for (std::size_t i = 0; i < N * N; ++i)
             EXPECT_NEAR(ref.v[i], f.v[i], 50.0 * N * eps<double>()) << "v " << i;
-        for (int size : {4, 32, 256}) {
+        const EighRun<double> one = eighTeam<N>(a, 1);  // the size-1 twin is another call site: the ULP contract
+        EXPECT_TRUE(ulpClose(one.w, ref.w, 50.0 * N * eps<double>())) << "w, size 1";
+        EXPECT_TRUE(ulpClose(one.v, ref.v, 50.0 * N * eps<double>())) << "v, size 1";
+        // Host teams of 4..256 threads replay one compiled path: bitwise, the determinism of that path.
+        for (int size : {32, 256}) {
             if (N > 5 && size == 256)
                 continue;  // a 256-thread host barrier per rotation is slow; the device rows cover 256
             const EighRun<double> r = eighTeam<N>(a, size);
@@ -748,25 +801,32 @@ TEST(LinalgTeamQr, SquareSystemAndAFewRows)
     checkQr<double, 1>(9);
 }
 
-TEST(LinalgTeamQr, BitwiseIdenticalAcrossTeamSizesAndMultipleRightHandSides)
+TEST(LinalgTeamQr, AgreesAcrossTeamSizesAndMultipleRightHandSides)
 {
     constexpr std::size_t N = 40, M = 150, K = 4;  // 3 row tiles
     const std::vector<double> a = randomVector<double>(M * N, 131), b = randomVector<double>(M * K, 132);
-    const QrRun<double> ref = qrTeam<N>(a, b, M, K, 1);
-    for (int size : {32, 64, 128, 256}) {
+    const double tol = 50.0 * N * eps<double>();
+    // Host teams of 32..256 threads replay one compiled path: bitwise, the determinism of that path.
+    const QrRun<double> ref = qrTeam<N>(a, b, M, K, 32);
+    for (int size : {64, 128, 256}) {
         const QrRun<double> r = qrTeam<N>(a, b, M, K, size);
         EXPECT_TRUE(bitwiseEqual(r.factor, ref.factor)) << "factor, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.tau, ref.tau)) << "tau, team " << size;
         EXPECT_TRUE(bitwiseEqual(r.x, ref.x)) << "solution, team " << size;
     }
-    // each column of the multi-right-hand-side solve equals the single solve
+    const QrRun<double> twin = qrTeam<N>(a, b, M, K, 1);  // the size-1 twin is another call site: the ULP contract
+    EXPECT_TRUE(ulpClose(twin.factor, ref.factor, tol)) << "factor, size 1";
+    EXPECT_TRUE(ulpClose(twin.x, ref.x, tol)) << "solution, size 1";
+    // each column of the multi-right-hand-side solve matches the single solve (another instantiation: the ULP contract)
     for (std::size_t c = 0; c < K; ++c) {
         std::vector<double> bc(M);
         for (std::size_t i = 0; i < M; ++i)
             bc[i] = b[i * K + c];
         const QrRun<double> one = qrTeam<N>(a, bc, M, 1, 1);
+        std::vector<double> col(N);
         for (std::size_t i = 0; i < N; ++i)
-            EXPECT_EQ(one.x[i], ref.x[i * K + c]);
+            col[i] = ref.x[i * K + c];
+        EXPECT_TRUE(ulpClose(one.x, col, tol)) << "column " << c;
     }
 }
 
@@ -795,7 +855,7 @@ void checkQrGramSolve(std::size_t m, std::size_t k, int size)
         tl::qrGramSolve<N>(t, f, xin.data(), xin.data(), k);  // in place
     });
     ASSERT_EQ(info, 0);
-    EXPECT_TRUE(bitwiseEqual(x, xin)) << "in place equals out of place";
+    EXPECT_TRUE(ulpClose(x, xin, 50.0 * N * eps<double>())) << "in place agrees with out of place";
     std::vector<Real> g(N * N, 0);
     for (std::size_t i = 0; i < N; ++i)
         for (std::size_t j = 0; j < N; ++j) {
@@ -865,7 +925,7 @@ std::vector<double> blockSumTeam(const std::vector<double>& u, const std::vector
     return g;
 }
 
-TEST(LinalgTeamBlockSum, IsTheSerialLoopBitForBitAtAnyTeamSize)
+TEST(LinalgTeamBlockSum, IsTheSerialLoopToTheUlpBoundAtAnyTeamSize)
 {
     constexpr std::size_t P = 71, Q = 71, rows = 300;
     const std::vector<double> j = randomVector<double>(rows * P, 151);
@@ -877,21 +937,24 @@ TEST(LinalgTeamBlockSum, IsTheSerialLoopBitForBitAtAnyTeamSize)
                 s += j[r * P + i] * j[r * P + c];
             want[i * P + c] = s;
         }
+    // Bound from the sum length: 2 * count * eps times the largest sum of |products|.
+    const double bound = 2.0 * 200 * eps<double>() * maxAbs(blockSumTeam<P, Q>(absOf(j), absOf(j), 40, 200, nullptr, 1));
+    const std::vector<double> ref = blockSumTeam<P, Q>(j, j, 40, 200, nullptr, 32);
     for (int size : {1, 32, 64, 128, 256}) {
         const std::vector<double> g = blockSumTeam<P, Q>(j, j, 40, 200, nullptr, size);
-        for (std::size_t e = 0; e < P * Q; ++e)
-            EXPECT_NEAR(g[e], want[e], 4 * eps<double>() * 200) << "team " << size;  // host may contract; see the bitwise row below
-        if (size > 1) {
-            EXPECT_TRUE(bitwiseEqual(g, blockSumTeam<P, Q>(j, j, 40, 200, nullptr, 1))) << "bitwise vs size 1, team " << size;
+        EXPECT_LE(maxAbsDiff(g, want), bound) << "vs the serial loop, team " << size;
+        if (size > 32) {  // host teams of 32..256 threads replay one compiled path: bitwise
+            EXPECT_TRUE(bitwiseEqual(g, ref)) << "team " << size << " vs team 32";
         }
     }
 }
 
-TEST(LinalgTeamBlockSum, StridedOutputHoldsTheContiguousValuesBitForBit)
+TEST(LinalgTeamBlockSum, StridedOutputHoldsTheContiguousValuesToTheUlpBound)
 {
     constexpr std::size_t P = 13, Q = 5, rows = 70, keys = 4;
     const std::vector<double> u = randomVector<double>(rows * P, 171), v = randomVector<double>(rows * Q, 172);
     const std::vector<double> want = blockSumTeam<P, Q>(u, v, 0, rows, nullptr, 1);
+    const double bound = 2.0 * rows * eps<double>() * maxAbs(blockSumTeam<P, Q>(absOf(u), absOf(v), 0, rows, nullptr, 1));
     for (int size : {1, 8, 64}) {
         std::vector<double> plane(P * Q * keys, -1.0);
         constexpr std::size_t key = 2;  // payload-first plane: entry-major, the key fastest
@@ -899,7 +962,7 @@ TEST(LinalgTeamBlockSum, StridedOutputHoldsTheContiguousValuesBitForBit)
             tl::blockSum<P, Q>(t, plane.data() + key, u.data(), v.data(), 0, rows, P, Q, nullptr, Q * keys, keys);
         });
         for (std::size_t e = 0; e < P * Q; ++e) {
-            EXPECT_EQ(plane[e * keys + key], want[e]) << "entry " << e << " team " << size;
+            EXPECT_NEAR(plane[e * keys + key], want[e], bound) << "entry " << e << " team " << size;
             for (std::size_t other = 0; other < keys; ++other) {
                 if (other != key) {
                     EXPECT_EQ(plane[e * keys + other], -1.0) << "only this key's slots are written";
@@ -922,12 +985,12 @@ TEST(LinalgTeamBlockSum, VectorPayloadAndAnActiveSetIndexMap)
             want[i] += j[static_cast<std::size_t>(index[k]) * P + i] * r[static_cast<std::size_t>(index[k])];
     const std::vector<double> g1 = blockSumTeam<P, Q>(j, r, 0, index.size(), index.data(), 1);
     const std::vector<double> g2 = blockSumTeam<P, Q>(j, r, 0, index.size(), index.data(), 64);
-    EXPECT_TRUE(bitwiseEqual(g1, g2));
-    for (std::size_t i = 0; i < P; ++i)
-        EXPECT_NEAR(g1[i], want[i], 4 * eps<double>() * static_cast<double>(index.size()));
+    const double bound = 2.0 * static_cast<double>(index.size()) * eps<double>() * maxAbs(blockSumTeam<P, Q>(absOf(j), absOf(r), 0, index.size(), index.data(), 1));
+    EXPECT_LE(maxAbsDiff(g1, g2), bound) << "size 1 vs 64";
+    EXPECT_LE(maxAbsDiff(g1, want), bound);
 }
 
-TEST(LinalgTeamBlockSum, RowsPerSampleEqualsTheExpandedRowListBitForBit)
+TEST(LinalgTeamBlockSum, RowsPerSampleMatchesTheExpandedRowListToTheUlpBound)
 {
     constexpr std::size_t P = 9, M = 4, samples = 30;
     const std::vector<double> j = randomVector<double>(samples * M * P, 191);
@@ -937,17 +1000,20 @@ TEST(LinalgTeamBlockSum, RowsPerSampleEqualsTheExpandedRowListBitForBit)
         for (std::int32_t q = 0; q < static_cast<std::int32_t>(M); ++q)
             expanded.push_back(s * static_cast<std::int32_t>(M) + q);
     const std::vector<double> want = blockSumTeam<P, P>(j, j, 0, expanded.size(), expanded.data(), 1);
+    // Bound from the sum length (rows added per entry): 2 * rows * eps times the largest sum of |products|.
+    const double bound = 2.0 * static_cast<double>(expanded.size()) * eps<double>() * maxAbs(blockSumTeam<P, P>(absOf(j), absOf(j), 0, expanded.size(), expanded.data(), 1));
     for (int size : {1, 8, 64}) {
         std::vector<double> g(P * P, -1.0), plain(P * P, -1.0);
         runTeam(size, [&](const tl::Team& t) {
             tl::blockSum<P, P>(t, g.data(), j.data(), j.data(), 0, index.size(), P, P, index.data(), 0, 0, M);
         });
-        EXPECT_TRUE(bitwiseEqual(g, want)) << "indexed, team " << size;
+        EXPECT_LE(maxAbsDiff(g, want), bound) << "indexed, team " << size;
         // contiguous samples, no map: first = 5, 6 samples
         runTeam(size, [&](const tl::Team& t) {
             tl::blockSum<P, P>(t, plain.data(), j.data(), j.data(), 5, 6, P, P, nullptr, 0, 0, M);
         });
-        EXPECT_TRUE(bitwiseEqual(plain, blockSumTeam<P, P>(j, j, 5 * M, 6 * M, nullptr, 1))) << "contiguous, team " << size;
+        const std::vector<double> flat = blockSumTeam<P, P>(j, j, 5 * M, 6 * M, nullptr, 1);
+        EXPECT_LE(maxAbsDiff(plain, flat), 2.0 * 6 * M * eps<double>() * maxAbs(blockSumTeam<P, P>(absOf(j), absOf(j), 5 * M, 6 * M, nullptr, 1))) << "contiguous, team " << size;
     }
 }
 

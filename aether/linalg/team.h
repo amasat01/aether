@@ -13,7 +13,7 @@
  * per-lane family (`aether/linalg/linalg.h`, `N <= 32`) keeps the matrix in
  * a lane's local memory, this one keeps it in memory the caller owns, so the
  * size is bounded by that memory. Every function is collective (see `Team.h`)
- * and every result is bitwise independent of the team size.
+ * and the team size changes no arithmetic: results agree to a stated ULP bound.
  *
  *  - `lu` / `luSolve` / `luSolveT` / `luDet` / `luInverse` (`Lu.h`).
  *  - `cholesky` / `choleskyFrom` / `choSolve` / `triLower` / `triUpperT` (`Cholesky.h`).

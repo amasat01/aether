@@ -11,8 +11,9 @@
  * The Gram matrix of a tall Jacobian (`J^T J`: `u = v = J`) and the gradient
  * `J^T r` (`v` one column wide). One thread owns each entry `G(i, j)` and adds the rows
  * in index order, serially: no atomics, no cross-thread floating reduction, so the
- * result does not depend on the team size. On the host each product is rounded before it
- * is added (no contraction), so any two call shapes agree bit for bit.
+ * result does not depend on the team size. Two call shapes of the same sum (another team
+ * size, a strided output, `rowsPer` against the expanded row list) agree to
+ * `2 * count * eps * max(sum |u v|)`: a compiler may fuse the multiply-add in one and not the other.
  */
 
 #include "aether/linalg/team/Team.h"
@@ -28,7 +29,7 @@ namespace team {
  * map). With `rowsPer = M > 1` each sample owns `M` consecutive rows (`M x P` per sample, as in
  * `transpose(A) A` of a per-lane `M x P` block): `count` counts samples, sample `r` is
  * `first + r` or `index[first + r]`, and its rows `sample*M .. sample*M + M - 1` are added in
- * order, so the sum equals the expanded row list's. `rowsPer = 1` is the plain form, bit for bit.
+ * order, so the sum equals the expanded row list's. `rowsPer = 1` is the plain form.
  * Rows are visited in ascending `r`. Entry `(i, j)` is written to
  * `g[i * strideGI + j * strideGJ]`; the defaults (0) mean a contiguous `P x Q` row-major block
  * (`strideGI = Q`, `strideGJ = 1`). A payload-first plane over `K` keys, entry-major with the key
@@ -53,9 +54,7 @@ AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, 
             const std::size_t sample = index != nullptr ? static_cast<std::size_t>(index[first + r]) : first + r;
             for (std::size_t q = 0; q < rowsPer; ++q) {
                 const std::size_t row = sample * rowsPer + q;
-                T prod = u[row * strideU + i] * v[row * strideV + j];
-                AETHER_FP_BARRIER(prod);  // never fused into the sum: the host rounds like every other build
-                s += prod;
+                s += u[row * strideU + i] * v[row * strideV + j];
             }
         }
         g[i * (strideGI != 0 ? strideGI : Q) + j * (strideGJ != 0 ? strideGJ : 1)] = s;

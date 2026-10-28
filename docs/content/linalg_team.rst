@@ -45,14 +45,18 @@ What you can call
 ``eigh``; for ``qr`` the first column with a zero ``R`` diagonal). A failed factorisation makes every solve
 built on it write zeros.
 
-Same bits for any team size
----------------------------
+Results agree to a stated bound
+-------------------------------
 
 The team size is a performance knob, not a numerical one. Pivot searches break ties by lowest index,
 substitution is column by column, and ``blockSum`` adds each entry's rows serially in order, so no sum ever
-crosses threads. A team of 1 (the host) and a team of 256 give the same bits. LU here is right-looking where
-the one-thread form is Crout, so the two forms agree to rounding (a relative residual within ``50 N`` machine
-epsilon), not bit for bit.
+crosses threads and the team size changes no arithmetic. The contract is a ULP bound, not bit identity: two
+results of the same operation (another team size, the team of 1 on the host, the one-thread form where it
+exists) agree to ``50 N`` machine epsilon, relative to the largest entry. For ``blockSum`` the bound is
+``2 * count * eps`` times the largest sum of absolute products, where ``count`` is the number of rows added
+into each entry. The reason is that a compiler may fuse a multiply-add at one call site and not at another.
+The same compiled code run again gives the same bits.
+LU here is right-looking where the one-thread form is Crout, so those two forms differ by rounding only.
 
 Scratch
 -------

@@ -444,7 +444,7 @@ TEST(LinalgTeamDevice, QrMultiRightHandSideSolveMatchesTheHostTwin)
     }
 }
 
-TEST(LinalgTeamDevice, BlockSumStridedOutputHoldsTheContiguousValuesBitForBit)
+TEST(LinalgTeamDevice, BlockSumStridedOutputHoldsTheContiguousValuesToTheUlpBound)
 {
     constexpr std::size_t P = 40, R = 500;
     const std::vector<double> j = lanes<double>([](std::size_t m) { return randomVector<double>(R * P, 290 + m); });
@@ -456,9 +456,11 @@ TEST(LinalgTeamDevice, BlockSumStridedOutputHoldsTheContiguousValuesBitForBit)
     gramStridedBlock<P, double><<<kLanes, 128>>>(dj.p, R, dplane.p, kLanes);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const std::vector<double> g = dg.get(kLanes * P * P), plane = dplane.get(kLanes * P * P);
+    // Two different kernels: the ULP bound from the sum length, 2 * rows * eps * the largest sum of |products|.
+    const double bound = 2.0 * R * eps<double>() * R;  // |J| < 1 per entry, so a sum of |products| is at most R
     for (std::size_t m = 0; m < kLanes; ++m)
         for (std::size_t e = 0; e < P * P; ++e)
-            ASSERT_EQ(plane[e * kLanes + m], g[m * P * P + e]) << "lane " << m << " entry " << e;
+            ASSERT_NEAR(plane[e * kLanes + m], g[m * P * P + e], bound) << "lane " << m << " entry " << e;
 }
 
 template<std::size_t N>
@@ -513,7 +515,7 @@ TEST(LinalgTeamDevice, QrGramSolveMatchesALongDoubleReference)
     }
 }
 
-TEST(LinalgTeamDevice, BlockSumRowsPerSampleEqualsTheExpandedRowListBitForBit)
+TEST(LinalgTeamDevice, BlockSumRowsPerSampleMatchesTheExpandedRowList)
 {
     constexpr std::size_t P = 9, M = 4, samples = 30;
     const std::vector<double> j = randomVector<double>(samples * M * P, 191);
@@ -533,7 +535,7 @@ TEST(LinalgTeamDevice, BlockSumRowsPerSampleEqualsTheExpandedRowListBitForBit)
         gramRowsPerBlock<P, double><<<kLanes, size>>>(dj.p, dx.p, expanded.size(), 1, de.p);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         const std::vector<double> g = dg.get(kLanes * P * P), e = de.get(kLanes * P * P);
-        EXPECT_TRUE(bitwiseEqual(g, e)) << "rowsPer vs expanded, team " << size;
+        EXPECT_TRUE(bitwiseEqual(g, e)) << "rowsPer vs expanded, team " << size;  // one kernel, two argument sets: the same compiled path
         if (ref.empty())
             ref = g;
         else

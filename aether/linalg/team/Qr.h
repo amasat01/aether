@@ -11,8 +11,8 @@
  * The rows are cut into fixed tiles of `qrTile` rows. Each tile's partial sum
  * (a column norm, or a reflector applied to a column) is a serial loop over
  * the tile; the partials are then added in tile order by one thread. The
- * tiling does not depend on the team size, so the factor and the solution
- * are bitwise the same for any team size. Reflectors follow LAPACK `geqr2`:
+ * tiling does not depend on the team size, so the team size changes no
+ * arithmetic: results for different team sizes agree to the ULP contract (`50 N eps`). Reflectors follow LAPACK `geqr2`:
  * `H = I - tau v v^T`, `v = (1, a[j+1.., j])`, `R` on and above the diagonal.
  *
  * `qrSolve` minimises `|A x - b|` for full-rank `A` (`M >= N`) without forming

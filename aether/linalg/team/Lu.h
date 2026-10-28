@@ -9,11 +9,11 @@
  *        the solves, determinant and inverse built on it.
  *
  * Right-looking elimination with partial pivoting (the one-thread `linalg::lu`
- * is Crout, so the two round differently: they agree to a ULP contract, not
- * bit for bit). The pivot is the first entry of largest magnitude in the
- * column, ties to the lowest row, found by one thread; every other step
- * updates independent entries, so the factor and the solutions are bitwise
- * the same for any team size. `info` is LAPACK `getrf` numbering; a failed
+ * is Crout, so the two round differently: they agree to a ULP contract).
+ * The pivot is the first entry of largest magnitude in the column, ties to the
+ * lowest row, found by one thread; every other step updates independent
+ * entries, so the team size changes no arithmetic and results for different
+ * team sizes agree to the same ULP contract (`50 N eps`). `info` is LAPACK `getrf` numbering; a failed
  * factor makes every solve write zeros.
  *
  * Scratch (caller-provided, global): `a` is `N*N` elements, `piv` `N`, `info` 1.

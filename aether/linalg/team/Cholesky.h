@@ -10,8 +10,9 @@
  *
  * Same arithmetic as the one-thread `linalg::cholesky`, entry for entry: one
  * thread owns each `L(i, j)` and runs its dot product serially in index order,
- * so the factor agrees with the one-thread factor to a few ulp (a compiler may
- * contract the two loops differently) and is bitwise independent of the team size. `info` is LAPACK `potrf` numbering; columns from the
+ * so the factor agrees with the one-thread factor, and with another team size,
+ * to the ULP contract (`50 N eps`; a compiler may contract two call sites
+ * differently). `info` is LAPACK `potrf` numbering; columns from the
  * failing one on are zero, and every solve against a failed factor writes zeros.
  *
  * Scratch: `l` is `N*N` elements, `info` 1.
