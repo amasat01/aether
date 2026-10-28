@@ -182,7 +182,10 @@ def test_misuse_is_a_named_error():
     with pytest.raises(aether.Error, match="wrong shape"):
         p.execute(aether.zeros((7, 2), "float32"), aether.zeros((8, 2), "float32"))
     # pinned host memory is host memory: it runs the host transform
-    pin = aether.pinned((8, 2), "float32")
+    try:
+        pin = aether.pinned((8, 2), "float32")
+    except aether.CudaUnavailable:      # no CUDA runtime (macOS wheels): no pinned memory to test
+        return
     pin.zero()
     assert F.fft(pin).device.kind == "cpu"
 
@@ -326,7 +329,7 @@ def test_host_fft_gives_the_same_bits_for_any_thread_count():
 
 def test_host_fft_batch_speeds_up_with_threads(capsys):
     import os
-    if len(os.sched_getaffinity(0)) < 4:
+    if (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1) < 4:
         pytest.skip("needs 4 cores")
     one, four = _threaded(1)[1], _threaded(4)[1]
     with capsys.disabled():
