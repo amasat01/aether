@@ -106,11 +106,16 @@ if(UNIX)
     endforeach()
     install(CODE [[
       set(_dest "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/aether")
-      execute_process(COMMAND install_name_tool -id @rpath/libomp.dylib "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
       file(GLOB _cores "${_dest}/_core*.so")
       if(NOT _cores)
         message(FATAL_ERROR "no aether/_core*.so under ${_dest}: cannot point it at the shipped OpenMP runtime")
       endif()
+      # install_name_tool invalidates a signature (and says so on every call), and Apple silicon kills a process that
+      # maps an invalid one: drop the signatures first, rewrite, then re-sign (ad hoc) and verify below.
+      foreach(_f IN LISTS _cores ITEMS "${_dest}/_omp/libomp.dylib")
+        execute_process(COMMAND codesign --remove-signature "${_f}" COMMAND_ERROR_IS_FATAL ANY)
+      endforeach()
+      execute_process(COMMAND install_name_tool -id @rpath/libomp.dylib "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
       # Rewrite from what `_core` actually records (the linker wrote the runtime's own install name: an absolute Homebrew
       # path), then refuse a build that still has an OpenMP reference outside @rpath.
       foreach(_pass change verify)
@@ -131,8 +136,6 @@ if(UNIX)
           endforeach()
         endforeach()
       endforeach()
-      # install_name_tool invalidates the signatures, and Apple silicon kills a process that maps an invalid one:
-      # re-sign (ad hoc) what was rewritten.
       foreach(_f IN LISTS _cores ITEMS "${_dest}/_omp/libomp.dylib")
         execute_process(COMMAND codesign --force --sign - "${_f}" COMMAND_ERROR_IS_FATAL ANY)
         execute_process(COMMAND codesign --verify "${_f}" COMMAND_ERROR_IS_FATAL ANY)
@@ -192,7 +195,8 @@ function(_aether_plugin)
   endif()
   set(_plugin_o "${CMAKE_CURRENT_BINARY_DIR}/aether_plugin.o")
   set(_plugin_so "${CMAKE_CURRENT_BINARY_DIR}/libaether_cuda.so")
-  set(_nvcc_common -ccbin "${CMAKE_CXX_COMPILER}" -std=c++20 -O2 -cudart none ${_gencode})
+  # -Wno-deprecated-gpu-targets: the wheel ships sm_61 to sm_90 on purpose, so nvcc's "sm < 75 will be removed" note is not news.
+  set(_nvcc_common -ccbin "${CMAKE_CXX_COMPILER}" -std=c++20 -O2 -cudart none -Wno-deprecated-gpu-targets ${_gencode})
   add_custom_command(OUTPUT "${_plugin_o}"
     COMMAND "${_aether_nvcc}" ${_nvcc_common} -x cu -c -Xcompiler ${_xcompiler}
             -DAETHER_HAS_CUDA=1 -I "${CMAKE_CURRENT_SOURCE_DIR}/src" -I "${_root}" "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin.cpp" -o "${_plugin_o}"

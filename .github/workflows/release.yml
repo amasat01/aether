@@ -107,7 +107,7 @@ jobs:
       # The host FFT runs on OpenMP and includes <omp.h>, which Apple's clang lacks: Homebrew's libomp, which delocate
       # copies into the wheel (Linux: auditwheel bundles libgomp). Its deployment target is the runner's macOS, so the
       # wheels declare that too.
-      CIBW_BEFORE_ALL_MACOS: "brew install libomp"
+      CIBW_BEFORE_ALL_MACOS: "brew list libomp >/dev/null 2>&1 || brew install libomp"
       # The wheel ships the OpenMP runtime itself, once, at aether/_omp/ (dsc/CMakeLists.txt); repair must not vendor another.
       CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v --exclude libomp.dylib {wheel}"
       CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether MACOSX_DEPLOYMENT_TARGET=14.0 OpenMP_ROOT=/opt/homebrew/opt/libomp CMAKE_PREFIX_PATH=/opt/homebrew/opt/libomp CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"

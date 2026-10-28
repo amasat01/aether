@@ -44,6 +44,8 @@ XML_PROGRAMLISTING      = NO
 
 QUIET                   = YES
 WARN_IF_UNDOCUMENTED    = NO
+# The include graph of macros.h has 87 nodes; the default stops at 50 and warns.
+DOT_GRAPH_MAX_NODES     = 100
 # The docs gate (tests/docs/check_docs.sh) passes WARN_LOGFILE in the environment; without this line doxygen
 # wrote warnings to stderr and the allowlist arm compared against an EMPTY log (a vacuous pass).
 WARN_LOGFILE            = $(WARN_LOGFILE)

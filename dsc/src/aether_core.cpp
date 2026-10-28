@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // aether._core: CPU and GPU arrays for Python. Plain C++ (no CUDA, no numpy); device memory goes through a
 // CUDA plugin behind the C seam in seam.h, loaded on the first device call.
+// Python.h (through nanobind) first: pyconfig.h defines _POSIX_C_SOURCE and _XOPEN_SOURCE, which a standard header included
+// earlier has already set.
+#include <nanobind/nanobind.h>
+
 #include <dlfcn.h>
 
 #include <atomic>
@@ -14,7 +18,6 @@
 #include <string>
 #include <vector>
 
-#include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
