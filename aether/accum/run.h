@@ -274,6 +274,9 @@ AETHER_DEVICEHOST() inline void close(Open<E>& run)
  *
  * @tparam W   run length, a power of two in `[2, 32]`; the caller's fact is
  *             that the slot is equal over every aligned group of `W` lanes.
+ * @param target  the array the run sums into.
+ * @param at      the sample being added; its global index picks the slot.
+ * @param term    the value to add.
  * @param own  the lane's own sample index (the alignment vote reads it).
  * @param run  the host's open run (`open(target)`); unused on the device.
  */

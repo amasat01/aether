@@ -36,6 +36,9 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest"]
+# GPU FFTs: cuFFT, opened on the first device transform (not bundled: NVIDIA licence; not imported otherwise)
+cufft12 = ["nvidia-cufft-cu12>=11,<12"]
+cufft13 = ["nvidia-cufft>=12,<13"]
 
 [project.urls]
 Homepage = "https://github.com/amasat01/aether"
@@ -46,7 +49,7 @@ Repository = "https://github.com/amasat01/aether"
 root = ".."
 
 # One wheel per platform and Python: `aether_dsc/` (the sealed payload, data) and `aether/` (the arrays,
-# `aether._core` plus, on linux x86_64, the two CUDA plugins). The extension is plain C++; no nvcc.
+# `aether._core` plus, on linux x86_64 and aarch64, the two CUDA plugins). The extension is plain C++; no nvcc.
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"

@@ -2,19 +2,51 @@
 
 Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
 
-## Unreleased
+## 0.7.2 (2026-10-29)
+
+This section covers what changes from 0.7.1. `aether-dsc` moves with the C++ version.
+
+### Added
+
+**Linear algebra for large matrices, `aether/linalg/team/`.** A team of threads (a thread block on the GPU, one thread on the host) works on one matrix, for sizes `1 <= N <= 4096` that do not fit a lane. `lu`, `luSolve`, `luSolveT`, `luDet`, `luInverse`; `cholesky`, `choleskyFrom`, `choSolve`, `triLower`, `triUpperT`; `eigh`; Householder `qr`, `qrSolve` and `qrGramSolve` (least squares and `(A^T A)^-1 B`); and `blockSum`, the ordered `sum_r u_r v_r^T` behind `J^T J` and `J^T r`. The matrix lives in scratch you provide, so the size is bounded by memory, not registers. Results for different team sizes agree to a stated ULP bound (`50 N` machine epsilon), and the host's one-thread team runs the same code as the GPU. `info` follows the per-lane family. See the new linear-algebra page for the scratch each routine needs.
+
+**Ray tests, `aether/geometry/`.** `rayTriangle` (Moller-Trumbore), `rayAabb` (slabs) and `raySphere` return `[hit, t, u, v]`, `[hit, t_enter, t_exit, 0]` and `[hit, t0, t1, 0]` for host and device alike. Parallel rays, zero direction components and degenerate triangles give finite answers, not NaN. `aether_dsc.c_core` has C99 twins that match bit for bit.
+
+**Fourier transforms, `aether/fft/` and `aether.fft`.** Batched complex-to-complex, real-to-complex and complex-to-real transforms over interleaved (re, im) pairs, N-D, `norm="backward" | "forward" | "ortho"` as in NumPy. The host uses pocketfft (vendored, BSD-3-Clause) with OpenMP across the batch; the result is bit-identical for any thread count. On the GPU it uses cuFFT, which is not bundled: `pip install aether-dsc[cufft12]` or `[cufft13]`; without it a device transform raises `aether.FftUnavailable` naming the extra. Plans are built outside a stream capture and then run without allocating. The macOS arm64 wheels bundle libomp.
+
+**CUDA plugin on Linux aarch64.** The aarch64 wheels carry the CUDA plugin, built and load-tested without a GPU; it has not run on one.
+
+### Changed
+
+- One CUDA plugin per wheel, `libaether_cuda.so`, for CUDA 12 and 13 alike. It uses the driver API only, so a GPU needs the NVIDIA driver and no CUDA toolkit or runtime library. `aether.cuda_runtime_version()` is the CUDA version the installed driver supports.
+- CI cache keys and the wheel digest are portable across runners (cache keys v2).
+
+### Fixed
+
+- A staged copy through the bounce buffer waits on an event recorded on its stream, not on the stream itself, so destroying that stream before the next staged copy is safe.
+
+### Removed
+
+| Gone | Use instead |
+|---|---|
+| `libaether_cuda12.so` and `libaether_cuda13.so` | `libaether_cuda.so` |
+| `AETHER_CUDA_MAJOR=12\|13` | nothing to set; the driver decides |
+
+## 0.7.1
 
 **Independent random draws.** Each `(seed, global, counter)` now owns its own Philox block, so neighbouring counters no longer share words (normals at lag 1 or 2, `randomBits64` halves), and `uniform01` is the open interval (0,1) for float and double. Every stream except counter 0's raw words moved; golden rows re-minted. New tests `RandomIndependenceTest.*`.
-
-**A numerics-contract page.** One docs page, `numerics_contract`, states what every target computes against: the fold order of sums and dot products, division by a scalar as one reciprocal, the compensated sums, the non-finite rules, and where bit identity holds and where a ULP band replaces it. The bit-identity table moved there from the plain-C core page, which now links to it. The `CCore` corpus is named as the shared check for any further language core. No header changes.
-
-**Keyed sums with one atomic per run, `aether/accum/run.h`.** `aether::accum::run::add<W>`, `addTested` and `addSorted` add a run of lanes that share a slot with one atomic: a run the caller proves, one a warp vote finds, or one of adjacent equal keys. Each has a compensated twin that sums the run plainly and makes its one commit compensated. A warp that does not qualify commits lane by lane; on the host each call adds into the caller's open run, committed when the slot changes and at `run::close`. New tests `AccumRun.*` check commit counts and errors on both paths.
 
 **Per-lane linear algebra, `aether/linalg/`.** `lu`, `luSolve`, `luSolveT`, `luDet`, `solve`, `inv`, `det`; `cholesky`, `choleskyFactor`, `choSolve`; the multi-right-hand-side `triLower` and `triUpperT`; and `eigh` (cyclic Jacobi, fixed sweeps, ascending eigenvalues). Dense row-major `N x N` with `1 <= N <= 32`, `float` or `double`, host and device, no allocation. `info` follows LAPACK `getrf`/`potrf` numbering; a failed factorisation makes every solve, inverse and determinant built on it zero. `cholesky` and `eigh` read the symmetric part of the input. Order of arithmetic is in the numerics contract. New tests `LinalgLu.*`, `LinalgCholesky.*`, `LinalgTriangular.*`, `LinalgEigh.*` and, in CUDA mode, `LinalgDevice.*`.
 
 **`aether::linalg` reads and writes per-sample operands.** Every entry point takes a row-major pointer or a per-sample operand (`view[i]`, an `Item`): a plane is read element by element and a right-hand side is solved one column at a time, so a lane holds the factor and one column. The factorisations also fill a struct in place (`lu<N>(f, a)`, `cholesky<N>(f, a)`, `eigh<N>(r, a)`), because an `n x n` struct returned by value is copied and the copies spill; the by-value forms remain. `luInverse(f, out)` replaces the identity-matrix solve. Every loop is kept rolled (`AETHER_NO_UNROLL()`). On sm_61 an `n = 32` double `solve` goes from 255 registers and 33 KB of local memory to 32 and 8.8 KB. The results are the same arithmetic in the same order.
 
 **`aether::rt` gains `transposed`, `store` and `matVecItems`.** `transposed(x)` reads a rank-2 operand as its transpose; `store(out, x)` is the rolled `out = x`; `matVecItems` is `matVec` for the register (`Item`) operands the static text multiplies, whose contraction of the first two terms differs from the view form by one rounding on nvcc. `aether/expr/Rt.h` is part of the `aether_dsc` NVRTC payload.
+
+## 0.7.0
+
+**A numerics-contract page.** One docs page, `numerics_contract`, states what every target computes against: the fold order of sums and dot products, division by a scalar as one reciprocal, the compensated sums, the non-finite rules, and where bit identity holds and where a ULP band replaces it. The bit-identity table moved there from the plain-C core page, which now links to it. The `CCore` corpus is named as the shared check for any further language core. No header changes.
+
+**Keyed sums with one atomic per run, `aether/accum/run.h`.** `aether::accum::run::add<W>`, `addTested` and `addSorted` add a run of lanes that share a slot with one atomic: a run the caller proves, one a warp vote finds, or one of adjacent equal keys. Each has a compensated twin that sums the run plainly and makes its one commit compensated. A warp that does not qualify commits lane by lane; on the host each call adds into the caller's open run, committed when the slot changes and at `run::close`. New tests `AccumRun.*` check commit counts and errors on both paths.
 
 ## 0.2.7 (2026-10-23)
 

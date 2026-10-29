@@ -36,6 +36,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _metadata_version
 
 from ._core import Payload, PAYLOAD_DIR, _unpack, digest_of
+from ._openmp import OpenMP, openmp
 # Imported from `_seal_impl`, deliberately NOT from `.seal`:
 # `aether_dsc/seal.py` is `python -m aether_dsc.seal`'s CLI file, and
 # Python binds `aether_dsc.seal` to that MODULE the instant anything imports
@@ -46,7 +47,7 @@ from ._core import Payload, PAYLOAD_DIR, _unpack, digest_of
 # `tests/test_aether_dsc.py` exercises both in one process).
 from ._seal_impl import seal
 
-__all__ = ["Payload", "seal", "payload", "version", "PAYLOAD_DIR"]
+__all__ = ["Payload", "seal", "payload", "version", "PAYLOAD_DIR", "OpenMP", "openmp"]
 
 #: This distribution's version — aether's own (the same git tag), because a
 #: sealed payload speaks for exactly one aether checkout.

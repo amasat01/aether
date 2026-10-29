@@ -126,12 +126,14 @@ jobs:
       # the job succeeds without building.
       - id: memo
         run: |
-          echo "digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)")" >> "$GITHUB_OUTPUT"
+          digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)") || exit 1
+          [ -n "$digest" ] || { echo "::error::empty digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - id: pass
         uses: actions/cache/restore@v6
         with:
           path: ci-pass
-          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
+          key: ci-pass-v2-sanitize-cpp-${{ steps.memo.outputs.digest }}
           lookup-only: true
       - id: plan
         env:
@@ -216,7 +218,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ci-pass
-          key: ci-pass-v1-sanitize-cpp-${{ steps.memo.outputs.digest }}
+          key: ci-pass-v2-sanitize-cpp-${{ steps.memo.outputs.digest }}
 
   # AETHER_HOST_VECTOR_MATH on three GCC majors from the distribution's own
   # packages: the reproducer and the vectorisation check under the default
@@ -243,25 +245,25 @@ jobs:
           key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
           restore-keys: |
             ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-
-      - name: clang, ninja and the CUDA 12.6 runtime headers + static cudart (no driver, no GPU)
+      - name: clang, ninja and nvcc 12.6 with the runtime headers (no driver, no GPU)
         run: |
           curl -fsSL -o /tmp/cuda-keyring.deb \
             https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i /tmp/cuda-keyring.deb
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          sudo apt-get install -y --no-install-recommends clang libomp-dev ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
           python3 -m pip install --user "nanobind>=3.1,<4"
       - run: ccache -z
       - name: build _core and the plugin with clang, zero warnings
         env:
           CC: clang
           CXX: clang++
-          AETHER_CUDA12_ROOT: /usr/local/cuda-12.6
+          AETHER_CUDA_ROOT: /usr/local/cuda-12.6
         run: |
           cmake -S dsc -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -Dnanobind_DIR="$(python3 -c 'import nanobind; print(nanobind.cmake_dir())')" -DPython_EXECUTABLE="$(command -v python3)"
           cmake --build build-clang
-          syms=$(nm -D --defined-only build-clang/libaether_cuda12.so | awk '{print $NF}')
+          syms=$(nm -D --defined-only build-clang/libaether_cuda.so | awk '{print $NF}')
           [ "$syms" = aether_memory_v1 ] || { echo "::error::the plugin exports more than the seam: $syms"; exit 1; }
       - if: always()
         run: ccache -s

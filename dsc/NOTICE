@@ -6,3 +6,11 @@ follow the algorithms of ARM optimized-routines
 (https://github.com/ARM-software/optimized-routines, math/exp.c and math/log.c),
 Copyright (c) Arm Limited, MIT OR Apache-2.0 WITH LLVM-exception. The lookup
 tables in PacketExpLogTables.h were regenerated for aether.
+
+aether/fft/pocketfft_hdronly.h is pocketfft (https://github.com/mreineck/pocketfft, C++ branch), Copyright (C)
+2010-2024 Max-Planck-Society and contributors, BSD-3-Clause; the licence text is in the file and in
+aether/fft/LICENSE-pocketfft.md. GPU FFTs call cuFFT, which is not distributed with aether: it is an optional
+install under the NVIDIA CUDA licence.
+
+The wheels carry the OpenMP runtime the build linked, once, at aether/_omp/: GCC's libgomp (GPL-3.0-or-later with the GCC Runtime
+Library Exception) on Linux, LLVM's libomp (Apache-2.0 WITH LLVM-exception) on macOS.

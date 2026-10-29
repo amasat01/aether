@@ -146,7 +146,8 @@ def test_matrix_shape_errors():
 def test_kinds_order_matrix_between_vectors_and_scalars():
     k = C.kinds()
     assert k.index("vec_atan") < k.index("mat_add") < k.index("mat_atan") < k.index("mat_sum") < k.index("rsqrt")
-    assert k[-4:] == ("rsqrt", "sign", "clip", "remainder") and k[-11] == "vec_outer" and k[-10:-4] == tuple(x for x in k if x.startswith("quat_"))
+    assert k[-7:] == ("rsqrt", "sign", "clip", "remainder", "ray_tri", "ray_aabb", "ray_sphere")
+    assert k[-14] == "vec_outer" and k[-13:-7] == tuple(x for x in k if x.startswith("quat_"))
     assert len(set(k)) == len(k)
 
 def test_unknown_kind_and_name():
@@ -219,3 +220,20 @@ def test_invalid_shapes_raise_and_register_nothing():
     with pytest.raises(ValueError):
         C.struct((0,), "f32")
     assert C._REGISTRY == before
+
+
+def test_ray_functions_name_type_and_guard_their_denominators():
+    tri = C.function("ray_tri")
+    assert tri.name == "aether_c_f64_ray_tri" and tri.deps == ("aether_c_f64_t", "aether_c_f64_vec3_t", "aether_c_f64_vec4_t")
+    assert "const aether_c_f64_t dets = (ok != 0) ? det : ((aether_c_f64_t)1.0);" in tri.text
+    assert "const aether_c_f64_t inv = (ok != 0) ? (((aether_c_f64_t)1.0) / dets) : ((aether_c_f64_t)0.0);" in tri.text
+    assert "out.v[0] = hit ? ((aether_c_f64_t)1.0) : ((aether_c_f64_t)0.0);" in tri.text
+    box = C.function("ray_aabb", width="f32")
+    assert "copysignf((aether_c_f32_t)1e18, d.v[0])" in box.text and box.libm == ("copysignf",)
+    assert "const aether_c_f32_t ds1 = (ok1 != 0) ? d.v[1] : ((aether_c_f32_t)1.0);" in box.text
+    sph = C.function("ray_sphere")
+    assert "const aether_c_f64_t sq = sqrt(ds);" in sph.text and "const aether_c_f64_t ds = (ok != 0) ? disc : ((aether_c_f64_t)1.0);" in sph.text
+    assert sph.libm == ("sqrt",)
+    for kind in ("ray_tri", "ray_aabb", "ray_sphere"):
+        with pytest.raises(ValueError):
+            C.function(kind, shape=(3,))

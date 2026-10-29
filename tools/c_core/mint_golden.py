@@ -50,6 +50,7 @@ MM_PAIRS = (((2, 3), (3, 2)), ((3, 3), (3, 3)), ((2, 2), (2, 2)))
 OUTER_PAIRS = (((2,), (3,)), ((3,), (3,)))
 QUAT_KINDS = ("quat_mul", "quat_conj", "quat_recip", "quat_rotate", "quat_as_pure", "quat_as_vec3")
 SCALAR_KINDS = ("rsqrt", "sign", "clip", "remainder")
+RAY_KINDS = ("ray_tri", "ray_aabb", "ray_sphere")
 MAT_SHAPE_ONLY = ("mat_sum", "mat_mv", "mat_transpose")
 
 BEGIN_FMT = "// ---8<--- CORE BEGIN (md5 = {md5}) ---8<---\n"
@@ -77,17 +78,17 @@ def names_for(width: str) -> list[str]:
         names.append(c_core.function("mat_mm", shape=a, shape2=b, width=width).name)
     for a, b in OUTER_PAIRS:
         names.append(c_core.function("vec_outer", shape=a, shape2=b, width=width).name)
-    for kind in QUAT_KINDS + SCALAR_KINDS:
+    for kind in QUAT_KINDS + SCALAR_KINDS + RAY_KINDS:
         names.append(c_core.function(kind, width=width).name)
     return names
 
 
 def part_key(name: str, width: str) -> str:
     """The part a corpus entry lives in: its shape token (``vec3``, ``mat2x3``,
-    ``quat``), or ``scalar`` for the rank-0 functions. The function name is
+    ``quat``, ``ray``), or ``scalar`` for the rank-0 functions. The function name is
     ``aether_c_<w>_<shape>_<kind>`` (``mm``/``outer`` name the first shape)."""
     token = name.removeprefix(f"aether_c_{width}_").split("_", 1)[0]
-    return token if token.startswith(("vec", "mat", "quat")) else "scalar"
+    return token if token.startswith(("vec", "mat", "quat", "ray")) else "scalar"
 
 
 def parts_for(width: str) -> dict[str, list[str]]:

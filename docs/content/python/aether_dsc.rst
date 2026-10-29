@@ -24,5 +24,18 @@ The names the package exports at the top level:
    aether_dsc.Payload
    aether_dsc.version
    aether_dsc.PAYLOAD_DIR
+   aether_dsc.OpenMP
+   aether_dsc.openmp
+
+The OpenMP runtime
+------------------
+
+The wheel carries the one OpenMP runtime of the process (``aether/_omp/``), and ``aether._core`` links it. A
+package that builds OpenMP code next to aether, such as eagle or hawk's host kernels, links that same file
+instead of shipping its own: two OpenMP runtimes in one process abort on macOS and double the thread pool on
+Linux. :func:`aether_dsc.openmp` returns an :class:`aether_dsc.OpenMP` (the runtime file, its directory, the
+compile flags and the link flags), or ``None`` when the install carries no runtime. Wheel repair for such a
+package must leave the runtime alone (``auditwheel repair --exclude libgomp.so.1``,
+``delocate-wheel --exclude libomp.dylib``).
 
 ``aether_dsc.seal`` is both a function and a submodule; its page is the submodule's.

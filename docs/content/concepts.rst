@@ -47,6 +47,13 @@ Interoperability
 :doc:`Interoperability <interop>`
    How a NumPy, CuPy or PyTorch array becomes an aether ``View`` without a copy. The contract the family shares is on `raptor's interoperability page <https://amasat01.github.io/raptor/content/interop_protocols.html>`__.
 
+Large matrices
+--------------
+
+:doc:`Linear algebra for large matrices <linalg_team>`
+   LU, Cholesky, eigenvalues, QR and ordered block sums by a team of threads on one matrix, up to 4096 by 4096,
+   with the scratch each routine needs.
+
 Embedded C
 ----------
 
@@ -65,6 +72,7 @@ Embedded C
    domain_independence
    multi_device_residency
    numerics_contract
+   linalg_team
    accumulation
    banded_emulated_real
    interop

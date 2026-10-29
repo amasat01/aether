@@ -203,6 +203,7 @@
 #include "aether/expr/nodes/Product.h"
 #include "aether/expr/nodes/Quaternion.h"
 #include "aether/expr/nodes/Structural.h"
+#include "aether/geometry/geometry.h"
 #include "aether/interop/Buffer.h"
 #include "aether/interop/DLPack.h"
 #include "aether/linalg/linalg.h"

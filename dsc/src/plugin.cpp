@@ -1,8 +1,9 @@
 // Copyright 2026 Alessandro Masat
 // SPDX-License-Identifier: Apache-2.0
-// One CUDA plugin: this TU, compiled by g++ (no nvcc) over aether's CUDA-mode headers and linked to ONE
-// major's static cudart, is built twice (CUDA 12, CUDA 13). It exports exactly `aether_memory_v1`, a thin C
-// wrapper over aether's `Chunk` / `fill` / `StreamTransport`; the memory rules live in those headers.
+// The CUDA plugin: this TU, compiled by nvcc with `-cudart none` over aether's CUDA-mode headers, exports exactly
+// `aether_memory_v1`, a thin C wrapper over aether's `Chunk` / `fill` / `StreamTransport` (the memory rules live in
+// those headers) and the batched FFT plans. It needs `libcuda.so.1` and no CUDA runtime library: the runtime
+// functions the headers call are defined by DriverRuntime.inl over the driver API. One plugin serves CUDA 12 and 13.
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -13,6 +14,7 @@
 #include "aether/chunk/Chunk.h"
 #include "aether/chunk/Fill.h"
 #include "aether/residency/Transport.h"
+#include "cufft_plan.h"
 #include "seam.h"
 
 namespace {
@@ -125,8 +127,29 @@ int pointer_device(const void* p, int* dev) {
     return 0;
 }
 
+int fft_plan(int dev, int kind, int is_double, int norm, int forward, int ndim, const int64_t* shape, int naxes,
+             const int32_t* axes, void* stream, void** plan) {
+    try {
+        OnDevice d(dev);
+        *plan = new aether_plugin::FftPlan(dev, kind, is_double != 0, norm, forward != 0,
+                                           std::vector<std::int64_t>(shape, shape + ndim),
+                                           std::vector<std::int32_t>(axes, axes + naxes), S(stream));
+        return 0;
+    } catch (const aether_plugin::CufftMissing& e) {
+        g_error = e.what();
+        return 2;
+    } catch (const std::exception& e) {
+        return fail(e.what());
+    }
+}
+int fft_exec(void* plan, const void* in, void* out, void* stream) {
+    return guarded([&] { static_cast<aether_plugin::FftPlan*>(plan)->execute(in, out, S(stream)); });
+}
+void fft_destroy(void* plan) { delete static_cast<aether_plugin::FftPlan*>(plan); }
+
 const AetherMemoryV1 table = {AETHER_MEMORY_ABI, probe, runtime_version, current_device, last_error, chunk_alloc,
-                              chunk_release, drain, fill, copy, stream_wait, stream_sync, pointer_device};
+                              chunk_release, drain, fill, copy, stream_wait, stream_sync, pointer_device,
+                              fft_plan, fft_exec, fft_destroy};
 
 }  // namespace
 
