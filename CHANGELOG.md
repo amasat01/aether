@@ -2,7 +2,7 @@
 
 Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
 
-## 0.7.2 (2026-10-28)
+## 0.7.2 (2026-10-29)
 
 This section covers what changes from 0.7.1. `aether-dsc` moves with the C++ version.
 
