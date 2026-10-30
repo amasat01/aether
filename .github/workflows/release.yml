@@ -87,7 +87,7 @@ jobs:
             runner: ubuntu-24.04-arm
             plat: manylinux_aarch64
           - arch: macos-arm64
-            runner: macos-14
+            runner: macos-15
             plat: macosx_arm64
     name: wheels (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -366,9 +366,9 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t"]
         include:   # the macOS wheel: one regular and one free-threaded build
-          - runner: macos-14
+          - runner: macos-15
             python-version: "3.13"
-          - runner: macos-14
+          - runner: macos-15
             python-version: "3.13t"
     steps:
       - uses: actions/checkout@v7
