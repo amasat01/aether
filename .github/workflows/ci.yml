@@ -62,7 +62,14 @@ jobs:
 
       # ruff, the committed C reference-core corpus (generator check, strict C99), the generator's tests
       - run: make gate-lint
-      - run: make gate-names
+      # the public-name check is raptor's (raptor.conformance.public_names): this branch's raptor, else main
+      - uses: ./.github/actions/companion
+        with:
+          repo: raptor
+          path: raptor
+          token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
+          pins: .github/companions
+      - run: make gate-names RAPTOR_SRC=raptor
 
       # compiled objects persist across runs; one cache per job and architecture
       - uses: actions/cache@v6

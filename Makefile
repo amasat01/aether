@@ -202,7 +202,8 @@ gate-need-cuda:
 
 # Every public name of the Python package is referenced by a test or on the shrink-only allowlist
 gate-names:
-	$(PYTHON) tools/public_names.py --src dsc --tests dsc/tests --allow ci/public_names_untested.txt --module aether --module aether.fft --module aether_dsc
+	$(if $(RAPTOR_SRC),PYTHONPATH="$(abspath $(RAPTOR_SRC))") $(PYTHON) -m raptor.conformance.public_names --src dsc --tests dsc/tests \
+	  --allow ci/public_names_untested.txt --module aether --module aether.fft --module aether_dsc
 
 # ruff, the C reference-core corpus and its C99 check, and the generator's own tests
 gate-lint: gate-venv gate-need-cxx
