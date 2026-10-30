@@ -267,7 +267,7 @@ gate-docs: gate-venv
 	$(gate_py) -m raptor_docs.fresh --check --site "$$RAPTOR_SITE"
 	$(MAKE) -C docs nbcheck
 	$(MAKE) -C docs strict
-	PYTHONPATH=dsc $(gate_py) tools/docs_inventory_check.py docs/_build/html/objects.inv aether_dsc --allow seal
+	PYTHONPATH=dsc $(gate_py) -m raptor_docs.inventory docs/_build/html/objects.inv aether_dsc --allow seal
 
 # CUDA build (native architectures, warnings as errors) and the manifest gate on the GPU
 gate-gpu-build: gate-need-cxx gate-need-cuda
