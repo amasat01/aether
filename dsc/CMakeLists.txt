@@ -88,6 +88,22 @@ if(UNIX)
   else()
     set_target_properties(_core PROPERTIES INSTALL_RPATH "$ORIGIN/_omp")
   endif()
+  # The runtime must be the one this compiler's code calls: libgomp for GCC, LLVM's libomp for Clang. Shipping the other one
+  # loads fine and then fails or runs on a second runtime. In a conda environment `libgomp.so.1` can be a symlink to LLVM's
+  # libomp, so the check is on the resolved file, not on the name a linker was given.
+  get_filename_component(_omp_file "${_omp_real}" NAME)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(_omp_want "libgomp")
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(_omp_want "lib(omp|iomp)")
+  else()
+    set(_omp_want "")
+  endif()
+  if(_omp_want AND NOT _omp_file MATCHES "^${_omp_want}")
+    message(FATAL_ERROR "the OpenMP runtime ${_omp_real} does not match the ${CMAKE_CXX_COMPILER_ID} compiler ${CMAKE_CXX_COMPILER} "
+            "(wanted ${_omp_want}*): a libgomp.so.1 that links to LLVM's libomp, as in a conda environment, is the usual cause. "
+            "Build with the compiler's own runtime visible (a toolchain outside the conda prefix, or OpenMP_CXX_LIBRARIES set).")
+  endif()
   # Refuse by name anything that is not a binary (a text linker script copied here fails at import: "invalid ELF header").
   file(READ "${_omp_real}" _omp_magic LIMIT 4 HEX)
   if(NOT (_omp_magic STREQUAL "7f454c46" OR _omp_magic STREQUAL "cffaedfe" OR _omp_magic STREQUAL "cafebabe"))
@@ -100,6 +116,9 @@ if(UNIX)
       message(FATAL_ERROR "the OpenMP runtime ${_omp_real} has no SONAME (readelf -d found none)")
     endif()
     set(_omp_name "${CMAKE_MATCH_1}")
+    if(_omp_want AND NOT _omp_name MATCHES "^${_omp_want}")
+      message(FATAL_ERROR "the OpenMP runtime ${_omp_real} has SONAME ${_omp_name}, not the ${CMAKE_CXX_COMPILER_ID} compiler's (wanted ${_omp_want}*)")
+    endif()
   endif()
   message(STATUS "OpenMP runtime shipped as aether/_omp/${_omp_name}: ${_omp_real}")
   install(FILES "${_omp_real}" DESTINATION aether/_omp RENAME ${_omp_name})
