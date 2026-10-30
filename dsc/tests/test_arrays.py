@@ -5,6 +5,7 @@ numpy, cupy and torch rows skip when that library is absent (aether itself needs
 
 import ctypes
 import gc
+import importlib.util
 import pathlib
 import struct
 import subprocess
@@ -30,6 +31,7 @@ def _gpu():
 
 
 gpu = pytest.mark.skipif(not _gpu(), reason="needs a CUDA plugin that loads and a device")
+needs_cupy = pytest.mark.skipif(importlib.util.find_spec("cupy") is None, reason="needs cupy (the subprocess rows import it)")
 
 
 def _run(code, **env):
@@ -280,6 +282,7 @@ def test_zero_fill_capture_two_replays():
 
 
 @gpu
+@needs_cupy
 def test_staged_upload_then_dropping_its_stream_does_not_break_the_next_copy():
     """A pageable host to device copy on a user stream leaves the staging buffer busy; the next staged copy must
     not wait on that stream, which the caller has since destroyed (it used to segfault)."""
@@ -300,6 +303,7 @@ def test_staged_upload_then_dropping_its_stream_does_not_break_the_next_copy():
 @gpu
 @pytest.mark.parametrize("blocking", [False, True])
 @pytest.mark.parametrize("mode", ["legacy", "stream"])
+@needs_cupy
 def test_gc_free_inside_global_capture(mode, blocking):
     out = _run(f"""
         import gc, aether, cupy as cp
@@ -348,6 +352,7 @@ def test_early_drop_after_launch_is_stream_ordered(mode):
 
 # ---- row 6: lifetimes at exit
 @gpu
+@needs_cupy
 def test_arrays_alive_at_exit_and_stream_object_held():
     out = _run("""
         import aether, cupy as cp

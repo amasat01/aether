@@ -35,7 +35,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest"]
+# test_arrays compares with numpy; test_ft_payload uses raptor's free-threading rows
+test = ["pytest", "numpy", "raptor-core>=0.7,<0.8"]
 # GPU FFTs: cuFFT, opened on the first device transform (not bundled: NVIDIA licence; not imported otherwise)
 cufft12 = ["nvidia-cufft-cu12>=11,<12"]
 cufft13 = ["nvidia-cufft>=12,<13"]
