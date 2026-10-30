@@ -137,10 +137,9 @@ if(UNIX)
       if(NOT _cores)
         message(FATAL_ERROR "no aether/_core*.so under ${_dest}: cannot point it at the shipped OpenMP runtime")
       endif()
-      # The shipped libomp carries Homebrew's signature, which install_name_tool would invalidate (with a warning): drop it
-      # first. `_core` is linker-signed and must keep its signature space (install_name_tool refuses an unsigned one).
-      # Both are re-signed (ad hoc) and verified below: Apple silicon kills a process that maps an invalid signature.
-      execute_process(COMMAND codesign --remove-signature "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
+      # install_name_tool invalidates the signatures (it warns) and needs them in place: a stripped libomp leaves a
+      # __LINKEDIT newer Xcode refuses to edit, and `_core` must keep its signature space. Both are re-signed (ad hoc)
+      # and verified below: Apple silicon kills a process that maps an invalid signature.
       execute_process(COMMAND install_name_tool -id @rpath/libomp.dylib "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
       # Rewrite from what `_core` actually records (the linker wrote the runtime's own install name: an absolute Homebrew
       # path), then refuse a build that still has an OpenMP reference outside @rpath.
