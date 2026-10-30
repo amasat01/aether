@@ -182,7 +182,7 @@ endif()
 # (the CUDA runtime functions aether's headers call, defined over the driver API), and nvcc links them. It needs
 # libcuda.so.1 at run time and no CUDA runtime library. No CMake CUDA language: `_core` stays CUDA-free.
 function(_aether_plugin)
-  set(_hints "$ENV{AETHER_CUDA_ROOT}")
+  set(_hints "$ENV{AETHER_CUDA_ROOT}" "$ENV{CUDA_PATH}")   # an explicit root first, then the toolkit the environment names
   file(GLOB _cands "/usr/local/cuda-12.*" "/usr/local/cuda")
   list(SORT _cands COMPARE NATURAL ORDER DESCENDING)
   find_program(_aether_nvcc nvcc HINTS ${_hints} ${_cands} PATH_SUFFIXES bin)
