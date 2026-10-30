@@ -248,7 +248,8 @@ jobs:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           v=$(python tools/next_version.py "$PR_LABELS" 2>/dev/null || true)  # no label or release:none: build untagged (the gate reports a missing label)
-          [ -z "$v" ] || git tag "v$v"
+          # untagged, the sdist takes the wheels' version: a higher one would win `--find-links dist` over every wheel
+          [ -n "$v" ] && git tag "v$v" || echo "SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0.dev0+g$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - run: python -m pip install --quiet build "scikit-build-core>=0.10" "setuptools-scm>=8" "twine>=6" pyyaml
 
@@ -277,6 +278,7 @@ jobs:
             [ "$n" -eq 10 ] || { echo "::error::$n wheels for $plat, expected 10"; exit 1; }
           done
           [ "$(find dist -name '*.whl' | wc -l)" -eq 30 ] || { echo "::error::unexpected wheel in dist"; ls dist; exit 1; }
+          [ "$(ls dist/*.whl dist/*.tar.gz | cut -d- -f2 | sort -u | wc -l)" -eq 1 ] || { echo "::error::the sdist and wheels carry different versions"; ls dist; exit 1; }
           echo "OK: 10 wheels each for x86_64, aarch64 and macOS arm64"
 
       - name: Same CIBW_BUILD lines as hawk's release workflow
