@@ -60,19 +60,9 @@ jobs:
       # OpenMP (find_package(OpenMP REQUIRED)) ships with g++, no extra package.
       - run: sudo apt-get update && sudo apt-get install -y g++-13 ccache
 
-      # gates the committed C reference-core corpus header against the generator (aether_dsc.c_core)
-      - run: PYTHONPATH=dsc python3 tools/c_core/mint_golden.py --check
-
-      # gates that same header as strict C99 (compiled with $CC)
-      - run: tests/c_core/check_c99.sh
-
-      # pyflakes rules over every .py (ruleset in ruff.toml)
-      - run: |
-          python3 -m pip install --user --only-binary=:all: ruff==0.15.18
-          python3 -m ruff check
-
-      # pins the generator on shapes beyond the corpus (only test_c_core.py: the sibling dsc tests need the sealed payload and raptor)
-      - run: python3 -m pip install --user pytest && PYTHONPATH=dsc python3 -m pytest dsc/tests/test_c_core.py -q
+      # ruff, the committed C reference-core corpus (generator check, strict C99), the generator's tests
+      - run: make gate-lint
+      - run: make gate-names
 
       # compiled objects persist across runs; one cache per job and architecture
       - uses: actions/cache@v6
@@ -83,22 +73,8 @@ jobs:
             ccache-${{ runner.os }}-${{ runner.arch }}-test-cpp-${{ matrix.debug_mode }}-
       - run: ccache -z
 
-      # Same variables the Makefile's cpp arm configures with
-      # (AETHER_CPP_MODE=ON), plus AETHER_WARN_AS_ERR=ON.
-      - run: |
-          cmake -B build \
-            -DFETCHCONTENT_QUIET=ON \
-            -DAETHER_BUILD_TESTS=ON \
-            -DAETHER_WARN_AS_ERR=ON \
-            -DAETHER_DEBUG_MODE=${{ matrix.debug_mode }} \
-            -DAETHER_CPP_MODE=ON .
-
-      - run: cmake --build build -j"$(nproc)"
-
-      # Never the binary bare — check_gate.sh is the suite-integrity gate
-      # (manifest-backed, not a vacuous pass/fail count). Same command the
-      # Makefile's `test` target runs.
-      - run: tests/check_gate.sh cpp build/tests/aether_tests
+      # warnings as errors, then the manifest gate (check_gate.sh, never the binary bare)
+      - run: make gate-cpp gate_debug=${{ matrix.debug_mode }} GATE_JOBS=$(nproc)
       - if: always()
         run: ccache -s
 
@@ -159,56 +135,8 @@ jobs:
       - run: ccache -z
         if: steps.plan.outputs.run == 'true'
 
-      - run: |
-          cmake -B build \
-            -DFETCHCONTENT_QUIET=ON \
-            -DAETHER_BUILD_TESTS=ON \
-            -DAETHER_DEBUG_MODE=ON \
-            -DAETHER_CPP_MODE=ON \
-            -DAETHER_SANITIZERS=address,undefined .
-        if: steps.plan.outputs.run == 'true'
-      - run: cmake --build build -j"$(nproc)"
-        if: steps.plan.outputs.run == 'true'
-
-      # Non-vacuity (i): the binary must actually carry the ASan runtime.
-      - name: sanitizer runtime is linked
-        run: |
-          cd .
-          { nm -D build/tests/aether_tests; nm build/tests/aether_tests; } 2>/dev/null | grep -q __asan_init \
-            || { echo "RED: aether_tests carries no __asan_init — this job is not sanitizing"; exit 1; }
-        if: steps.plan.outputs.run == 'true'
-
-      # Non-vacuity (ii): each canary mode must exit non-zero AND print its banner.
-      - name: canaries trip
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          cd .
-          fail=0
-          for pair in "heap-oob:AddressSanitizer: heap-buffer-overflow" \
-                      "leak:LeakSanitizer: detected memory leaks" \
-                      "uninit:runtime error: load of value" \
-                      "shift-ub:runtime error: shift exponent"; do
-            mode="${pair%%:*}"; banner="${pair#*:}"
-            set +e; build/tests/aether_canary "$mode" > canary.out 2>&1; rc=$?; set -e
-            if [ "$rc" -eq 0 ] || ! grep -q "$banner" canary.out; then
-              echo "RED: canary '$mode' rc=$rc, banner '$banner' present: $(grep -c "$banner" canary.out)"; cat canary.out; fail=1
-            else
-              echo "canary '$mode' tripped (rc=$rc)"
-            fi
-          done
-          exit $fail
-        if: steps.plan.outputs.run == 'true'
-
-      # Non-vacuity (iii): the manifest gate, with the sanitizer environment.
-      - name: suite under check_gate
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          cd .
-          LSAN_OPTIONS="suppressions=$PWD/tests/sanitize/lsan.supp" tests/check_gate.sh cpp build/tests/aether_tests --config debug
+      # build with ASan/UBSan, then the runtime-linked, canary and manifest checks (tests/sanitize/cpp_gate.sh)
+      - run: make gate-sanitize GATE_JOBS=$(nproc)
         if: steps.plan.outputs.run == 'true'
       - if: always() && steps.plan.outputs.run == 'true'
         run: ccache -s
@@ -245,26 +173,15 @@ jobs:
           key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
           restore-keys: |
             ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-
-      - name: clang, ninja and nvcc 12.6 with the runtime headers (no driver, no GPU)
+      - name: clang and ninja
         run: |
-          curl -fsSL -o /tmp/cuda-keyring.deb \
-            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang libomp-dev ccache ninja-build cuda-nvcc-12-6 cuda-cudart-dev-12-6
+          sudo apt-get install -y --no-install-recommends clang libomp-dev ccache ninja-build
           python3 -m pip install --user "nanobind>=3.1,<4"
+      - uses: ./.github/actions/cuda
       - run: ccache -z
       - name: build _core and the plugin with clang, zero warnings
-        env:
-          CC: clang
-          CXX: clang++
-          AETHER_CUDA_ROOT: /usr/local/cuda-12.6
-        run: |
-          cmake -S dsc -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -Dnanobind_DIR="$(python3 -c 'import nanobind; print(nanobind.cmake_dir())')" -DPython_EXECUTABLE="$(command -v python3)"
-          cmake --build build-clang
-          syms=$(nm -D --defined-only build-clang/libaether_cuda.so | awk '{print $NF}')
-          [ "$syms" = aether_memory_v1 ] || { echo "::error::the plugin exports more than the seam: $syms"; exit 1; }
+        run: make gate-clang CUDA_PATH=/usr/local/cuda-12.9
       - if: always()
         run: ccache -s
 
@@ -278,15 +195,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y g++-${{ matrix.gcc }}
-      - name: reproducer and vectorisation check (default macro)
-        run: tests/packetmath/check_hvm_masked.sh g++-${{ matrix.gcc }}
-      - name: necessity (masked variants forced on must miscompile)
-        if: matrix.gcc != 12
-        run: tests/packetmath/check_hvm_masked.sh g++-${{ matrix.gcc }} --necessity
-      - name: nested select reads no stale stack (leaves held by reference)
-        run: tests/hosttu/check_select_pta.sh g++-${{ matrix.gcc }}
-      # Not yet known which of 12/13/14 carry the bug on this reduction (11.5 does);
-      # once a run shows which are RED, gate this step on those majors only.
-      - name: necessity (old by-value alias must miscompile)
-        continue-on-error: true
-        run: tests/hosttu/check_select_pta.sh g++-${{ matrix.gcc }} --necessity
+      # the necessity step proves this compiler carries the bug the rule works around: Ubuntu's g++-13 and g++-14 do
+      - name: reproducers, vectorisation check and nested select
+        run: make gate-hostgcc CC=gcc-${{ matrix.gcc }} CXX=g++-${{ matrix.gcc }} ${{ matrix.gcc != 12 && 'GATE_NECESSITY=1' || '' }}

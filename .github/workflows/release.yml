@@ -102,7 +102,7 @@ jobs:
         'nanobind>=3.1,<4; python_version >= "3.10"'
         'nanobind>=2.2,<3; python_version < "3.10"'
       # The headers sit one directory above the package, outside cibuildwheel's copy: bind-mount the checkout.
-      CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro --volume ${{ github.workspace }}/.ccache-cibw:/ccache"
+      CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/aether:/sib/aether:ro --volume ${{ github.workspace }}/.ccache-cibw:/ccache --volume ${{ github.workspace }}/.cuda-redist:/cuda-redist"
       CIBW_ENVIRONMENT_LINUX: "AETHER_HEADER_ROOT=/sib/aether AETHER_CUDA_ROOT=/usr/local/cuda-12.9 CMAKE_BUILD_PARALLEL_LEVEL=2 CCACHE_DIR=/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
       # The host FFT runs on OpenMP and includes <omp.h>, which Apple's clang lacks: Homebrew's libomp, which delocate
       # copies into the wheel (Linux: auditwheel bundles libgomp). Its deployment target is the runner's macOS, so the
@@ -111,7 +111,8 @@ jobs:
       # The wheel ships the OpenMP runtime itself, once, at aether/_omp/ (dsc/CMakeLists.txt); repair must not vendor another.
       CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v --exclude libomp.dylib {wheel}"
       CIBW_ENVIRONMENT_MACOS: "AETHER_HEADER_ROOT=${{ github.workspace }}/aether MACOSX_DEPLOYMENT_TARGET=14.0 OpenMP_ROOT=/opt/homebrew/opt/libomp CMAKE_PREFIX_PATH=/opt/homebrew/opt/libomp CCACHE_DIR=${{ github.workspace }}/.ccache-cibw CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache"
-      # nvcc 12.9 + the runtime headers for the plugin (compiled with -cudart none: no CUDA runtime library is linked or shipped), x86_64 and aarch64 (NVIDIA's aarch64 repo is `sbsa`)
+      # nvcc 12.9 + the runtime headers for the plugin (compiled with -cudart none: no CUDA runtime library is linked or shipped), x86_64 and aarch64 (NVIDIA's `sbsa`),
+      # from NVIDIA's versioned redist archives, pinned with their sha256 sums in .github/cuda_redist.sh (the one place; the download cache is keyed by them)
       # ccache from EPEL (AlmaLinux 8); EPEL mirrors fail often on aarch64: retry, then run uncached through a pass-through ccache stand-in
       CIBW_BEFORE_ALL_LINUX: >-
         git config --global --add safe.directory '*';
@@ -119,11 +120,7 @@ jobs:
         command -v ccache >/dev/null || { printf '%s\n' '#!/bin/sh' 'case $1 in -*) exit 0;; esac' 'exec "$@"' > /usr/local/bin/ccache;
         chmod +x /usr/local/bin/ccache; };
         CCACHE_DIR=/ccache ccache -z;
-        case "$(uname -m)" in x86_64) cuda_repo_arch=x86_64;; aarch64) cuda_repo_arch=sbsa;; *) cuda_repo_arch=;; esac;
-        if [ -n "$cuda_repo_arch" ]; then
-        curl -fsSL -o /etc/yum.repos.d/cuda-rhel8.repo
-        "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/$cuda_repo_arch/cuda-rhel8.repo" &&
-        dnf install -y --setopt=install_weak_deps=False cuda-nvcc-12-9 cuda-cudart-devel-12-9 cuda-crt-12-9; fi
+        case "$(uname -m)" in x86_64|aarch64) sh /sib/aether/.github/cuda_redist.sh fetch "$(uname -m)" /usr/local/cuda-12.9 /cuda-redist;; esac
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "ccache -s; auditwheel repair --exclude libgomp.so.1 -w {dest_dir} {wheel}"
       CIBW_TEST_SKIP: "*"
     steps:
@@ -157,7 +154,7 @@ jobs:
         env:
           PLAT: ${{ matrix.plat }}
         run: |
-          args=(--tree aether --skip docs/ --skip .github/ --file aether/.github/workflows/release.yml --str "$PLAT $RUNNER_OS $RUNNER_ARCH $SETUPTOOLS_SCM_PRETEND_VERSION")
+          args=(--tree aether --skip docs/ --skip .github/ --file aether/.github/workflows/release.yml --file aether/.github/cuda_redist.sh --str "$PLAT $RUNNER_OS $RUNNER_ARCH $SETUPTOOLS_SCM_PRETEND_VERSION")
           while read -r f; do args+=(--file "$f"); done < <(find aether/dsc/aether_dsc/_payload -type f | sort)
           if [ "$RUNNER_OS" = Linux ]; then
             args+=(--str "manylinux_2_28 $(docker buildx imagetools inspect "quay.io/pypa/manylinux_2_28_$(uname -m)" --format '{{.Manifest.Digest}}' 2>/dev/null || true)")
@@ -178,6 +175,17 @@ jobs:
         run: mkdir -p .ccache-cibw
       - if: steps.wh.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: brew install ccache
+      # The CUDA redist archives (x86_64 and aarch64 legs), kept under the pinned versions and sha256 sums; each is verified on use
+      - if: steps.wh.outputs.cache-hit != 'true'
+        run: mkdir -p .cuda-redist
+      - id: cr
+        if: steps.wh.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: echo "key=cuda-redist-$(aether/.github/cuda_redist.sh key "$(uname -m)")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        if: steps.wh.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        with:
+          path: .cuda-redist
+          key: ${{ steps.cr.outputs.key }}
       - uses: actions/cache@v6
         if: steps.wh.outputs.cache-hit != 'true'
         with:
@@ -371,32 +379,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Fresh venv, install the wheel (no dependencies at all), pip check, tests
         run: |
-          python -m venv venv
-          . venv/bin/activate
-          pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" aether-dsc
-          pip check
-          pip install --quiet --prefer-binary pytest numpy "raptor-core>=0.7,<0.8"   # test-only: test_arrays compares with numpy, test_ft_payload uses raptor's free-threading rows
-          python - <<'PY'
-          import sys
-          import aether_dsc, aether
-          p = aether_dsc.payload()
-          assert p.headers and p.digest
-          a = aether.zeros((2, 3), "float32")
-          assert a.shape == (2, 3) and memoryview(a).nbytes == 24
-          # no GPU (and here no driver) on this runner: the plugin loads, asks the driver, and the error names it
-          try:
-              aether.empty(8, device="cuda")
-          except aether.CudaUnavailable as exc:
-              assert sys.platform == "darwin" or "CUDA driver" in str(exc), exc   # macOS wheels carry no plugin
-          print("OK")
-          PY
-          # the payload does not depend on the arrays
-          rm venv/lib/python*/site-packages/aether/_core*.so
-          python -c "import aether_dsc; aether_dsc.payload()"
-          python -c "import aether" 2>&1 | grep -q "_core is not built" 
-          pip install --quiet --no-index --find-links "$GITHUB_WORKSPACE/dist" --force-reinstall aether-dsc
-          cd "$GITHUB_WORKSPACE/dsc/tests"
-          python -m pytest -q -c /dev/null --rootdir . test_arrays.py test_ft_payload.py -p no:cacheprovider
+          "$GITHUB_WORKSPACE/tools/wheel_check.sh" venv "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/dsc/tests" test_arrays.py test_ft_payload.py test_openmp.py
         # outside the checkout: from dsc/ the source folder dsc/aether (no _core) would shadow the installed wheel
         working-directory: ${{ runner.temp }}
       # Apple silicon kills a binary whose signature install_name_tool invalidated, and two OpenMP runtimes in one
@@ -471,9 +454,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: manifesto copy matches raptor
-        run: bash tools/manifesto_check.sh CONTRIBUTING.md
-
       - run: sudo apt-get update && sudo apt-get install -y doxygen
 
       - uses: actions/setup-python@v7
@@ -497,23 +477,8 @@ jobs:
           token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
           pins: .github/companions
 
-      - run: python3 -m pip install -r docs/requirements.txt
-      # the checked-out site replaces the package the requirements fetch, so a PR pair is what is tested
-      - run: python3 -m pip install ./site
-
-      # The generated capability map matches the site's data.
-      - run: python3 -m raptor_docs.fresh --check
-
-      # Refuses to proceed unless every tutorial/example notebook cell
-      # already ran clean.
-      - run: make -C docs nbcheck
-
-      # doxygen (breathe's XML source) + sphinx -W --keep-going: 0 warnings.
-      - run: make -C docs strict
-      - name: every public name has a page
-        # aether_dsc from the source tree, as docs/conf.py reads it
-        run: PYTHONPATH=dsc python tools/docs_inventory_check.py docs/_build/html/objects.inv aether_dsc --allow seal
-
+      # manifesto copy, the generated capability map, notebooks checked, doxygen + sphinx -W --keep-going, every public name has a page
+      - run: make gate-docs SITE_SRC=site RAPTOR_SRC=
       - uses: actions/upload-artifact@v7
         with:
           name: site-${{ needs.build.outputs.tree }}
@@ -537,14 +502,8 @@ jobs:
           sudo apt-get install -y g++-13
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
-      # nvcc for compile-only checks of the CUDA arm: NVIDIA's apt repo,
-      # just the compiler, the runtime headers and CCCL (no driver, no GPU).
-      - run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get install -y cuda-nvcc-12-6 cuda-cudart-dev-12-6 cuda-cccl-12-6
-          echo /usr/local/cuda-12.6/bin >> "$GITHUB_PATH"
+      # nvcc for compile-only checks of the CUDA arm: the pinned redist archives (compiler, runtime headers, CCCL; no driver, no GPU).
+      - uses: ./.github/actions/cuda
 
       - uses: actions/setup-python@v7
         with:
