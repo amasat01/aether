@@ -368,7 +368,7 @@ def test_arrays_alive_at_exit_and_stream_object_held():
     assert out.returncode == 0 and out.stdout.strip() == "ok", (out.returncode, out.stderr[-400:])
 
 
-# ---- row 7: threads (the free-threaded smoke when run on 3.13t/3.14t with -m ft)
+# ---- row 7: threads (the free-threaded smoke when run on 3.14t/3.15t with -m ft)
 @pytest.mark.ft
 def test_threads_allocate_free_export():
     errors, before = [], _core._exports_live()

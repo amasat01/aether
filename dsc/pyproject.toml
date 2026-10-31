@@ -68,7 +68,7 @@ provider = "scikit_build_core.metadata.setuptools_scm"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "ft: free-threading rows (raptor.conformance.freethreading) -- skip on a GIL build; select with -m ft on 3.13t/3.14t.",
+    "ft: free-threading rows (raptor.conformance.freethreading) -- skip on a GIL build; select with -m ft on 3.14t/3.15t.",
 ]
 # Makes `import aether_dsc` work against the checked-out tree without an
 # install — this repo root, prepended to sys.path before collection (mirrors
