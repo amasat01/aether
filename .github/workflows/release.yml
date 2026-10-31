@@ -38,7 +38,7 @@ jobs:
   # The sealed payload is the same for every wheel: sealed once here (NVRTC-clean gate included), handed to
   # the wheel builds as an artifact.
   seal:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,7 +81,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             plat: manylinux_x86_64
           - arch: aarch64
             runner: ubuntu-24.04-arm
@@ -227,7 +227,7 @@ jobs:
   # Assembles the wheels and the sdist into the one artifact the rest of the workflow and publish.yml use.
   build:
     needs: [seal, wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tree: ${{ steps.tree.outputs.tree }}
     steps:
@@ -363,7 +363,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t"]
         include:   # the macOS wheel: one regular and one free-threaded build
           - runner: macos-15
@@ -417,7 +417,7 @@ jobs:
   # the sdist builds `_core` from source on a machine with a C++ compiler and no CUDA toolkit
   sdist-install:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -450,7 +450,7 @@ jobs:
   # `nb_execution_mode = "off"`).
   docs:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -490,7 +490,7 @@ jobs:
   # Proves the C++ in every notebook: re-runs each one on the CPU and diffs
   # the outputs, and compiles every snippet with nvcc (compile-only, no GPU).
   nbverify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CC: gcc-13
       CXX: g++-13
@@ -531,7 +531,7 @@ jobs:
   # Informational: a docs-only PR carries an already published version.
   pypi-version:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
         with:

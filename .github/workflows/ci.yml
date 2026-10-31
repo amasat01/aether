@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # CPU-only CI: the C++ (CPP_MODE) arms, debug and release. The CUDA arms
-# need an actual GPU runner and a CUDA toolchain; GitHub-hosted `ubuntu-latest`
+# need an actual GPU runner and a CUDA toolchain; GitHub-hosted `ubuntu-24.04`
 # has neither, so they are NOT wired here. They belong on a self-hosted GPU
 # runner when one exists.
 
@@ -22,7 +22,7 @@ jobs:
   release-gate:
     # The release label, the diff, the PR body and the tag it would create agree (tools/release_gate.sh). Skipped on other PRs.
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -35,7 +35,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: bash tools/release_gate.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
   test-cpp:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         debug_mode: ["ON", "OFF"]
@@ -54,7 +54,7 @@ jobs:
         with:
           fetch-depth: 0   # the version comes from the git tag (cmake/GitVersion.cmake)
 
-      # C++23 (aether's cxx_std_23 requirement): ubuntu-latest (24.04) carries
+      # C++23 (aether's cxx_std_23 requirement): ubuntu-24.04 carries
       # gcc-13 as its default toolchain major; installed explicitly so the
       # compiler version is pinned rather than whatever "latest" resolves to.
       # OpenMP (find_package(OpenMP REQUIRED)) ships with g++, no extra package.
@@ -91,7 +91,7 @@ jobs:
   # count equals the manifest. CUDA-side coverage is the local `sanitize-gate`
   # (tests/sanitize/README.md).
   sanitize-cpp:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CC: gcc-13
       CXX: g++-13
@@ -163,7 +163,7 @@ jobs:
   # The arrays binding and its CUDA 12 plugin built with clang (the wheels use gcc): a source build with clang and a
   # CUDA toolkit must work, and the plugin must export only the seam.
   clang-plugins:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
@@ -193,7 +193,7 @@ jobs:
         run: ccache -s
 
   host-gcc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
