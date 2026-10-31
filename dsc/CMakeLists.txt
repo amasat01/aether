@@ -88,6 +88,22 @@ if(UNIX)
   else()
     set_target_properties(_core PROPERTIES INSTALL_RPATH "$ORIGIN/_omp")
   endif()
+  # The runtime must be the one this compiler's code calls: libgomp for GCC, LLVM's libomp for Clang. Shipping the other one
+  # loads fine and then fails or runs on a second runtime. In a conda environment `libgomp.so.1` can be a symlink to LLVM's
+  # libomp, so the check is on the resolved file, not on the name a linker was given.
+  get_filename_component(_omp_file "${_omp_real}" NAME)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(_omp_want "libgomp")
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(_omp_want "lib(omp|iomp)")
+  else()
+    set(_omp_want "")
+  endif()
+  if(_omp_want AND NOT _omp_file MATCHES "^${_omp_want}")
+    message(FATAL_ERROR "the OpenMP runtime ${_omp_real} does not match the ${CMAKE_CXX_COMPILER_ID} compiler ${CMAKE_CXX_COMPILER} "
+            "(wanted ${_omp_want}*): a libgomp.so.1 that links to LLVM's libomp, as in a conda environment, is the usual cause. "
+            "Build with the compiler's own runtime visible (a toolchain outside the conda prefix, or OpenMP_CXX_LIBRARIES set).")
+  endif()
   # Refuse by name anything that is not a binary (a text linker script copied here fails at import: "invalid ELF header").
   file(READ "${_omp_real}" _omp_magic LIMIT 4 HEX)
   if(NOT (_omp_magic STREQUAL "7f454c46" OR _omp_magic STREQUAL "cffaedfe" OR _omp_magic STREQUAL "cafebabe"))
@@ -100,6 +116,9 @@ if(UNIX)
       message(FATAL_ERROR "the OpenMP runtime ${_omp_real} has no SONAME (readelf -d found none)")
     endif()
     set(_omp_name "${CMAKE_MATCH_1}")
+    if(_omp_want AND NOT _omp_name MATCHES "^${_omp_want}")
+      message(FATAL_ERROR "the OpenMP runtime ${_omp_real} has SONAME ${_omp_name}, not the ${CMAKE_CXX_COMPILER_ID} compiler's (wanted ${_omp_want}*)")
+    endif()
   endif()
   message(STATUS "OpenMP runtime shipped as aether/_omp/${_omp_name}: ${_omp_real}")
   install(FILES "${_omp_real}" DESTINATION aether/_omp RENAME ${_omp_name})
@@ -118,10 +137,9 @@ if(UNIX)
       if(NOT _cores)
         message(FATAL_ERROR "no aether/_core*.so under ${_dest}: cannot point it at the shipped OpenMP runtime")
       endif()
-      # The shipped libomp carries Homebrew's signature, which install_name_tool would invalidate (with a warning): drop it
-      # first. `_core` is linker-signed and must keep its signature space (install_name_tool refuses an unsigned one).
-      # Both are re-signed (ad hoc) and verified below: Apple silicon kills a process that maps an invalid signature.
-      execute_process(COMMAND codesign --remove-signature "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
+      # install_name_tool invalidates the signatures (it warns) and needs them in place: a stripped libomp leaves a
+      # __LINKEDIT newer Xcode refuses to edit, and `_core` must keep its signature space. Both are re-signed (ad hoc)
+      # and verified below: Apple silicon kills a process that maps an invalid signature.
       execute_process(COMMAND install_name_tool -id @rpath/libomp.dylib "${_dest}/_omp/libomp.dylib" COMMAND_ERROR_IS_FATAL ANY)
       # Rewrite from what `_core` actually records (the linker wrote the runtime's own install name: an absolute Homebrew
       # path), then refuse a build that still has an OpenMP reference outside @rpath.
@@ -163,7 +181,7 @@ endif()
 # (the CUDA runtime functions aether's headers call, defined over the driver API), and nvcc links them. It needs
 # libcuda.so.1 at run time and no CUDA runtime library. No CMake CUDA language: `_core` stays CUDA-free.
 function(_aether_plugin)
-  set(_hints "$ENV{AETHER_CUDA_ROOT}")
+  set(_hints "$ENV{AETHER_CUDA_ROOT}" "$ENV{CUDA_PATH}")   # an explicit root first, then the toolkit the environment names
   file(GLOB _cands "/usr/local/cuda-12.*" "/usr/local/cuda")
   list(SORT _cands COMPARE NATURAL ORDER DESCENDING)
   find_program(_aether_nvcc nvcc HINTS ${_hints} ${_cands} PATH_SUFFIXES bin)

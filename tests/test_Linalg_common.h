@@ -635,7 +635,8 @@ TEST(LinalgTriangular, SolvesAgainstTheFactorAndItsTranspose)
     constexpr std::size_t N = 7, K = 4;
     Stream rng(61);
     const Mat spd = randomSpd(N, rng);
-    const al::Cholesky<double, N> f = al::cholesky<N>(spd.data());
+    // nvcc 12.9 front end rejects the explicit type here
+    const auto f = al::cholesky<N>(spd.data());
     Mat b(N * K);
     for (double& v : b)
         v = rng.next();

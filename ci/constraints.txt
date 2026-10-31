@@ -1,0 +1,3 @@
+# Pins for the gate's throwaway environment (make gate): `pip install -c ci/constraints.txt ...`.
+# One place for what the workflows used to pin inline.
+ruff==0.15.18
