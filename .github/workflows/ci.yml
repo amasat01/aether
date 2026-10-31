@@ -10,6 +10,8 @@ name: CI
 
 # Pull requests only: main receives the tested tree, nothing re-runs there.
 on:
+  schedule:
+    - cron: "23 4 * * 1"   # weekly on main: every remembered pass runs again
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch: {}
@@ -69,7 +71,15 @@ jobs:
           path: raptor
           token: ${{ secrets.SIBLING_READ_TOKEN || github.token }}
           pins: .github/companions
+      - id: memo
+        uses: ./.github/actions/memo
+        with:
+          name: ci-test-cpp
+          args: >-
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree raptor --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip .github/ --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+          extra: ${{ toJSON(matrix) }}
       - run: make gate-names RAPTOR_SRC=raptor
+        if: steps.memo.outputs.run == 'true'
 
       # compiled objects persist across runs; one cache per job and architecture
       - uses: actions/cache@v6
@@ -78,12 +88,20 @@ jobs:
           key: ccache-${{ runner.os }}-${{ runner.arch }}-test-cpp-${{ matrix.debug_mode }}-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ runner.arch }}-test-cpp-${{ matrix.debug_mode }}-
+        if: steps.memo.outputs.run == 'true'
       - run: ccache -z
+        if: steps.memo.outputs.run == 'true'
 
       # warnings as errors, then the manifest gate (check_gate.sh, never the binary bare)
       - run: make gate-cpp gate_debug=${{ matrix.debug_mode }} GATE_JOBS=$(nproc)
-      - if: always()
+        if: steps.memo.outputs.run == 'true'
+      - if: always() && steps.memo.outputs.run == 'true'
         run: ccache -s
+      - if: success() && steps.memo.outputs.run == 'true'
+        uses: ./.github/actions/memo-save
+        with:
+          name: ci-test-cpp
+          digest: ${{ steps.memo.outputs.digest }}
 
   # Sanitizer leg (host only): the CPP_MODE suite built with -fsanitize=address,undefined and run
   # through the manifest gate. Three checks keep it from going vacuously green: the runtime is
@@ -123,7 +141,7 @@ jobs:
           HIT: ${{ steps.pass.outputs.cache-hit }}
           DIGEST: ${{ steps.memo.outputs.digest }}
         run: |
-          if [ "$HIT" = true ]; then
+          if [ "$HIT" = true ] && [ "$GITHUB_EVENT_NAME" != schedule ]; then
             echo "sanitize-cpp: passed earlier on digest $DIGEST" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo run=true >> "$GITHUB_OUTPUT"
@@ -174,23 +192,39 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - id: memo
+        uses: ./.github/actions/memo
+        with:
+          name: ci-clang-plugins
+          args: >-
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
       - uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-${{ hashFiles('**/*.h', '**/*.hpp', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/CMakeLists.txt') }}
           restore-keys: |
             ccache-v2-${{ runner.os }}-${{ runner.arch }}-clang-plugins-
+        if: steps.memo.outputs.run == 'true'
       - name: clang and ninja
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang libomp-dev ccache ninja-build
           python3 -m pip install --user "nanobind>=3.1,<4"
+        if: steps.memo.outputs.run == 'true'
       - uses: ./.github/actions/cuda
+        if: steps.memo.outputs.run == 'true'
       - run: ccache -z
+        if: steps.memo.outputs.run == 'true'
       - name: build _core and the plugin with clang, zero warnings
         run: make gate-clang CUDA_PATH=/usr/local/cuda-12.9
-      - if: always()
+        if: steps.memo.outputs.run == 'true'
+      - if: always() && steps.memo.outputs.run == 'true'
         run: ccache -s
+      - if: success() && steps.memo.outputs.run == 'true'
+        uses: ./.github/actions/memo-save
+        with:
+          name: ci-clang-plugins
+          digest: ${{ steps.memo.outputs.digest }}
 
   host-gcc:
     runs-on: ubuntu-24.04
@@ -201,7 +235,21 @@ jobs:
     name: host-gcc (${{ matrix.gcc }})
     steps:
       - uses: actions/checkout@v7
+      - id: memo
+        uses: ./.github/actions/memo
+        with:
+          name: ci-host-gcc
+          args: >-
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+          extra: ${{ toJSON(matrix) }}
       - run: sudo apt-get update && sudo apt-get install -y g++-${{ matrix.gcc }}
+        if: steps.memo.outputs.run == 'true'
       # the necessity step proves this compiler carries the bug the rule works around: Ubuntu's g++-13 and g++-14 do
       - name: reproducers, vectorisation check and nested select
         run: make gate-hostgcc CC=gcc-${{ matrix.gcc }} CXX=g++-${{ matrix.gcc }} ${{ matrix.gcc != 12 && 'GATE_NECESSITY=1' || '' }}
+        if: steps.memo.outputs.run == 'true'
+      - if: success() && steps.memo.outputs.run == 'true'
+        uses: ./.github/actions/memo-save
+        with:
+          name: ci-host-gcc
+          digest: ${{ steps.memo.outputs.digest }}
