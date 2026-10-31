@@ -278,7 +278,7 @@ jobs:
             [ "$n" -eq 10 ] || { echo "::error::$n wheels for $plat, expected 10"; exit 1; }
           done
           [ "$(find dist -name '*.whl' | wc -l)" -eq 30 ] || { echo "::error::unexpected wheel in dist"; ls dist; exit 1; }
-          [ "$(ls dist/*.whl dist/*.tar.gz | cut -d- -f2 | sort -u | wc -l)" -eq 1 ] || { echo "::error::the sdist and wheels carry different versions"; ls dist; exit 1; }
+          [ "$(ls dist/*.whl dist/*.tar.gz | sed "s/\.tar\.gz$//" | cut -d- -f2 | sort -u | wc -l)" -eq 1 ] || { echo "::error::the sdist and wheels carry different versions"; ls dist; exit 1; }
           echo "OK: 10 wheels each for x86_64, aarch64 and macOS arm64"
 
       - name: Same CIBW_BUILD lines as hawk's release workflow
