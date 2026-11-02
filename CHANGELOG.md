@@ -2,6 +2,24 @@
 
 Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
 
+## 0.7.3 (unreleased)
+
+This section covers what changes from 0.7.2. `aether-dsc` moves with the C++ version. The library's API is unchanged; this release is about how it is built and shipped.
+
+### Changed
+
+- **macOS wheels need macOS 15 or newer.** They target the libomp minimum of the macOS 15 runners; macOS 14 is no longer built.
+- **CPython 3.13t is dropped.** There are nine wheels per platform; the free-threaded tests run on 3.14t.
+- **The CUDA toolchain comes from NVIDIA's pinned 12.9 redist archives** (nvcc, CUDA headers and CCCL), so a build sees the same compiler everywhere.
+- `aether-dsc` finds the CUDA toolkit through `CUDA_PATH` when `AETHER_CUDA_ROOT` is not set.
+- CI runs on `ubuntu-24.04`, and the checks are `make gate`, `make gate-gpu` and `make gate-all`.
+
+### Fixed
+
+- A build refuses an OpenMP runtime that does not match its compiler (libgomp for GCC, LLVM's libomp for Clang), instead of shipping a wheel that loads and then runs on a second runtime. This is the usual trap with a conda `libgomp.so.1` that links to LLVM's libomp.
+- The macOS wheel's libomp is renamed and re-signed without stripping its signature first, which newer Xcode refuses.
+- The Cholesky routine builds with nvcc 12.9.
+
 ## 0.7.2 (2026-10-29)
 
 This section covers what changes from 0.7.1. `aether-dsc` moves with the C++ version.
