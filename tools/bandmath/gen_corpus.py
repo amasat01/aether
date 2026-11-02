@@ -72,16 +72,6 @@ TIER_EDGE_LO = math.ldexp(1.0, -94)
 TIER_EDGE_HI = math.ldexp(1.0, 125)
 
 
-def classify(b: int) -> int:
-    exp = (b >> 52) & 0x7FF
-    frac = b & 0xFFFFFFFFFFFFF
-    if exp == 0x7FF:
-        return 4 if frac else 3  # nan / inf
-    if exp == 0:
-        return 1 if frac else 0  # subnormal / zero
-    return 2  # normal
-
-
 # =====================================================================
 #  Golden reference — native `double` arithmetic (bit-identical to the
 #  C++ candidate's IEEE-754 hardware ops; see the module docstring for why
