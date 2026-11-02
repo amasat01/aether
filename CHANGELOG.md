@@ -13,6 +13,8 @@ This section covers what changes from 0.7.2. `aether-dsc` moves with the C++ ver
 - **The CUDA toolchain comes from NVIDIA's pinned 12.9 redist archives** (nvcc, CUDA headers and CCCL), so a build sees the same compiler everywhere.
 - `aether-dsc` finds the CUDA toolkit through `CUDA_PATH` when `AETHER_CUDA_ROOT` is not set.
 - CI runs on `ubuntu-24.04`, and the checks are `make gate`, `make gate-gpu` and `make gate-all`.
+- `make gate-gpu` also runs the header-diet check: the umbrella header never pulls in the host-only formatting and `mdspan` headers or the banded definitions.
+- `aether_dsc.c_core.real_type` is gone; nothing used it.
 
 ### Fixed
 
