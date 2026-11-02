@@ -18,6 +18,7 @@ This section covers what changes from 0.7.2. `aether-dsc` moves with the C++ ver
 
 ### Fixed
 
+- `aether-dsc` builds with a CUDA 13 toolkit: nvcc 13 launches kernels through `__cudaGetKernel` and `__cudaLaunchKernel`, which the driver-only runtime now provides.
 - A build refuses an OpenMP runtime that does not match its compiler (libgomp for GCC, LLVM's libomp for Clang), instead of shipping a wheel that loads and then runs on a second runtime. This is the usual trap with a conda `libgomp.so.1` that links to LLVM's libomp.
 - The macOS wheel's libomp is renamed and re-signed without stripping its signature first, which newer Xcode refuses.
 - The Cholesky routine builds with nvcc 12.9.
