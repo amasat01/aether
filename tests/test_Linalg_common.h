@@ -733,6 +733,37 @@ TEST(LinalgEigh, HardSpectraConvergeWithinTheFixedSweeps)
     checkEighHardSpectra<32, float>(92);
 }
 
+template<std::size_t N, class T>
+void checkEighValuesBitIdentical(Mat s)
+{
+    const std::vector<T> st = cast<T>(s);
+    const al::Eigh<T, N> full = al::eigh<N>(st.data());
+    al::EighValues<T, N> values;
+    al::eighValues<N>(values, st.data());
+    EXPECT_EQ(std::memcmp(full.w, values.w, sizeof values.w), 0) << "n=" << N;
+    EXPECT_EQ(full.info, values.info) << "n=" << N;
+}
+
+TEST(LinalgEigh, ValuesOnlyIsBitIdenticalToTheFullDecomposition)
+{
+    Stream rng(95);
+    checkEighValuesBitIdentical<1, double>(randomSymmetric(1, rng));
+    checkEighValuesBitIdentical<2, double>(randomSymmetric(2, rng));
+    checkEighValuesBitIdentical<3, double>(randomSymmetric(3, rng));
+    checkEighValuesBitIdentical<8, double>(randomSymmetric(8, rng));
+    checkEighValuesBitIdentical<32, double>(randomSymmetric(32, rng));
+    checkEighValuesBitIdentical<3, float>(randomSymmetric(3, rng));
+    checkEighValuesBitIdentical<16, float>(randomSymmetric(16, rng));
+    checkEighValuesBitIdentical<32, float>(randomSymmetric(32, rng));
+    Mat diagonal(16 * 16, 0.0);   // nothing to rotate: the first sweep is the last
+    for (std::size_t i = 0; i < 16; ++i)
+        diagonal[i * 16 + i] = static_cast<double>(16 - i);
+    checkEighValuesBitIdentical<16, double>(diagonal);
+    Mat nan = randomSymmetric(4, rng);
+    nan[5] = nan[5] * 0.0 + std::numeric_limits<double>::quiet_NaN();
+    checkEighValuesBitIdentical<4, double>(nan);
+}
+
 TEST(LinalgEigh, CloseEigenvaluesSetInfoBitTwo)
 {
     const double eye[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };

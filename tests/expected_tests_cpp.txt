@@ -537,6 +537,7 @@ LinalgEigh.NaNInputSetsInfoBitOne
 LinalgEigh.ReadsTheSymmetricPartOfTheInput
 LinalgEigh.SizeOneIsTheScalar
 LinalgEigh.SweepTableIsFixed
+LinalgEigh.ValuesOnlyIsBitIdenticalToTheFullDecomposition
 LinalgLu.DeterminantSignFollowsRowExchanges
 LinalgLu.FailedFactorKeepsThePartialFactorisation
 LinalgLu.MatchesLapackGetrf
