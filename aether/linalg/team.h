@@ -28,3 +28,4 @@
 #include "aether/linalg/team/Lu.h"
 #include "aether/linalg/team/Qr.h"
 #include "aether/linalg/team/Team.h"
+#include "aether/linalg/WarpEigh.h"
