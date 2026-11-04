@@ -24,6 +24,7 @@
  */
 
 #include <cstdint>
+#include <type_traits>
 
 #include "aether/macros.h"
 
@@ -62,10 +63,28 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() bool isFiniteBits(E x)
         return ((floatBits(x) >> 23) & 0xff) != 0xff;
 }
 
-/** @brief The exact residual `(a + b) - s` of `s == fl(a + b)` (see the file
- *         comment for the form and the two pinned rules). */
+/** @brief `x` with a zero of either sign read as `+0`, by integer ops (no
+ *         floating-point op: the FP64 pipe is the scarce one). */
 template<class E>
-AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr(E a, E b, E s)
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() E positiveZero(E x)
+{
+    using U = std::conditional_t<sizeof(E) == 8, std::uint64_t, std::uint32_t>;
+    U b     = static_cast<U>(floatBits(x));
+    b       = (b << 1) == U(0) ? U(0) : b;
+#if defined(__CUDA_ARCH__)
+    if constexpr (sizeof(E) == 8)
+        return __longlong_as_double(static_cast<long long>(b));
+    else
+        return __int_as_float(static_cast<int>(b));
+#else
+    return std::bit_cast<E>(b);
+#endif
+}
+
+/** @brief `twoSumErr` for a caller that gates on `isFiniteBits(s)` itself: the
+ *         residual is garbage when `s` is not finite (the `+0` rule holds). */
+template<class E>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErrFinite(E a, E b, E s)
 {
     // The residual is exact only for the ROUNDED a, b and s: a product feeding
     // any of them must not be contracted into the subtractions below.
@@ -80,12 +99,19 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr(E a, E b, E s)
     const E small    = aBig ? b : a;
     E z              = s - big;
     AETHER_FP_BARRIER(z);
-    const E e = small - z;
-    return isFiniteBits(s) ? e + E(0) : s - s;
+    return positiveZero(small - z);
 #else
     const E bb = s - a;
-    return ((a - (s - bb)) + (b - bb)) + E(0);
+    return positiveZero((a - (s - bb)) + (b - bb));
 #endif
+}
+
+/** @brief The exact residual `(a + b) - s` of `s == fl(a + b)` (see the file
+ *         comment for the form and the two pinned rules). */
+template<class E>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr(E a, E b, E s)
+{
+    return isFiniteBits(s) ? twoSumErrFinite(a, b, s) : s - s;
 }
 
 } // namespace accum

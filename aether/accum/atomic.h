@@ -143,7 +143,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void neumaierAdd_(T& hi, T& comp, T ter
 {
     AETHER_FP_BARRIER(term);
     const T s = hi + term;
-    const T e = twoSumErrT_(hi, term, s);
+    const T e = accum::twoSumErrFinite(hi, term, s);
     hi        = s;
     comp      = isFinite_(s) ? comp + e : T(0);
 }
@@ -157,7 +157,7 @@ template<class T>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() void pairCombine_(T ah, T ac, T bh, T bc, T& oh, T& oc)
 {
     const T s = ah + bh;
-    const T e = twoSumErrT_(ah, bh, s);
+    const T e = accum::twoSumErrFinite(ah, bh, s);
     oh        = s;
     oc        = isFinite_(s) ? (ac + bc) + e : T(0);
 }
