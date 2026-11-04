@@ -11,7 +11,8 @@
  * The input is `S = (A + A^T) / 2`. Rotations run in a fixed order
  * (`p < q`, ascending) for a fixed number of sweeps (`eighSweeps`), each
  * rotation skipped when `|s_pq| <= eps * sqrt(|s_pp s_qq|)`; there is no
- * early exit, so the control flow does not depend on the data. The
+ * early exit, so the control flow does not depend on the data (`eighValues` alone stops after a
+ * sweep that rotated nothing, which changes no bit). The
  * eigenvalues come back ascending and every eigenvector (a column of `v`) is
  * signed so its largest-magnitude component, the first of equals, is positive.
  *
@@ -45,26 +46,30 @@ struct Eigh {
     std::int32_t info;  ///< Bit 1: not converged; bit 2: neighbouring eigenvalues too close.
 };
 
-/**
- * @brief Eigendecomposition `S = V diag(w) V^T` of the symmetric part of `a` into
- *        `r`, in place: the result is built where it lives, never returned or
- *        copied by value.
- *
- * @tparam N  Dimension.
- * @param r   The decomposition, overwritten.
- * @param a   `N x N`, row-major.
- */
-template<std::size_t N, class T, class A>
-    requires(detail::operand<A> && std::is_same_v<T, detail::value_t<A>>)
-AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
+/** @brief Result of `eighValues`: the eigenvalues and status bits of `Eigh`, without the eigenvectors. */
+template<class T, std::size_t N>
+struct EighValues {
+    T w[N];             ///< Eigenvalues, ascending.
+    std::int32_t info;  ///< As `Eigh::info`.
+};
+
+namespace detail {
+
+/** @brief The Jacobi run behind `eigh` (`WithV`) and `eighValues` (eigenvalues and `info`, `v` unused). */
+template<bool WithV, std::size_t N, class T, class A>
+AETHER_DEVICEHOST() void eighRun(T* w, [[maybe_unused]] T* v, std::int32_t& info, const A& a)
 {
-    static_assert(detail::supported_v<T, N>, "aether::linalg: T must be float or double and 1 <= N <= 32");
-    r.info = 0;
-    detail::zeroFill(r.w, N);
-    detail::zeroFill(r.v, N * N);
+    static_assert(supported_v<T, N>, "aether::linalg: T must be float or double and 1 <= N <= 32");
+    info = 0;
+    zeroFill(w, N);
+    if constexpr (WithV) {
+        zeroFill(v, N * N);
+    }
     if constexpr (N == 1) {
-        r.w[0] = detail::elemAt<1>(a, 0, 0);
-        r.v[0] = T(1);
+        w[0] = elemAt<1>(a, 0, 0);
+        if constexpr (WithV) {
+            v[0] = T(1);
+        }
     } else {
         constexpr T eps = detail::epsilon_v<T>;
         T s[N * N];
@@ -76,11 +81,14 @@ AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
                 s[i * N + j] = (j >= i) ? detail::symAt<N>(a, i, j) : s[j * N + i];
                 fro2 += s[i * N + j] * s[i * N + j];
             }
-            r.v[i * N + i] = T(1);
+            if constexpr (WithV) {
+                v[i * N + i] = T(1);
+            }
         }
         constexpr std::size_t sweeps = eighSweeps(N);
         AETHER_NO_UNROLL()
         for (std::size_t sweep = 0; sweep < sweeps; ++sweep) {
+            bool rotated = false;
             AETHER_NO_UNROLL()
             for (std::size_t p = 0; p + 1 < N; ++p) {
                 AETHER_NO_UNROLL()
@@ -94,6 +102,7 @@ AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
                         const T t = sg / (math::abs(theta) + math::sqrt(theta * theta + T(1)));
                         const T c = T(1) / math::sqrt(t * t + T(1));
                         const T sn = t * c;
+                        rotated = true;
                         s[p * N + p] = app - t * apq;
                         s[q * N + q] = aqq + t * apq;
                         s[p * N + q] = T(0);
@@ -110,19 +119,26 @@ AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
                                 s[k * N + q] = nq;
                                 s[q * N + k] = nq;
                             }
-                            const T vp = r.v[k * N + p];
-                            const T vq = r.v[k * N + q];
-                            r.v[k * N + p] = c * vp - sn * vq;
-                            r.v[k * N + q] = sn * vp + c * vq;
+                            if constexpr (WithV) {
+                                const T vp = v[k * N + p];
+                                const T vq = v[k * N + q];
+                                v[k * N + p] = c * vp - sn * vq;
+                                v[k * N + q] = sn * vp + c * vq;
+                            }
                         }
                     }
+                }
+            }
+            if constexpr (!WithV) {
+                if (!rotated) {
+                    break;  // a sweep that rotated nothing leaves `s` as it is: so would every later one
                 }
             }
         }
         T off2 = T(0);
         AETHER_NO_UNROLL()
         for (std::size_t i = 0; i < N; ++i) {
-            r.w[i] = s[i * N + i];
+            w[i] = s[i * N + i];
             AETHER_NO_UNROLL()
             for (std::size_t j = 0; j < N; ++j) {
                 if (j != i) {
@@ -132,53 +148,90 @@ AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
         }
         const T tol = static_cast<T>(N) * eps;
         if (!(off2 <= tol * tol * fro2)) {
-            r.info |= 1;
+            info |= 1;
         }
         AETHER_NO_UNROLL()
         for (std::size_t i = 0; i + 1 < N; ++i) {
             std::size_t m = i;
             AETHER_NO_UNROLL()
             for (std::size_t j = i + 1; j < N; ++j) {
-                if (r.w[j] < r.w[m]) {
+                if (w[j] < w[m]) {
                     m = j;
                 }
             }
             if (m != i) {
-                const T tw = r.w[i];
-                r.w[i] = r.w[m];
-                r.w[m] = tw;
-                AETHER_NO_UNROLL()
-                for (std::size_t k = 0; k < N; ++k) {
-                    const T tv = r.v[k * N + i];
-                    r.v[k * N + i] = r.v[k * N + m];
-                    r.v[k * N + m] = tv;
+                const T tw = w[i];
+                w[i] = w[m];
+                w[m] = tw;
+                if constexpr (WithV) {
+                    AETHER_NO_UNROLL()
+                    for (std::size_t k = 0; k < N; ++k) {
+                        const T tv = v[k * N + i];
+                        v[k * N + i] = v[k * N + m];
+                        v[k * N + m] = tv;
+                    }
                 }
             }
         }
-        AETHER_NO_UNROLL()
-        for (std::size_t j = 0; j < N; ++j) {
-            std::size_t big = 0;
+        if constexpr (WithV) {
             AETHER_NO_UNROLL()
-            for (std::size_t k = 1; k < N; ++k) {
-                if (math::abs(r.v[k * N + j]) > math::abs(r.v[big * N + j])) {
-                    big = k;
-                }
-            }
-            if (r.v[big * N + j] < T(0)) {
+            for (std::size_t j = 0; j < N; ++j) {
+                std::size_t big = 0;
                 AETHER_NO_UNROLL()
-                for (std::size_t k = 0; k < N; ++k) {
-                    r.v[k * N + j] = -r.v[k * N + j];
+                for (std::size_t k = 1; k < N; ++k) {
+                    if (math::abs(v[k * N + j]) > math::abs(v[big * N + j])) {
+                        big = k;
+                    }
+                }
+                if (v[big * N + j] < T(0)) {
+                    AETHER_NO_UNROLL()
+                    for (std::size_t k = 0; k < N; ++k) {
+                        v[k * N + j] = -v[k * N + j];
+                    }
                 }
             }
         }
         const T gap = tol * math::sqrt(fro2);
         AETHER_NO_UNROLL()
         for (std::size_t i = 0; i + 1 < N; ++i) {
-            if (!(r.w[i + 1] - r.w[i] > gap)) {
-                r.info |= 2;
+            if (!(w[i + 1] - w[i] > gap)) {
+                info |= 2;
             }
         }
     }
+}
+
+} // namespace detail
+
+/**
+ * @brief Eigendecomposition `S = V diag(w) V^T` of the symmetric part of `a` into
+ *        `r`, in place: the result is built where it lives, never returned or
+ *        copied by value.
+ *
+ * @tparam N  Dimension.
+ * @param r   The decomposition, overwritten.
+ * @param a   `N x N`, row-major.
+ */
+template<std::size_t N, class T, class A>
+    requires(detail::operand<A> && std::is_same_v<T, detail::value_t<A>>)
+AETHER_DEVICEHOST() void eigh(Eigh<T, N>& r, const A& a)
+{
+    detail::eighRun<true, N>(r.w, r.v, r.info, a);
+}
+
+/**
+ * @brief The eigenvalues and `info` of `eigh`, bit for bit, without the eigenvectors: `V` is never
+ *        accumulated, and the sweeps stop after one in which no rotation passed the skip test.
+ *
+ * @tparam N  Dimension.
+ * @param r   Eigenvalues and status, overwritten.
+ * @param a   `N x N`, row-major.
+ */
+template<std::size_t N, class T, class A>
+    requires(detail::operand<A> && std::is_same_v<T, detail::value_t<A>>)
+AETHER_DEVICEHOST() void eighValues(EighValues<T, N>& r, const A& a)
+{
+    detail::eighRun<false, N>(r.w, static_cast<T*>(nullptr), r.info, a);
 }
 
 /**
