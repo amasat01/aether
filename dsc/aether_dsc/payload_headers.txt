@@ -19,6 +19,7 @@
 # `aether/aether.h` (the umbrella) is deliberately not listed: it
 # transitively includes every one of the ~28 excluded headers, so it is
 # not yet part of the payload either.
+aether/accum/TwoSum.h
 aether/accum/run.h
 aether/device.h
 aether/device/Device.h
@@ -51,6 +52,7 @@ aether/linalg/Cholesky.h
 aether/linalg/Eigh.h
 aether/linalg/Lu.h
 aether/linalg/Triangular.h
+aether/linalg/WarpEigh.h
 aether/linalg/detail/Common.h
 aether/linalg/linalg.h
 aether/linalg/team.h
