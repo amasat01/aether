@@ -40,4 +40,5 @@
 #include "aether/linalg/Eigh.h"
 #include "aether/linalg/Lu.h"
 #include "aether/linalg/Triangular.h"
+#include "aether/linalg/WarpEigh.h"
 #include "aether/linalg/team.h"
