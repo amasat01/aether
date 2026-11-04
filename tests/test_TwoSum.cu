@@ -19,6 +19,14 @@ __global__ void residuals(const E* a, const E* b, E* out, int n)
 }
 
 template<class E>
+__global__ void residualsAtomic(const E* a, const E* b, E* out, int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        out[i] = aether::accum::twoSumErrAtomic(a[i], b[i], a[i] + b[i]);
+}
+
+template<bool Atomic, class E>
 void checkDevice()
 {
     const auto c = corpus();
@@ -36,15 +44,21 @@ void checkDevice()
     ASSERT_EQ(cudaMalloc(&dout, n * sizeof(E)), cudaSuccess);
     cudaMemcpy(da, a.data(), n * sizeof(E), cudaMemcpyHostToDevice);
     cudaMemcpy(db, b.data(), n * sizeof(E), cudaMemcpyHostToDevice);
-    residuals<E><<<(n + 255) / 256, 256>>>(da, db, dout, n);
+    if constexpr (Atomic)
+        residualsAtomic<E><<<(n + 255) / 256, 256>>>(da, db, dout, n);
+    else
+        residuals<E><<<(n + 255) / 256, 256>>>(da, db, dout, n);
     cudaMemcpy(got.data(), dout, n * sizeof(E), cudaMemcpyDeviceToHost);
     cudaFree(da); cudaFree(db); cudaFree(dout);
     for (int i = 0; i < n; ++i)
         ASSERT_TRUE(same(got[i], want[i])) << a[i] << " + " << b[i] << ": device " << got[i] << " host " << want[i];
 }
 
-TEST(TwoSum, DeviceResidualEqualsTheHostOneDouble) { checkDevice<double>(); }
-TEST(TwoSum, DeviceResidualEqualsTheHostOneFloat) { checkDevice<float>(); }
+TEST(TwoSum, DeviceResidualEqualsTheHostOneDouble) { checkDevice<false, double>(); }
+TEST(TwoSum, DeviceResidualEqualsTheHostOneFloat) { checkDevice<false, float>(); }
+
+TEST(TwoSum, DeviceAtomicFormEqualsTheHostResidualDouble) { checkDevice<true, double>(); }
+TEST(TwoSum, DeviceAtomicFormEqualsTheHostResidualFloat) { checkDevice<true, float>(); }
 
 } // namespace
 } // namespace twosum

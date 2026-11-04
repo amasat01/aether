@@ -75,6 +75,20 @@ void checkHost()
     }
 }
 
+template<class E>
+void checkAtomicForm()
+{
+    for (const auto& t : corpus()) {
+        const E a = static_cast<E>(t.a), b = static_cast<E>(t.b);
+        volatile E sv = a + b;
+        const E s = sv;
+        ASSERT_TRUE(same(aether::accum::twoSumErrAtomic(a, b, s), aether::accum::twoSumErr(a, b, s)))
+            << a << " + " << b << " = " << s;
+    }
+}
+
+TEST(TwoSum, AtomicFormEqualsTheFast2SumFormDouble) { checkAtomicForm<double>(); }
+TEST(TwoSum, AtomicFormEqualsTheFast2SumFormFloat) { checkAtomicForm<float>(); }
 TEST(TwoSum, HostResidualIsExactAndPinnedDouble) { checkHost<double>(); }
 TEST(TwoSum, HostResidualIsExactAndPinnedFloat) { checkHost<float>(); }
 

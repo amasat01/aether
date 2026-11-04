@@ -146,7 +146,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void commitComp_(E* slot, E* compSlot, 
     AETHER_FP_BARRIER(s);
     const E old = atomicAdd_(slot, s);
     const E sum = old + s;
-    atomicAdd_(compSlot, twoSumErr_(old, s, sum) + c);
+    atomicAdd_(compSlot, accum::twoSumErrAtomic(old, s, sum) + c);
     AETHER_RUN_COMMIT_HOOK(run);
 }
 

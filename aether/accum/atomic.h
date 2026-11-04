@@ -109,7 +109,7 @@ AETHER_DEVICEHOST() inline void compensatedSum_(double* value, double* comp, dou
 #if defined(__CUDA_ARCH__)
     const double old = atomicAdd(value, term);
     const double s    = old + term;
-    atomicAdd(comp, twoSumErr_(old, term, s));
+    atomicAdd(comp, accum::twoSumErrAtomic(old, term, s));
 #else
     const double old = *value;
     const double s    = old + term;

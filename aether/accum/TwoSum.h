@@ -114,5 +114,22 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr(E a, E b, E s)
     return isFiniteBits(s) ? twoSumErrFinite(a, b, s) : s - s;
 }
 
+/** @brief `twoSumErr` for a commit that waits on an atomic's returned value
+ *         (a latency path, not a throughput path): Knuth's branch-free two-sum
+ *         with the non-finite and `+0` rules as selects. The same bits as
+ *         `twoSumErr` on every input; no integer magnitude compare. */
+template<class E>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErrAtomic(E a, E b, E s)
+{
+    AETHER_FP_BARRIER(a);
+    AETHER_FP_BARRIER(b);
+    AETHER_FP_BARRIER(s);
+    const E bb = s - a;
+    const E e  = (a - (s - bb)) + (b - bb);
+    const E z = positiveZero(e);
+    const E n = s - s;
+    return isFiniteBits(s) ? z : n;
+}
+
 } // namespace accum
 } // namespace aether
