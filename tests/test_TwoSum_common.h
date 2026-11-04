@@ -67,10 +67,11 @@ void checkHost()
         volatile E sv = a + b;
         const E s = sv, e = aether::accum::twoSumErr(a, b, s);
         ASSERT_TRUE(same(e, reference(a, b, s))) << a << " + " << b << " = " << s << ": " << e;
-        if (!std::isfinite(s))
+        if (!std::isfinite(s)) {
             ASSERT_TRUE(std::isnan(e));
-        else if (e == E(0))
+        } else if (e == E(0)) {
             ASSERT_FALSE(std::signbit(e)) << "a zero residual must be +0";
+        }
     }
 }
 
