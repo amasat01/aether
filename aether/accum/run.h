@@ -51,6 +51,7 @@
 #include <utility>
 
 #include "aether/index/SampleIndex.h"
+#include "aether/accum/TwoSum.h"
 #include "aether/macros.h"
 
 #ifndef __CUDA_ARCH__
@@ -122,16 +123,11 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() E atomicAdd_(E* slot, E t)
 #endif
 }
 
-/** @brief Knuth two-sum residual `(a + b) - s` for `s == fl(a + b)`, any
- *         order and signs (`atomic::detail::twoSumErrT_`). */
+/** @brief The exact residual `(a + b) - s` for `s == fl(a + b)`: `accum::twoSumErr`. */
 template<class E>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr_(E a, E b, E s)
 {
-    AETHER_FP_BARRIER(a);
-    AETHER_FP_BARRIER(b);
-    AETHER_FP_BARRIER(s);
-    const E bb = s - a;
-    return (a - (s - bb)) + (b - bb);
+    return accum::twoSumErr(a, b, s);
 }
 
 /** @brief The plain commit of `s` into `slot`. */
@@ -365,6 +361,55 @@ AETHER_DEVICEHOST() inline void addCompensated(
     (void)own;
     detail::openAdd_(run, slot, compSlot, static_cast<E>(term));
 #endif
+}
+
+/** @brief True for a block whose every thread is live and whose samples
+ *         `[base + blockIdx.x * blockDim.x, ... + blockDim.x)` a caller has
+ *         proven to share one key (the key moves in runs of 1024 aligned
+ *         lanes, and `blockDim.x` divides 1024). Block-uniform. Always false
+ *         on the host. */
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() bool blockFull(long long base, long long count)
+{
+#if defined(__CUDA_ARCH__)
+    const long long b = blockDim.x;
+    return (1024 % b == 0) && (base % b == 0) && ((static_cast<long long>(blockIdx.x) + 1) * b <= count);
+#else
+    (void)base;
+    (void)count;
+    return false;
+#endif
+}
+
+/** @brief `addCompensated<32>` for a key that is uniform over the block: when
+ *         `full` (`blockFull`), the warps' run sums are folded through shared
+ *         memory by a fixed tree and ONE compensated commit is issued per
+ *         BLOCK, not per warp. Every thread of the block must reach the call
+ *         (it holds two barriers); `full` is block-uniform, and a block that is
+ *         not full takes `addCompensated<32>` unchanged. */
+template<class ViewT, class T, class I, class E>
+AETHER_DEVICEHOST() inline void addCompensatedBlock(
+    ViewT& target, ViewT& comp, const SampleIndex& at, T term, const I& own, bool full, Open<E>& run)
+{
+#if defined(__CUDA_ARCH__)
+    if (full) {
+        __shared__ E part[32];
+        const unsigned lane = detail::laneId_(), warp = threadIdx.x >> 5, warps = blockDim.x >> 5;
+        const E s           = detail::runSum_<32>(static_cast<E>(term));
+        if (lane == 0u)
+            part[warp] = s;
+        __syncthreads();
+        if (warp == 0u) {
+            const E v = detail::runSum_<32>(lane < warps ? part[lane] : E(0));
+            if (lane == 0u)
+                detail::commitComp_(&target(at.global()), &comp(at.global()), v, E(0), true);
+        }
+        __syncthreads();
+        return;
+    }
+#else
+    (void)full;
+#endif
+    addCompensated<32>(target, comp, at, term, own, run);
 }
 
 /** @brief Compensated `addTested`. */

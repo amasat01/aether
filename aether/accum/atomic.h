@@ -15,6 +15,7 @@
 #include <cstring>
 
 #include "aether/index/SampleIndex.h"
+#include "aether/accum/TwoSum.h"
 #include "aether/macros.h"
 #include "aether/view/View.h"
 
@@ -88,22 +89,10 @@ AETHER_DEVICEHOST() inline void orBool_(bool* address, bool val)
 #endif
 }
 
-/**
- * @brief Knuth two-sum error term: given `s == fl(a + b)`, returns the
- *        residual `(a + b) - s` exactly, for any ordering of `|a|`, `|b|`
- *        and any signs (no `fast2Sum` precondition). Six FP64 flops,
- *        branch-free.
- */
+/** @brief The exact residual `(a + b) - s` of `s == fl(a + b)`: `accum::twoSumErr`. */
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() double twoSumErr_(double a, double b, double s)
 {
-    // The residual is exact only for the ROUNDED a, b and s: once inlined, a
-    // product feeding any of them would otherwise be contracted into these
-    // subtractions (host -ffp-contract=fast, the gcc/clang default).
-    AETHER_FP_BARRIER(a);
-    AETHER_FP_BARRIER(b);
-    AETHER_FP_BARRIER(s);
-    const double bb = s - a;
-    return (a - (s - bb)) + (b - bb);
+    return accum::twoSumErr(a, b, s);
 }
 
 /**
@@ -133,20 +122,14 @@ AETHER_DEVICEHOST() inline void compensatedSum_(double* value, double* comp, dou
 template<class T>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() bool isFinite_(T x)
 {
-    return x - x == T(0);
+    return accum::isFiniteBits(x);
 }
 
-/** @brief `twoSumErr_` for `float` and `double`: the exact residual
- *         `(a + b) - s` given `s == fl(a + b)`. Same barriers as the
- *         `double` form. */
+/** @brief `twoSumErr_` for `float` and `double`. */
 template<class T>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() T twoSumErrT_(T a, T b, T s)
 {
-    AETHER_FP_BARRIER(a);
-    AETHER_FP_BARRIER(b);
-    AETHER_FP_BARRIER(s);
-    const T bb = s - a;
-    return (a - (s - bb)) + (b - bb);
+    return accum::twoSumErr(a, b, s);
 }
 
 /**
@@ -160,7 +143,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void neumaierAdd_(T& hi, T& comp, T ter
 {
     AETHER_FP_BARRIER(term);
     const T s = hi + term;
-    const T e = twoSumErrT_(hi, term, s);
+    const T e = accum::twoSumErrFinite(hi, term, s);
     hi        = s;
     comp      = isFinite_(s) ? comp + e : T(0);
 }
@@ -174,7 +157,7 @@ template<class T>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() void pairCombine_(T ah, T ac, T bh, T bc, T& oh, T& oc)
 {
     const T s = ah + bh;
-    const T e = twoSumErrT_(ah, bh, s);
+    const T e = accum::twoSumErrFinite(ah, bh, s);
     oh        = s;
     oc        = isFinite_(s) ? (ac + bc) + e : T(0);
 }
