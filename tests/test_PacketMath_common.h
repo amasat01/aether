@@ -478,7 +478,7 @@ TEST(PacketMathHostVectorHook, SinExpLoopBitIdenticalToScalarSymbols)
     }
 }
 
-// sqrt, rsqrt and floor go through the vector-ABI symbols and abs stays
+// rsqrt and floor go through the vector-ABI symbols and sqrt and abs stay
 // inline: the vectorised loop matches the scalar symbols bit for bit, and
 // std:: exactly (rsqrt: within 1 ULP of the doubly rounded 1/std::sqrt).
 TEST(PacketMathHostVectorHook, RootFloorAbsLoopMatchesScalarSymbolsAndStd)
@@ -489,7 +489,6 @@ TEST(PacketMathHostVectorHook, RootFloorAbsLoopMatchesScalarSymbolsAndStd)
     hookRootFloorAbsLoop(x.data(), sq.data(), rs.data(), fl.data(), ab.data(), n);
     const auto same = [](double a, double b) { return std::memcmp(&a, &b, sizeof(double)) == 0 || (std::isnan(a) && std::isnan(b)); };
     for (std::size_t i = 0; i < n; ++i) {
-        ASSERT_TRUE(same(hookSqrtScalar(x[i]), sq[i])) << "sqrt i=" << i;
         ASSERT_TRUE(same(hookRsqrtScalar(x[i]), rs[i])) << "rsqrt i=" << i;
         ASSERT_TRUE(same(hookFloorScalar(x[i]), fl[i])) << "floor i=" << i;
         ASSERT_TRUE(same(std::sqrt(x[i]), sq[i])) << "sqrt vs std x=" << x[i];

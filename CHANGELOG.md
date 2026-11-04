@@ -8,6 +8,7 @@ This section covers what changes from 0.7.2. `aether-dsc` moves with the C++ ver
 
 ### Changed
 
+- **Host `sqrt` no longer goes through the vector-ABI symbol `aether_hvm_sqrt`.** Under `AETHER_HOST_VECTOR_MATH` it is an inline `std::sqrt` the compiler widens itself, so a loop calling it is no longer kept scalar by an out-of-line call. Results are bit-identical.
 - **macOS wheels need macOS 15 or newer.** They target the libomp minimum of the macOS 15 runners; macOS 14 is no longer built.
 - **CPython 3.13t is dropped.** There are nine wheels per platform; the free-threaded tests run on 3.14t.
 - **The CUDA toolchain comes from NVIDIA's pinned 12.9 redist archives** (nvcc, CUDA headers and CCCL), so a build sees the same compiler everywhere.
