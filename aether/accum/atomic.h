@@ -114,7 +114,7 @@ AETHER_DEVICEHOST() inline void compensatedSum_(double* value, double* comp, dou
     const double old = *value;
     const double s    = old + term;
     *value            = s;
-    *comp             = *comp + twoSumErr_(old, term, s);
+    *comp             = *comp + accum::twoSumErrAccum(old, term, s);
 #endif
 }
 

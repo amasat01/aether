@@ -87,6 +87,52 @@ void checkAtomicForm()
     }
 }
 
+// Sequences summed into a +0 compensation, the way a run accumulates: the Accum form and the pinned form deliver
+// the same bits, including sequences that reach Inf or NaN midway and all-zero or cancelling ones.
+template<class E, class F>
+std::vector<E> accumulate(const std::vector<std::vector<E>>& seqs, F resid)
+{
+    std::vector<E> out;
+    for (const auto& q : seqs) {
+        E s = E(0), c = E(0);
+        for (E t : q) {
+            volatile E sv = s + t;
+            const E n = sv;
+            c = c + resid(s, t, n);
+            s = n;
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+template<class E>
+void checkAccumForm()
+{
+    std::mt19937_64 gen(5);
+    const auto c = corpus();
+    std::vector<std::vector<E>> seqs;
+    for (std::size_t i = 0; i + 8 < c.size(); i += 5) {
+        std::vector<E> q;
+        for (int k = 0; k < 8; ++k)
+            q.push_back(static_cast<E>(gen() & 1 ? c[i + k].a : c[i + k].b));
+        seqs.push_back(q);
+    }
+    seqs.push_back({E(0), E(-0.0), E(0), E(-0.0)});
+    seqs.push_back({E(-0.0), E(-0.0)});
+    seqs.push_back({E(1), E(-1), E(1), E(-1)});
+    seqs.push_back({E(1e30), E(-1e30), E(3), E(-3)});
+    seqs.push_back({std::numeric_limits<E>::max(), std::numeric_limits<E>::max(), E(1)});
+    seqs.push_back({E(1), std::numeric_limits<E>::infinity(), E(2), -std::numeric_limits<E>::infinity()});
+    seqs.push_back({E(1), std::numeric_limits<E>::quiet_NaN(), E(2)});
+    const auto a = accumulate<E>(seqs, [](E x, E y, E s) { return aether::accum::twoSumErrAccum(x, y, s); });
+    const auto b = accumulate<E>(seqs, [](E x, E y, E s) { return aether::accum::twoSumErr(x, y, s); });
+    for (std::size_t i = 0; i < seqs.size(); ++i)
+        ASSERT_TRUE(same(a[i], b[i])) << "sequence " << i << ": " << a[i] << " vs " << b[i];
+}
+
+TEST(TwoSum, AccumulatedAccumFormEqualsThePinnedFormDouble) { checkAccumForm<double>(); }
+TEST(TwoSum, AccumulatedAccumFormEqualsThePinnedFormFloat) { checkAccumForm<float>(); }
 TEST(TwoSum, AtomicFormEqualsTheFast2SumFormDouble) { checkAtomicForm<double>(); }
 TEST(TwoSum, AtomicFormEqualsTheFast2SumFormFloat) { checkAtomicForm<float>(); }
 TEST(TwoSum, HostResidualIsExactAndPinnedDouble) { checkHost<double>(); }

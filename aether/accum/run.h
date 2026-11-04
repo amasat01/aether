@@ -175,7 +175,7 @@ inline void openAdd_(Open<E>& run, E* slot, E* comp, E t)
     }
     AETHER_FP_BARRIER(t);
     const E s = run.s + t;
-    const E e = twoSumErr_(run.s, t, s);
+    const E e = accum::twoSumErrAccum(run.s, t, s);
     run.s     = s;
     run.c     = s - s == E(0) ? run.c + e : E(0);
 }

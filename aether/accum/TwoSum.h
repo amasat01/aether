@@ -131,5 +131,27 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErrAtomic(E a, E b, E s)
     return isFiniteBits(s) ? z : n;
 }
 
+/** @brief `twoSumErr` for a caller that SUMS the residual into a compensation
+ *         that starts at `+0`: the `+0` rule and the non-finite test are
+ *         redundant there, so the host spelling is Knuth's two-sum alone (no
+ *         branch, no integer round trip in a dependent chain). A `+0`-started
+ *         IEEE sum never becomes `-0`, and Knuth's form is already NaN when
+ *         `s` is not finite, so the accumulated value is bit-identical to
+ *         `twoSumErr`'s. The device keeps `twoSumErr` (Fast2Sum, measured).
+ *         NOT for a caller that returns or stores the residual on its own. */
+template<class E>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErrAccum(E a, E b, E s)
+{
+#if defined(__CUDA_ARCH__)
+    return twoSumErr(a, b, s);
+#else
+    AETHER_FP_BARRIER(a);
+    AETHER_FP_BARRIER(b);
+    AETHER_FP_BARRIER(s);
+    const E bb = s - a;
+    return (a - (s - bb)) + (b - bb);
+#endif
+}
+
 } // namespace accum
 } // namespace aether
