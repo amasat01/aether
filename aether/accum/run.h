@@ -51,6 +51,7 @@
 #include <utility>
 
 #include "aether/index/SampleIndex.h"
+#include "aether/accum/TwoSum.h"
 #include "aether/macros.h"
 
 #ifndef __CUDA_ARCH__
@@ -122,16 +123,11 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() E atomicAdd_(E* slot, E t)
 #endif
 }
 
-/** @brief Knuth two-sum residual `(a + b) - s` for `s == fl(a + b)`, any
- *         order and signs (`atomic::detail::twoSumErrT_`). */
+/** @brief The exact residual `(a + b) - s` for `s == fl(a + b)`: `accum::twoSumErr`. */
 template<class E>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() E twoSumErr_(E a, E b, E s)
 {
-    AETHER_FP_BARRIER(a);
-    AETHER_FP_BARRIER(b);
-    AETHER_FP_BARRIER(s);
-    const E bb = s - a;
-    return (a - (s - bb)) + (b - bb);
+    return accum::twoSumErr(a, b, s);
 }
 
 /** @brief The plain commit of `s` into `slot`. */
