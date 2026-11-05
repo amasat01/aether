@@ -1,0 +1,4 @@
+aether.Array  # untested at 0.7.2: add a test that names it, then delete this line
+aether.DType  # untested at 0.7.2: add a test that names it, then delete this line
+aether.empty_like  # untested at 0.7.2: add a test that names it, then delete this line
+aether_dsc.version  # untested at 0.7.2: add a test that names it, then delete this line

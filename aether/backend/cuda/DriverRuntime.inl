@@ -287,6 +287,15 @@ cudaError_t cudaLaunchKernel(const void* func, dim3 grid, dim3 block, void** arg
     AETHER_DRV(launch, cuLaunchKernel);
     return fromDriver(launch(f, grid.x, grid.y, grid.z, block.x, block.y, block.z, static_cast<unsigned>(shared), stream(s), args, nullptr));
 }
+// CUDA 13's `<<<>>>` stub resolves a handle once (__cudaGetKernel) and launches through it; CUDA 12's nvcc defines
+// __NV_LEGACY_LAUNCH and calls cudaLaunchKernel. The handle is the host stub itself, so both paths meet above.
+cudaError_t __cudaGetKernel(cudaKernel_t* kernel, const void* func) {
+    *kernel = reinterpret_cast<cudaKernel_t>(const_cast<void*>(func));
+    return cudaSuccess;
+}
+cudaError_t __cudaLaunchKernel(cudaKernel_t k, dim3 grid, dim3 block, void** args, std::size_t shared, cudaStream_t s) {
+    return cudaLaunchKernel(reinterpret_cast<const void*>(k), grid, block, args, shared, s);
+}
 
 // ---- errors and versions -----------------------------------------------------------------------------------
 cudaError_t cudaGetLastError(void) {
@@ -490,6 +499,7 @@ cudaError_t cudaThreadExchangeStreamCaptureMode(cudaStreamCaptureMode* mode) {
 // ---- the per-thread default stream spellings (`--default-stream per-thread` builds) -----------------------------
 inline cudaStream_t perThreadStream(cudaStream_t s) { return s == nullptr ? reinterpret_cast<cudaStream_t>(CU_STREAM_PER_THREAD) : s; }
 cudaError_t cudaLaunchKernel_ptsz(const void* f, dim3 g, dim3 b, void** a, std::size_t sh, cudaStream_t s) { return cudaLaunchKernel(f, g, b, a, sh, perThreadStream(s)); }
+cudaError_t __cudaLaunchKernel_ptsz(cudaKernel_t k, dim3 g, dim3 b, void** a, std::size_t sh, cudaStream_t s) { return __cudaLaunchKernel(k, g, b, a, sh, perThreadStream(s)); }
 cudaError_t cudaMallocAsync_ptsz(void** p, size_t n, cudaStream_t s) { return cudaMallocAsync(p, n, perThreadStream(s)); }
 cudaError_t cudaFreeAsync_ptsz(void* p, cudaStream_t s) { return cudaFreeAsync(p, perThreadStream(s)); }
 cudaError_t cudaMemcpyAsync_ptsz(void* d, const void* src, size_t n, cudaMemcpyKind k, cudaStream_t s) { return cudaMemcpyAsync(d, src, n, k, perThreadStream(s)); }

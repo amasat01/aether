@@ -21,7 +21,8 @@
  *  - `triLower` / `triUpperT` (`Triangular.h`): multi-right-hand-side solves
  *    against `L` and `L^T`, the pieces `choSolve` and the factor's derivative
  *    are made of.
- *  - `eigh` (`Eigh.h`): cyclic Jacobi for the symmetrised input, fixed sweeps.
+ *  - `eigh` (`Eigh.h`): cyclic Jacobi for the symmetrised input, fixed sweeps; `eighValues` the eigenvalues
+ *    and `info` alone, bit for bit.
  *
  * Matrices and right-hand sides are row-major pointers or per-sample operands
  * (`view[i]`, `Item`): a plane is read and written element by element, never
@@ -39,4 +40,5 @@
 #include "aether/linalg/Eigh.h"
 #include "aether/linalg/Lu.h"
 #include "aether/linalg/Triangular.h"
+#include "aether/linalg/WarpEigh.h"
 #include "aether/linalg/team.h"

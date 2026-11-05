@@ -54,10 +54,6 @@ class SplitMix64:
     def uniform01(self) -> float:
         return (self.next() >> 11) * (1.0 / 9007199254740992.0)
 
-    def mantissa(self) -> float:
-        """Uniform in [1, 2)."""
-        return 1.0 + self.uniform01()
-
     def sign(self) -> float:
         return -1.0 if (self.next() & 1) else 1.0
 

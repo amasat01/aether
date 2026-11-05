@@ -91,8 +91,8 @@
  *
  * Routed: exp, exp2, exp10, expm1, log, log2, log10, log1p, pow, sin,
  * cos, tan, tanh, sinh, cosh, asinh, acosh, atanh, atan, atan2, asin,
- * acos, cbrt, hypot, sqrt, rsqrt, floor, ceil, trunc, round, rint, fdim
- * (vector ABI); abs, copysign, fmax, fmin (inline, see `hostvec::fmax`).
+ * acos, cbrt, hypot, rsqrt, floor, ceil, trunc, round, rint, fdim
+ * (vector ABI); sqrt, abs, copysign, fmax, fmin (inline, see `hostvec::fmax`).
  * Not routed (no packet; stay on `std::`): fmod, fma, erf, erfc; the
  * numpy-semantics `remainder` is built on `fmod`. `sincos` reaches the hook
  * through its `sin` and `cos` legs: GCC does not vectorise a call that
@@ -285,7 +285,6 @@ AETHER_HVM_DEFINE_UNARY(asin, vasin)
 AETHER_HVM_DEFINE_UNARY(acos, vacos)
 AETHER_HVM_DEFINE_UNARY(cbrt, vcbrt)
 AETHER_HVM_DEFINE_BINARY(hypot, vhypot)
-AETHER_HVM_DEFINE_UNARY(sqrt, sqrt)
 AETHER_HVM_DEFINE_UNARY(rsqrt, vrsqrt)
 AETHER_HVM_DEFINE_UNARY(floor, vfloor)
 AETHER_HVM_DEFINE_UNARY(expm1, vexpm1)
@@ -363,7 +362,9 @@ AETHER_HVM_ROUTE1(asin, std::asin(x))
 AETHER_HVM_ROUTE1(acos, std::acos(x))
 AETHER_HVM_ROUTE1(cbrt, std::cbrt(x))
 AETHER_HVM_ROUTE2(hypot)
-AETHER_HVM_ROUTE1(sqrt, std::sqrt(x))
+// sqrt: the compiler widens it natively (vsqrtpd), so no vector-ABI symbol.
+inline double sqrt(double x) { return std::sqrt(x); }
+inline float sqrt(float x) { return std::sqrt(x); }
 AETHER_HVM_ROUTE1(rsqrt, 1.0f / std::sqrt(x))
 AETHER_HVM_ROUTE1(floor, std::floor(x))
 AETHER_HVM_ROUTE1(expm1, std::expm1(x))

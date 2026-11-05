@@ -62,7 +62,6 @@ from _corpus_common import (
     add_out_dir_arg,
     band_ceiling_admits,
     band_intermediate_admits,
-    bits_of,
     double_of,
     emit_golden_header,
     exponent_of,
@@ -72,16 +71,10 @@ from _corpus_common import (
     run_ulp_oracle,
 )
 
-def nextafter_bits(x: float, toward: float) -> int:
-    return bits_of(math.nextafter(x, toward))
-
-
 # =====================================================================
 #  Admission predicates -- transcribed verbatim from
 #  aether/banded/BandInvTrig.h (same constants, same formulas).
 # =====================================================================
-K_BAND_INVTRIG_MAX_ARG_EXP = 0  # kBandInvTrigMaxArgExp
-
 # atan2's own tighter hard-reject ceiling (measured, narrower than the
 # generic K_BAND_HARD_CEILING_EXP=128): den = a*(1+T) can amplify the
 # larger operand by up to ~1.84x (T up to 0.839), almost one full binade.
@@ -112,10 +105,6 @@ def band_atan2_admits(max_e: int, min_e: int, margin: int = K_BAND_ADMISSION_MAR
     return (band_ceiling_admits(max_e + 1, margin) and band_divisor_admits(max_e + 1, min_e, margin)
             and band_intermediate_admits(max_e, margin)
             and band_intermediate_admits(min_e - max_e, margin))
-
-
-def band_asin_admits(max_e: int) -> bool:
-    return max_e <= K_BAND_INVTRIG_MAX_ARG_EXP
 
 
 # =====================================================================

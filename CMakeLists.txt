@@ -142,7 +142,16 @@ message(STATUS "> Found OpenMP")
 # Compile/link flags for CUDA/C++
 if(NOT DEFINED AETHER_MARCH)
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")
-    set(AETHER_MARCH "x86-64-v3")        # AVX2 + FMA — runs on all modern x86
+    # x86-64 target ISA: -DAETHER_MARCH wins, then $AETHER_MARCH, then x86-64-v3 when $CI is set (CI builds feed
+    # wheels, artifacts and caches that must run elsewhere), else native (a build that stays on this machine).
+    # Other processors get no -march. The same rule is in eagle/python/CMakeLists.txt.
+    if(DEFINED ENV{AETHER_MARCH})
+      set(AETHER_MARCH "$ENV{AETHER_MARCH}")
+    elseif(DEFINED ENV{CI})
+      set(AETHER_MARCH "x86-64-v3")
+    else()
+      set(AETHER_MARCH "native")
+    endif()
   elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
     set(AETHER_MARCH "")                  # compiler default (armv8-a baseline)
   else()

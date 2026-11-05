@@ -172,7 +172,6 @@ bool hookBinaryLoop(int fn, const double* x, const double* y, double* out, std::
 double hookPowScalar(double a, double b) { return ::aether_hvm_pow(a, b); }
 double hookSinScalar(double a) { return ::aether_hvm_sin(a); }
 double hookExpScalar(double a) { return ::aether_hvm_exp(a); }
-double hookSqrtScalar(double a) { return ::aether_hvm_sqrt(a); }
 double hookRsqrtScalar(double a) { return ::aether_hvm_rsqrt(a); }
 double hookFloorScalar(double a) { return ::aether_hvm_floor(a); }
 

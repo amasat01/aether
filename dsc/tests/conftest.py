@@ -6,4 +6,4 @@ so the marker cannot live in pyproject.toml."""
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "ft: the free-threaded smoke rows (run on 3.13t/3.14t with -m ft)")
+    config.addinivalue_line("markers", "ft: the free-threaded smoke rows (run on 3.14t/3.15t with -m ft)")

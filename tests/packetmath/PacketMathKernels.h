@@ -101,7 +101,6 @@ double hookParityScalar(int fn, double x, double y);
 double hookPowScalar(double a, double b);
 double hookSinScalar(double a);
 double hookExpScalar(double a);
-double hookSqrtScalar(double a);
 double hookRsqrtScalar(double a);
 double hookFloorScalar(double a);
 

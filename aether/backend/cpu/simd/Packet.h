@@ -265,15 +265,15 @@ struct Packet<double, 4> {
 
     friend MaskT cmpGe(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_GE_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_GE_OQ))) };
     }
     friend MaskT cmpLt(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_LT_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_LT_OQ))) };
     }
     friend MaskT cmpGt(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_GT_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_pd(_mm256_cmp_pd(a.reg_, b.reg_, _CMP_GT_OQ))) };
     }
 };
 
@@ -338,15 +338,15 @@ struct Packet<float, 8> {
 
     friend MaskT cmpGe(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_GE_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_GE_OQ))) };
     }
     friend MaskT cmpLt(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_LT_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_LT_OQ))) };
     }
     friend MaskT cmpGt(Packet a, Packet b)
     {
-        return MaskT{ static_cast<unsigned>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_GT_OQ))) };
+        return MaskT{ static_cast<MaskT::StorageT>(_mm256_movemask_ps(_mm256_cmp_ps(a.reg_, b.reg_, _CMP_GT_OQ))) };
     }
 };
 

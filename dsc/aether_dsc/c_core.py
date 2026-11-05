@@ -56,11 +56,6 @@ def _memo(item: CFunction, rank: int) -> CFunction:
     return _REGISTRY.setdefault(item.name, item)
 
 
-def real_type(width: str) -> str:
-    _check_width(width)
-    return _WIDTH[width][0]
-
-
 def _t(width: str) -> str:
     return f"aether_c_{width}_t"
 
