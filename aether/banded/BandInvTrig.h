@@ -184,7 +184,9 @@ namespace detail {
     BandRaw t;
     Band    u;
     if (high) {
-        const Band w = scalePow2f(sub(Band{ 1.0f, 0.0f, 0.0f }, ax), 0.5f);
+        // 1 - ax: the leading difference is exact (Sterbenz) and the other limbs only change sign, so the sum IS the three
+        // limbs {1 - ax.hi, -ax.lo, -ax.tail} -- one subtraction and the normalise, not an `addRaw` over structural zeros.
+        const Band w = scalePow2f(normalize(BandRaw{ subRN(1.0f, ax.hi), -ax.lo, -ax.tail }), 0.5f);
         // `!(w.hi >= 0)` catches `|x| > 1` AND a non-finite argument in one
         // test: the domain edge is decided by the CARRIER, not the leading
         // limb alone.
@@ -230,7 +232,7 @@ namespace detail {
         return Band{ v.hi, v.lo, v.tail }; // already the NaN
     // |asin x| = C + s*V in ONE raw add: low (C = 0, s = +1, V = v), high (C = pi/2, s = -1, V = 2v).
     const Band          pio2 = bandPiO2();
-    const BandRawCancel hs   = addRaw(BandRaw{ pio2.hi, pio2.lo, pio2.tail }, BandRaw{ -2.0f * v.hi, -2.0f * v.lo, -2.0f * v.tail });
+    const BandRawCancel hs   = addRawDom(BandRaw{ pio2.hi, pio2.lo, pio2.tail }, BandRaw{ -2.0f * v.hi, -2.0f * v.lo, -2.0f * v.tail });
     const Band          m    = normalize(high ? BandRaw{ hs.hi, hs.lo, hs.tail } : v);
     return (floatAsInt(x.hi) < 0) ? neg(m) : m;
 }
@@ -268,7 +270,7 @@ namespace detail {
     const float sc   = high ? 2.0f : 1.0f;
     const float sg   = (high != xneg) ? sc : -sc;
     const float cs   = high ? (xneg ? 2.0f : 0.0f) : 1.0f;
-    return normalize(addRaw(BandRaw{ cs * pio2.hi, cs * pio2.lo, cs * pio2.tail }, BandRaw{ sg * v.hi, sg * v.lo, sg * v.tail }));
+    return normalize(addRawDom(BandRaw{ cs * pio2.hi, cs * pio2.lo, cs * pio2.tail }, BandRaw{ sg * v.hi, sg * v.lo, sg * v.tail }));
 }
 
 /**
@@ -352,11 +354,11 @@ namespace detail {
     // ones do. `AtanSector.h`, do-not-touch -- @see this file's own
     // "matchedpair" section.
     const AtanSector sec = atanSector(b.hi, a.hi);
-    const BandRawCancel nc = fmaRaw(neg(a), sec.t, b); // b - a*tan(phi)
+    const BandRawCancel nc = fmaRawK(BandRaw{ -a.hi, -a.lo, -a.tail }, sec.t.hi, BandRaw{ b.hi, b.lo, b.tail }); // b - a*T
     const BandRaw numR{ nc.hi, nc.lo, nc.tail };
     // a + b*tan(phi): the addend `a` dominates in the order fast2Sum needs (|b.hi*t.hi| <= a.hi since b.hi <= a.hi and
     // t < 1), and the sum stays raw into recipRaw, which reads only hi and lo.
-    const BandRaw denR = fmaRawDom(BandRaw{ b.hi, b.lo, b.tail }, BandRaw{ sec.t.hi, sec.t.lo, sec.t.tail }, BandRaw{ a.hi, a.lo, a.tail });
+    const BandRaw denR = fmaRawKDom(BandRaw{ b.hi, b.lo, b.tail }, sec.t.hi, BandRaw{ a.hi, a.lo, a.tail });
 
     const Band    t = normalize(mulRaw(numR, recipRaw(denR))); // |t| <= tan(5 deg); den = a + b*tan(phi) > 0 here
     const BandRaw u = sqrRaw(t);
@@ -365,10 +367,13 @@ namespace detail {
     // A = atan(b/a) in [0, pi/4]. In a rotated sector s can be negative and
     // phi_i is at least 10 deg against |s| <= 5 deg -- one bit, never a
     // cancellation. In the head sector phi is zero and A IS s.
-    const Band A = normalize(addRaw(sec.phi, s));
+    // phi_i dominates s (>= 10 deg against |s| <= 5 deg; phi = 0 is the head sector, where the sum is s itself).
+    const BandRawCancel Ar = addRawDom(sec.phi, s);
 
-    const Band B = scalePow2f(pio2, swap ? 1.0f : (xNeg ? 2.0f : 0.0f));
-    const Band r = add(B, (swap != xNeg) ? neg(A) : A);
+    // atan2(|y|,|x|) = B + sigma*A in ONE raw add; B in {0, pi/2, pi} bounds A <= pi/4 (B = 0: fast2Sum(0, .) is exact).
+    const Band  B  = scalePow2f(pio2, swap ? 1.0f : (xNeg ? 2.0f : 0.0f));
+    const float sg = (swap != xNeg) ? -1.0f : 1.0f;
+    const Band  r  = normalize(addRawDom(BandRaw{ B.hi, B.lo, B.tail }, BandRaw{ sg * Ar.hi, sg * Ar.lo, sg * Ar.tail }));
     return yNeg ? neg(r) : r;
 }
 

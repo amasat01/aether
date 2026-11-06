@@ -765,6 +765,25 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
     return BandRawCancel{ s_hi, s_lo2, resid };
 }
 
+/// @brief `addRaw` for a caller who can prove `|a.hi| >= |b.hi|` or `a.hi == 0` (a constant that bounds the other
+/// operand, or an exact zero): the leading `twoSum` is a `fast2Sum` (3 FP32 ops, not 6), bit-for-bit the same sum.
+/// Cancellation-capable like `addRaw`. @warning the dominance claim is the CALLER's -- see each call site.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancel addRawDom(BandRaw a, BandRaw b)
+{
+    float s_hi, e_hi;
+    fast2Sum(a.hi, b.hi, s_hi, e_hi);
+    float s_lo, e_lo;
+    twoSum(a.lo, b.lo, s_lo, e_lo);
+    float s_lo2, e_lo2;
+    twoSum(s_lo, e_hi, s_lo2, e_lo2);
+
+    float resid = addRN(e_lo, e_lo2);
+    resid       = addRN(resid, a.tail);
+    resid       = addRN(resid, b.tail);
+
+    return BandRawCancel{ s_hi, s_lo2, resid };
+}
+
 /// @brief `a + f` for a one-limb operand `f`, raw: `addRaw(a, {f, 0, 0})` without the two `twoSum`s on zero limbs
 /// (which the compiler cannot fold: `twoSum(x, 0)` is not syntactically zero). Cancellation-capable like `addRaw`.
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancel addRawS(BandRaw a, float f)

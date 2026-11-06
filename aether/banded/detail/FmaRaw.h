@@ -178,6 +178,64 @@ namespace detail {
     return BandRaw{ main_sum, mA, resid };
 }
 
+/// @brief `a*s + c` with a ONE-FLOAT multiplier `s` (`fmaRaw` with `b = {s, 0, 0}`: one `twoProd`, one `twoSum`, a
+/// `c.lo` sum and three residual terms fewer). Cancellation-capable like `fmaRaw`.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancel fmaRawK(BandRaw a, float s, BandRaw c)
+{
+    float p_hi, p_lo;
+    twoProd(a.hi, s, p_hi, p_lo);
+    float t_hi, t_lo;
+    twoProd(a.lo, s, t_hi, t_lo);
+
+    float sA, eA;
+    twoSum(p_lo, t_hi, sA, eA);
+
+    float main_sum, e_main;
+    twoSum(p_hi, c.hi, main_sum, e_main);
+
+    float mA, emA;
+    twoSum(e_main, sA, mA, emA);
+    float mB, emB;
+    twoSum(mA, c.lo, mB, emB);
+
+    float resid = addRN(eA, emA);
+    resid       = resid + emB;
+    resid       = resid + t_lo;
+    resid       = fmaRN(a.tail, s, resid);
+    resid       = resid + c.tail;
+
+    return BandRawCancel{ main_sum, mB, resid };
+}
+
+/// @brief `fmaRawK` for a caller who can prove the addend dominates the product (`|a*s| <= |c|`): `fast2Sum` leading sum,
+/// no cancellation. @warning the dominance claim is the CALLER's.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw fmaRawKDom(BandRaw a, float s, BandRaw c)
+{
+    float p_hi, p_lo;
+    twoProd(a.hi, s, p_hi, p_lo);
+    float t_hi, t_lo;
+    twoProd(a.lo, s, t_hi, t_lo);
+
+    float sA, eA;
+    twoSum(p_lo, t_hi, sA, eA);
+
+    float main_sum, e_main;
+    fast2Sum(c.hi, p_hi, main_sum, e_main);
+
+    float mA, emA;
+    twoSum(e_main, sA, mA, emA);
+    float mB, emB;
+    twoSum(mA, c.lo, mB, emB);
+
+    float resid = addRN(eA, emA);
+    resid       = resid + emB;
+    resid       = resid + t_lo;
+    resid       = fmaRN(a.tail, s, resid);
+    resid       = resid + c.tail;
+
+    return BandRaw{ main_sum, mB, resid };
+}
+
 } // namespace detail
 } // namespace banded
 } // namespace aether
