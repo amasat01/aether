@@ -76,7 +76,7 @@ jobs:
         with:
           name: ci-test-cpp
           args: >-
-            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree raptor --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip .github/ --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree raptor --skip docs/ --skip tests/ --skip ci/ --skip tools/ --skip goldens/ --skip RELEASING.md --skip CHANGELOG.md --skip README.md --skip CONTRIBUTING.md --skip CITATION.cff --skip Makefile --skip .github/ --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
           extra: ${{ toJSON(matrix) }}
       - run: make gate-names RAPTOR_SRC=raptor
         if: steps.memo.outputs.run == 'true'
