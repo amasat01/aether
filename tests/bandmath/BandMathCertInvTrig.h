@@ -271,9 +271,10 @@ inline Band bandPiO2PerturbedCw1()
 inline Band asinPerturbedPiO2(Band x)
 {
     bool       high = false, bad = false;
-    const Band v = bd::asinReducedRaw(bd::abs(x), high, bad);
+    const bd::BandRaw vr = bd::asinReducedRaw(bd::abs(x), high, bad);
     if (bad)
-        return v;
+        return Band{ vr.hi, vr.lo, vr.tail };
+    const Band v = bd::normalize(vr);
     const Band m = high ? bd::sub(bandPiO2PerturbedCw1(), bd::scalePow2f(v, 2.0f)) : v;
     return (bd::floatAsInt(x.hi) < 0) ? bd::neg(m) : m;
 }
@@ -281,9 +282,10 @@ inline Band asinPerturbedPiO2(Band x)
 inline Band acosPerturbedPiO2(Band x)
 {
     bool       high = false, bad = false;
-    const Band v    = bd::asinReducedRaw(bd::abs(x), high, bad);
+    const bd::BandRaw vr = bd::asinReducedRaw(bd::abs(x), high, bad);
     if (bad)
-        return v;
+        return Band{ vr.hi, vr.lo, vr.tail };
+    const Band v    = bd::normalize(vr);
     const Band pio2 = bandPiO2PerturbedCw1();
     const Band m    = high ? bd::scalePow2f(v, 2.0f) : bd::sub(pio2, v);
     return (bd::floatAsInt(x.hi) < 0) ? bd::sub(bd::scalePow2f(pio2, 2.0f), m) : m;
@@ -341,12 +343,12 @@ inline bd::BandRaw atanCoreRawDroppedC0(Band u)
     p       = bd::fmaRN(u.hi, p, 7.6923079789e-02f);
     p       = bd::fmaRN(u.hi, p, -9.0909093618e-02f);
     float ph = p, pl = 0.0f;
-    bd::ddFma(u.hi, u.lo, ph, pl, 1.1111111194e-01f, -8.2784229471e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, -1.4285714924e-01f, 6.3862120037e-09f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 2.0000000298e-01f, -2.9802322832e-09f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 1.1111111194e-01f, -8.2784229471e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, -1.4285714924e-01f, 6.3862120037e-09f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 2.0000000298e-01f, -2.9802322832e-09f, ph, pl);
     bd::BandRaw q{ ph, pl, 0.0f };
-    q = bd::fmaRawNoCancel(u, q, bd::BandRaw{ -3.3333334327e-01f, 9.9341077586e-09f, -2.9605948206e-16f });
-    // c0 (== 1) DROPPED -- the certified body's terminal fmaRawSNoCancel
+    q = bd::fmaRawDom(u, q, bd::BandRaw{ -3.3333334327e-01f, 9.9341077586e-09f, -2.9605948206e-16f });
+    // c0 (== 1) DROPPED -- the certified body's terminal fmaRawSDom
     // scalar-addend step is simply not run.
     return q;
 }
@@ -370,21 +372,21 @@ inline bd::BandRaw asinCoreRawDroppedC0(Band u)
     p       = bd::fmaRN(u.hi, p, 4.2409072630e-03f);
     p       = bd::fmaRN(u.hi, p, 4.6601435170e-03f);
     float ph = p, pl = 0.0f;
-    bd::ddFma(u.hi, u.lo, ph, pl, 5.1533095539e-03f, 1.2845828568e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 5.7400376536e-03f, 1.7246714473e-11f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 6.4472104423e-03f, -1.3038516100e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 7.3125259951e-03f, -1.2147685635e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 8.3903353661e-03f, 4.4348694161e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 9.7616091371e-03f, 3.9213582381e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 1.1551801115e-02f, -2.1913472426e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 1.3964843936e-02f, -1.8626451770e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 1.7352763563e-02f, 8.5968238084e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 2.2372158244e-02f, 8.4665691125e-10f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 3.0381944031e-02f, 4.1392114736e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 5.1533095539e-03f, 1.2845828568e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 5.7400376536e-03f, 1.7246714473e-11f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 6.4472104423e-03f, -1.3038516100e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 7.3125259951e-03f, -1.2147685635e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 8.3903353661e-03f, 4.4348694161e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 9.7616091371e-03f, 3.9213582381e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 1.1551801115e-02f, -2.1913472426e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 1.3964843936e-02f, -1.8626451770e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 1.7352763563e-02f, 8.5968238084e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 2.2372158244e-02f, 8.4665691125e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 3.0381944031e-02f, 4.1392114736e-10f, ph, pl);
     bd::BandRaw q{ ph, pl, 0.0f };
-    q = bd::fmaRawNoCancel(u, q, bd::BandRaw{ 4.4642858207e-02f, -1.0643687043e-09f, 4.7580987242e-17f });
-    q = bd::fmaRawNoCancel(u, q, bd::BandRaw{ 7.5000002980e-02f, -2.9802322832e-09f, 4.4408921647e-17f });
-    q = bd::fmaRawNoCancel(u, q, bd::BandRaw{ 1.6666667163e-01f, -4.9670538793e-09f, 1.4802974103e-16f });
+    q = bd::fmaRawDom(u, q, bd::BandRaw{ 4.4642858207e-02f, -1.0643687043e-09f, 4.7580987242e-17f });
+    q = bd::fmaRawDom(u, q, bd::BandRaw{ 7.5000002980e-02f, -2.9802322832e-09f, 4.4408921647e-17f });
+    q = bd::fmaRawDom(u, q, bd::BandRaw{ 1.6666667163e-01f, -4.9670538793e-09f, 1.4802974103e-16f });
     // c0 (== 1) DROPPED.
     return q;
 }

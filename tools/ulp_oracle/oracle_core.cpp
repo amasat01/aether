@@ -35,6 +35,7 @@ const FuncEntry kFuncs[] = {
     { "exp2",   FuncId::EXP2,   1, false },
     { "log",    FuncId::LOG,    1, false },
     { "log2",   FuncId::LOG2,   1, false },
+    { "log10",  FuncId::LOG10,  1, false },
     { "log1p",  FuncId::LOG1P,  1, false },
     { "expm1",  FuncId::EXPM1,  1, false },
     { "sqrt",   FuncId::SQRT,   1, false },
@@ -50,6 +51,9 @@ const FuncEntry kFuncs[] = {
     { "sinh",   FuncId::SINH,   1, false },
     { "cosh",   FuncId::COSH,   1, false },
     { "tanh",   FuncId::TANH,   1, false },
+    { "asinh",  FuncId::ASINH,  1, false },
+    { "acosh",  FuncId::ACOSH,  1, false },
+    { "atanh",  FuncId::ATANH,  1, false },
     { "pow",    FuncId::POW,    2, false },
     { "hypot",  FuncId::HYPOT,  2, false },
     { "atan2",  FuncId::ATAN2,  2, false },
@@ -607,6 +611,7 @@ double evalUnaryMPFR(FuncId f, double x)
         case FuncId::EXP2: mpfr_exp2(r, a, MPFR_RNDN); break;
         case FuncId::LOG: mpfr_log(r, a, MPFR_RNDN); break;
         case FuncId::LOG2: mpfr_log2(r, a, MPFR_RNDN); break;
+        case FuncId::LOG10: mpfr_log10(r, a, MPFR_RNDN); break;
         case FuncId::LOG1P: mpfr_log1p(r, a, MPFR_RNDN); break;
         case FuncId::EXPM1: mpfr_expm1(r, a, MPFR_RNDN); break;
         case FuncId::SQRT: mpfr_sqrt(r, a, MPFR_RNDN); break;
@@ -621,6 +626,9 @@ double evalUnaryMPFR(FuncId f, double x)
         case FuncId::SINH: mpfr_sinh(r, a, MPFR_RNDN); break;
         case FuncId::COSH: mpfr_cosh(r, a, MPFR_RNDN); break;
         case FuncId::TANH: mpfr_tanh(r, a, MPFR_RNDN); break;
+        case FuncId::ASINH: mpfr_asinh(r, a, MPFR_RNDN); break;
+        case FuncId::ACOSH: mpfr_acosh(r, a, MPFR_RNDN); break;
+        case FuncId::ATANH: mpfr_atanh(r, a, MPFR_RNDN); break;
         default: mpfr_set_nan(r); break;
     }
     const double out = mpfr_get_d(r, MPFR_RNDN);

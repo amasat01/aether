@@ -2,7 +2,7 @@
 # Copyright 2026 Alessandro Masat
 # SPDX-License-Identifier: Apache-2.0
 """tools/bandmath/gen_corpus_explog.py — golden minter for the ported
-exp/log/pow ops.
+exp/expm1/exp2/log/log1p/log2/log10/tanh/sinh/cosh/asinh/acosh/atanh/tan/pow ops.
 
 `exp`/`log`/`pow` are minted against `tools/ulp_oracle`'s MPFR (256-bit,
 correctly rounded) reference, unlike the exact/near-exact ops
@@ -48,6 +48,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gen_corpus_trig import label_trig
 from _corpus_common import (
     BINARY_ROW_RE,
     DEFAULT_SEED,
@@ -131,6 +132,124 @@ def label_exp(x: float) -> int:
     return 1  # degraded: representable, past the certified edge, not yet saturated
 
 
+def label_expm1(x: float) -> int:
+    # Mirrors expm1's guard structure (BandExpLog.h): NaN/+-inf/+-0 are exact
+    # IEEE answers; x past the high saturation, or outside the FP32 range the
+    # ingest can carry, is the loud escape; x below the low saturation is
+    # exactly -1, the correctly rounded answer (in_domain). expm1(x) ~ x for
+    # tiny x (flushed to 0 below the FP32 floor, where the double metric
+    # cannot call it a miss), so the carrier-floor leg degrades there; the
+    # ceiling leg degrades the positive side.
+    if not math.isfinite(x) or x == 0.0:
+        return 0
+    e = exponent_of(x)
+    if x > K_BAND_EXP_SAT_HIGH or e >= K_BAND_HARD_CEILING_EXP:
+        return 2
+    if (x > 0.0 and not band_exp_admits(x, 0.0)) or not band_intermediate_admits(e):
+        return 1
+    return 0
+
+
+def label_hyp(x: float, saturates: bool) -> int:
+    # tanh/sinh/cosh over expm1 (BandHyp.h): +-0, +-inf, NaN are exact exits;
+    # |x| outside the FP32 range is the loud escape, and so is sinh/cosh past
+    # the FP32 envelope edge (the result is +-inf where the double is finite);
+    # tiny |x| (carrier floor) and, for sinh/cosh, the ceiling margin degrade.
+    if not math.isfinite(x) or x == 0.0:
+        return 0
+    e = exponent_of(x)
+    a = abs(x)
+    if e >= K_BAND_HARD_CEILING_EXP or (saturates and a > K_BAND_EXP_SAT_HIGH + LN2):
+        return 2
+    if not band_intermediate_admits(e) or (saturates and not band_exp_admits(max(a - LN2, 0.0), 0.0)):
+        return 1
+    return 0
+
+
+def label_tanh(x: float) -> int:
+    return label_hyp(x, False)
+
+
+def label_sinh(x: float) -> int:
+    return label_hyp(x, True)
+
+
+def label_asinh(x: float) -> int:
+    # asinh over log1p/log (BandInvHyp.h): +-0/+-inf/NaN exact; |x| outside the
+    # FP32 range is the loud escape (the ingest rejects it); tiny |x| degrades.
+    if not math.isfinite(x) or x == 0.0:
+        return 0
+    e = exponent_of(x)
+    if e >= K_BAND_HARD_CEILING_EXP:
+        return 2
+    return 0 if band_intermediate_admits(e) else 1
+
+
+def label_acosh(x: float) -> int:
+    # x < 1 is the loud NaN reject; 1 + tiny (x == 1 exact is +0).
+    if x != x or x == math.inf:
+        return 0
+    if x < 1.0:
+        return 2
+    if exponent_of(x) >= K_BAND_HARD_CEILING_EXP:
+        return 2
+    return 0
+
+
+def label_atanh(x: float) -> int:
+    # |x| > 1 is the loud NaN reject; +-1 are exact (+-inf); tiny |x| degrades.
+    if x != x or x == 0.0 or abs(x) == 1.0:
+        return 0
+    if abs(x) > 1.0:
+        return 2
+    return 0 if band_intermediate_admits(exponent_of(x)) else 1
+
+
+def label_tan(x: float):
+    # tan = sin/cos (BandTrig.h): sin/cos's own guard and edge labels, then the
+    # |cos x| bins -- relative claim at >= 2^-13, degraded below, and within
+    # 2^-30 of a pole nothing is delivered, so those rows are not minted.
+    base = label_trig(x)
+    if base == 2 or not math.isfinite(x) or x == 0.0:
+        return base
+    c = abs(math.cos(x))
+    if c < 2.0 ** -30:
+        return None
+    e = exponent_of(x)
+    if not band_intermediate_admits(e):
+        return 1  # carrier floor
+    if c < 2.0 ** -13 or (abs(x) > 0.5 and abs(math.sin(x)) < 2.0 ** -13):
+        return 1  # a leg is past its relative claim
+    return base
+
+
+def label_exp2(x: float) -> int:
+    # exp2(x) = exp(x*ln2): exp's labels on the scaled argument, plus the FP32
+    # overflow at x >= 128 (2^128 is not representable) as the loud escape.
+    if not math.isfinite(x):
+        return 0
+    if x >= 128.0:
+        return 2
+    return label_exp(x * LN2)
+
+
+def label_log1p(x: float) -> int:
+    # Mirrors log1p's guards (BandExpLog.h): NaN/+-inf/+-0 and x == -1 are
+    # exact answers; x < -1 is the loud NaN reject; x at or past 2^128 is out
+    # of the FP32 range; tiny |x| (carrier floor, flushed values) and x past
+    # the ceiling margin degrade.
+    if not math.isfinite(x) or x == 0.0 or x == -1.0:
+        return 0
+    if x < -1.0:
+        return 2
+    e = exponent_of(x)
+    if e >= K_BAND_HARD_CEILING_EXP:
+        return 2
+    if not band_intermediate_admits(e) or not band_ceiling_admits(e):
+        return 1
+    return 0
+
+
 def label_log(x: float) -> int:
     # Mirrors aether::banded::detail::log's own guard structure exactly
     # (BandExpLog.h): NaN, +-0 and +inf are EXACT IEEE answers (specials,
@@ -167,6 +286,13 @@ def label_pow(x: float, y: float) -> int:
     # genuinely does not matter" -- same rule the specials rows get).
     if y == 0.0 or y == 1.0:
         return 0
+    # The IEEE points pow() answers exactly ahead of the log leg: x == 1 (any
+    # y, NaN and +-inf included), x == +-0 and x == +-inf with y a non-NaN
+    # nonzero (the sign of the answer is MPFR's own Annex F value).
+    if x == 1.0:
+        return 0
+    if (x == 0.0 or math.isinf(x)) and not math.isnan(y):
+        return 0
     if not (x > 0.0 and x < float("inf")):
         # ★ FINDING (fixed here, not papered over): a first draft labelled
         # EVERY row that fails Band's x>0-finite guard `in_domain`, reasoning
@@ -181,16 +307,6 @@ def label_pow(x: float, y: float) -> int:
         # which is exactly what `rejected` asserts (the row must NOT
         # silently agree with full IEEE `pow`).
         return 2
-    if x == 1.0:
-        # pow(1, y) == 1 for every FINITE y, exact ("falls out", not
-        # special-cased in Band's guard) -- ★ FINDING: a first draft
-        # dropped "finite" and labelled pow(1, inf)/pow(1, NaN) in_domain
-        # too. Band's guard does NOT special-case x==1 at all; those two
-        # rows fall through to `exp(mul(y, log(x)))` = `exp(mul(inf, +0))`
-        # = `exp(NaN)` = NaN, where full IEEE `pow(1, inf) == 1` -- the SAME
-        # "LOUD REJECT of the uncertified domain" the x<=0 branch documents,
-        # caught live (`ref=1 got=nan`) once run.
-        return 0 if math.isfinite(y) else 2
     ex = exponent_of(x)
     logx = math.log(x)
     elog = exponent_of(logx)
@@ -261,6 +377,115 @@ def build_exp_spec() -> str:
     lines.append("# rejected: past saturation, both sides")
     lines.append(f"uniform {K_BAND_EXP_SAT_HIGH} 400.0 60")
     lines.append(f"uniform -700.0 {K_BAND_EXP_SAT_LOW} 60")
+    return "\n".join(lines) + "\n"
+
+
+def build_expm1_spec() -> str:
+    # exp's boundary families, plus the small-|x| decades where expm1 (unlike
+    # exp) must keep full relative accuracy.
+    return build_exp_spec() + "# small-|x| family, both signs\nreduction pow2 -60 -31\n"
+
+
+def build_exp2_spec() -> str:
+    pts = [float(k) for k in range(-150, 129)]
+    pts += [k + d for k in (-60, -1, 0, 1, 60, 100) for d in (2.0 ** -30, -(2.0 ** -30), 0.5)]
+    pts += [128.0, math.nextafter(128.0, 0.0), math.nextafter(128.0, 200.0), -150.0, math.nextafter(-150.0, -200.0)]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("reduction pow2 -30 6")
+    lines.append("uniform -88.0 107.0 400")
+    lines.append("uniform -150.0 -88.0 100")
+    lines.append("uniform 107.0 128.0 60")
+    lines.append("uniform 128.0 400.0 60")
+    lines.append("uniform -700.0 -150.0 60")
+    return "\n".join(lines) + "\n"
+
+
+def build_log10_spec() -> str:
+    pts = [10.0 ** k for k in range(0, 23)] + [10.0 ** -k for k in range(1, 23)]
+    return build_log_spec() + "points " + " ".join(repr(v) for v in pts) + "\n"
+
+
+def build_tanh_spec() -> str:
+    pts = [22.0, math.nextafter(22.0, 0.0), math.nextafter(22.0, 30.0), 21.9999, 40.0, 1e30, -1e300, 1e300]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("reduction pow2 -60 6")
+    lines.append("uniform -22.0 22.0 400")
+    lines.append("uniform -60.0 60.0 100")
+    return "\n".join(lines) + "\n"
+
+
+def build_sinh_spec() -> str:
+    pts = [22.0, math.nextafter(22.0, 0.0), math.nextafter(22.0, 30.0), 74.16679, 74.86, 88.7228391, 89.4, 89.5, 100.0,
+           710.0, -1e300, 1e300, 0.34657359, 1e-30, 2.0 ** -149]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts + [-v for v in pts])]
+    lines.append("reduction pow2 -60 6")
+    lines.append("uniform -90.0 90.0 500")
+    lines.append("uniform -700.0 700.0 60")
+    return "\n".join(lines) + "\n"
+
+
+def build_tan_spec() -> str:
+    import random
+
+    rng = random.Random(0x7A17)
+    pio2 = math.pi / 2
+    pts = []
+    for _ in range(300):  # near the poles (2k+1)pi/2, k < 20000, at 2^-j offsets
+        k = rng.randrange(0, 20000)
+        pts.append((2 * k + 1) * pio2 + rng.choice((-1.0, 1.0)) * 2.0 ** -rng.randrange(1, 40) * (1 + rng.random()))
+    pts += [pio2, -pio2, math.pi, 0.5, 1.0, 65535.0, 2.0 ** 24]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("reduction pow2 -60 24")
+    lines.append("reduction pi_over_2 400")
+    lines.append("uniform -65536.0 65536.0 500")
+    lines.append("uniform -4.0 4.0 300")
+    return "\n".join(lines) + "\n"
+
+
+def build_asinh_spec() -> str:
+    pts = [2.0, math.nextafter(2.0, 0.0), math.nextafter(2.0, 3.0), 2.0 ** 28, math.nextafter(2.0 ** 28, 0.0),
+           math.nextafter(2.0 ** 28, 1e30), 1e30, 3e38, 1e300, 2.0 ** -19, 2.0 ** -149, 1e-300]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts + [-v for v in pts])]
+    lines.append("reduction pow2 -60 120")
+    lines.append("uniform -2.0 2.0 300")
+    lines.append("loguniform 2.0 2e8 150")
+    return "\n".join(lines) + "\n"
+
+
+def build_acosh_spec() -> str:
+    pts = [1.0, math.nextafter(1.0, 0.0), 0.5, 0.0, -1.0, 2.0, math.nextafter(2.0, 0.0), 2.0 ** 28, 1e30, 3e38, 1e300]
+    pts += [1.0 + 2.0 ** -j for j in range(1, 53)]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("reduction pow2 -20 120")
+    lines.append("uniform 1.0 2.0 300")
+    lines.append("loguniform 2.0 1e38 200")
+    return "\n".join(lines) + "\n"
+
+
+def build_atanh_spec() -> str:
+    pts = [1.0, -1.0, math.nextafter(1.0, 2.0), math.nextafter(-1.0, -2.0), 2.0, -2.0, 0.5, -0.5, 1e300, 2.0 ** -19, 1e-300]
+    pts += [s * (1.0 - 2.0 ** -j) for j in range(1, 53) for s in (1.0, -1.0)]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("reduction pow2 -60 2")
+    lines.append("uniform -1.0 1.0 400")
+    return "\n".join(lines) + "\n"
+
+
+def build_log1p_spec() -> str:
+    pts = []
+    for j in range(1, 41):  # the series/log seam, both signs, both branches
+        for s in (1.0, -1.0):
+            pts += [s * 2.0 ** -19 * (1 + 2.0 ** -j), s * 2.0 ** -19 * (1 - 2.0 ** -j)]
+    for j in range(1, 53):  # the cancellation regime, -1 + 2^-j
+        pts.append(-1.0 + 2.0 ** -j)
+    pts += [-1.0, math.nextafter(-1.0, -2.0), -2.0, -1e300, 2.0 ** -149, -(2.0 ** -149), 1e-300, -1e-300, 1.0]
+    lines = [f"seed 0x{DEFAULT_SEED:016X}", "points " + " ".join(repr(v) for v in pts)]
+    lines.append("# pow2 families: series regime, then the log branch, both signs")
+    lines.append("reduction pow2 -60 -20")
+    lines.append("reduction pow2 -19 6")
+    lines.append("# bulk: (-1, 8], and [8, 2^121)")
+    lines.append("uniform -1.0 8.0 400")
+    lines.append("loguniform 8.0 1e36 150")
     return "\n".join(lines) + "\n"
 
 
@@ -400,6 +625,26 @@ OPS = {
     "exp": (1, 0.5, build_exp_spec,
             "aether/banded/BandExpLog.h bandExp/exp; bound = kExpUlpBound=0.5 "
             "(BandLevers.ExpWithinDerivedUlpBoundOnHost)."),
+    "expm1": (1, 0.5, build_expm1_spec,
+              "aether/banded/BandExpLog.h expm1; bound = 0.5 ULP53."),
+    "log1p": (1, 1.0, build_log1p_spec,
+              "aether/banded/BandExpLog.h log1p; bound = 1 ULP53."),
+    "exp2": (1, 1.5, build_exp2_spec,
+             "aether/banded/BandExpLog.h exp2; bound = 1.5 ULP53 (0.5 exp + 0.5 product + constant)."),
+    "log2": (1, 1.5, build_log_spec,
+             "aether/banded/BandExpLog.h log2; bound = 1.5 ULP53."),
+    "log10": (1, 1.5, build_log10_spec,
+              "aether/banded/BandExpLog.h log10; bound = 1.5 ULP53."),
+    "tanh": (1, 2.0, build_tanh_spec,
+             "aether/banded/BandHyp.h tanh; bound = 2 ULP53."),
+    "sinh": (1, 2.0, build_sinh_spec,
+             "aether/banded/BandHyp.h sinh; bound = 2 ULP53."),
+    "cosh": (1, 2.0, build_sinh_spec,
+             "aether/banded/BandHyp.h cosh; bound = 2 ULP53."),
+    "tan": (1, 1.5, build_tan_spec, "aether/banded/BandTrig.h tan; bound = 1.5 ULP53 where |cos x| >= 2^-13."),
+    "asinh": (1, 2.0, build_asinh_spec, "aether/banded/BandInvHyp.h asinh; bound = 2 ULP53."),
+    "acosh": (1, 2.0, build_acosh_spec, "aether/banded/BandInvHyp.h acosh; bound = 2 ULP53."),
+    "atanh": (1, 2.0, build_atanh_spec, "aether/banded/BandInvHyp.h atanh; bound = 2 ULP53."),
     "log": (1, 0.5, build_log_spec,
             "aether/banded/BandExpLog.h log; bound = kLogUlpBound=0.5."),
     "pow": (2, 0.5, build_pow_spec,
@@ -447,10 +692,14 @@ def main():
         if arity == 1:
             raw_rows = parse_unary_raw(raw_path)
             labeled = []
-            label_fn = label_exp if op == "exp" else label_log
+            label_fn = {"exp": label_exp, "expm1": label_expm1, "log1p": label_log1p, "exp2": label_exp2,
+                                  "tanh": label_tanh, "sinh": label_sinh, "cosh": label_sinh,
+                                  "tan": label_tan, "asinh": label_asinh, "acosh": label_acosh, "atanh": label_atanh}.get(op, label_log)
             for in0, ref in raw_rows:
                 x = double_of(in0)
-                labeled.append((in0, ref, label_fn(x)))
+                lab = label_fn(x)
+                if lab is not None:
+                    labeled.append((in0, ref, lab))
         else:
             raw_rows = parse_binary_raw(raw_path)
             labeled = []
@@ -460,7 +709,7 @@ def main():
                 labeled.append((in0, in1, ref, label_pow(x, y)))
 
         mint_cmd = (f"python3 tools/bandmath/gen_corpus_explog.py --oracle-bin <ulp_oracle> "
-                    f"--ops {op}  (Stage 1: {' '.join(cmd)})")
+                    f"--ops {op}")
         out_path = os.path.join(out_dir, f"golden_{op}.h")
         in_d, deg, rej = write_labeled_header(op, arity, bound, labeled, provenance, out_path, mint_cmd)
         print(f"{op:<6} {len(labeled):>7} {in_d:>10} {deg:>9} {rej:>9}  -> {out_path}")

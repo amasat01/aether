@@ -144,7 +144,7 @@ double fromBits(std::uint64_t b)
 }
 } // namespace
 
-TEST(TextureSoftDoubleTest, DeviceRoundTrip_IsBitExact)
+TEST(TextureBandedTest, DeviceRoundTrip_IsBitExact)
 {
     std::vector<std::uint64_t> corpusBits = {
         0x0000000000000000ull, // +0

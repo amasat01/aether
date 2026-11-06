@@ -25,7 +25,7 @@
  * `AETHER_MATH_BINARY` scaffold `math.h`'s own `floor`/`fmax`/… do — no
  * partial-ordering edit is needed for these five: the unary scaffold
  * already wins cleanly against a constrained Band companion, and
- * `AETHER_MATH_BINARY` already carries the `requires(!IsBandedFamily<T>)`
+ * `AETHER_MATH_BINARY` already carries the `requires(!IsBandedDoor<T>)`
  * guard that makes the same true for the binary two.
  *
  * @section fmaBand `fma`'s Band overload
@@ -38,7 +38,7 @@
  * `fma(Band,Band,Band)` more specialized than a three-independent-type
  * companion, so the existing unconstrained scalar template would keep
  * winning even with a Band overload added here. `math.h`'s scalar `fma`
- * therefore gained one line, `requires(!%aether::banded::IsBandedFamily<T>)`,
+ * therefore gained one line, `requires(!%aether::banded::IsBandedDoor<T>)`,
  * mirroring `AETHER_MATH_BINARY`'s own macro-generated guard.
  *
  * Every Band-typed entry point routes through `BandedFacade<T>`
@@ -122,8 +122,8 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() T remainder(T a, T b)
  *         arguments.
  */
 template<class A, class B, class C>
-    requires(aether::banded::IsBandedFamily<A> && aether::banded::IsBandedFamily<B>
-        && aether::banded::IsBandedFamily<C>)
+    requires(aether::banded::IsBandedDoor<A> && aether::banded::IsBandedDoor<B>
+        && aether::banded::IsBandedDoor<C>)
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() auto fma(A a, B b, C c)
 {
     return aether::banded::detail::BandedFacade<A>::fma(

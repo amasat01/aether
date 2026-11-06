@@ -116,7 +116,9 @@ struct Ff2 {
     /// @brief Host-only terminal: `Ff2` -> `double`, via `toBandedReal()`'s
     /// own exact inverse. @see the file header's egress section. No second
     /// encode path to drift.
+#ifndef __CUDACC_RTC__ // host-only: double interop
     [[nodiscard]] inline double toDouble() const { return toBandedReal().toDouble(); }
+#endif // __CUDACC_RTC__
 
     // ── df64 arithmetic (hidden friends; FP32-only, op counts in comments) ──
     //
@@ -358,7 +360,9 @@ struct Ff2Accum {
 
     /// @brief Host-only terminal: the accumulated value as a `double`.
     /// @see the file header's egress section.
+#ifndef __CUDACC_RTC__ // host-only: double interop
     [[nodiscard]] inline double toDouble() const { return s.toDouble(); }
+#endif // __CUDACC_RTC__
 
     /// @brief The accumulated value packed into `BandedReal` (RNE, one pack).
     /// @see the file header's egress section.

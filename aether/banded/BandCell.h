@@ -26,7 +26,9 @@
 #include "aether/macros.h"
 
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <cstring>
+#endif
 #include <type_traits>
 
 #ifdef AETHER_DEBUG_MODE

@@ -38,7 +38,9 @@
  */
 
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <limits>
+#endif
 
 #include "aether/banded/BandCell8.h"
 #include "aether/banded/BandedReal.h"
@@ -150,6 +152,7 @@ inline constexpr int kBandedRealLog10Den = 2136;
 } // namespace banded
 } // namespace aether
 
+#ifndef __CUDACC_RTC__ // std::numeric_limits needs <limits>
 /// \cond AETHER_DOXYGEN_STD_SPECIALIZATION_SCOPE_WORKAROUND
 template<>
 struct std::numeric_limits<aether::banded::BandedReal> {
@@ -270,3 +273,4 @@ public:
     }
 };
 /// \endcond
+#endif // __CUDACC_RTC__

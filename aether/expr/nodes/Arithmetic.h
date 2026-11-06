@@ -70,6 +70,40 @@ public:
     }
 };
 
+/**
+ * @brief `L * R`, component-wise (the Hadamard product of two same-shaped operands; for rank-0 operands, the
+ *        product of the two scalars). `Sum`'s shape with `*` in `eval`: both operand reads go through `evalW`, so
+ *        a banded storage leaf is lifted to the working carrier once and the product stays in the carrier.
+ */
+template<aether_expression L, aether_expression R>
+class Product : public Expression<Product<L, R>, typename L::element_type> {
+    static_assert(std::is_same_v<typename L::element_type, typename R::element_type>,
+        "Product: operand element_type must match");
+    static_assert(std::is_same_v<typename L::element_extents, typename R::element_extents>,
+        "Product: operand element_extents must match");
+
+public:
+    using element_type = typename L::element_type;
+    using working_type = working_type_t<element_type>;
+    using element_extents = typename L::element_extents;
+    static constexpr bool isLeaf = false;
+
+    typename std::conditional_t<L::isLeaf, const L&, const L> l_;
+    typename std::conditional_t<R::isLeaf, const R&, const R> r_;
+
+    AETHER_DEVICEHOST() constexpr Product(const L& l, const R& r)
+        : l_{ l }
+        , r_{ r }
+    {
+    }
+
+    template<std::size_t... Is>
+    AETHER_DEVICEHOST() constexpr working_type eval(const SampleIndex& i) const
+    {
+        return evalW<Is...>(l_, i) * evalW<Is...>(r_, i);
+    }
+};
+
 /** @brief `L - R`, component-wise: `Diff = Sum<L, R, true>`. */
 template<aether_expression L, aether_expression R>
 using Diff = Sum<L, R, true>;

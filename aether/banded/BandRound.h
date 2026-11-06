@@ -348,50 +348,16 @@ static_assert(!bandFmodAdmits(60, -40, 73, 0),
     "and must NOT rescue the span leg: representability is not a margin "
     "question, and a consumer must never opt out of it");
 
-/**
- * @brief `fmod(x, y)` — the IEEE remainder, truncated quotient, sign of
- * the dividend. Bit-exact on the admitted domain.
- *
- * @par Contract
- *  - `|fmod(x,y)| < |y|` and `sign(fmod(x,y)) == sign(x)`, including the
- *    zeros: `fmod(-12,4)` is `-0`.
- *  - `|x| < |y|` returns `x` bit for bit — the reduction never runs.
- *  - `fmod(x,y) == fmod(x,-y)` and `fmod(-x,y) == -fmod(x,y)`, limb for
- *    limb (the signs are XOR masks applied outside the arithmetic).
- *  - Exact whenever both operands satisfy `bandFmodAdmits`. Not "0.5
- *    ULP": zero.
- *
- * @par Terminals
- * `y == 0`, a NaN operand and an infinite `x` all return NaN. An infinite
- * `y` returns `x` (the mathematical limit). `x == +-0` returns `x` with
- * its sign. The order of these four tests is load-bearing: a NaN test
- * written as `!(v-v==0)` is also true for an infinity, so folding the NaN
- * and infinite-dividend cases together would swallow `fmod(x,+-inf)`
- * (whose answer is `x`, not NaN).
- *
- * @par Cost
- * Input-dependent: `1 + ceil((E(x)-E(y))/19)` steps of ~72 FP32 each.
- * Worst case over the whole window is 12 iterations; typical consumer
- * shapes (an angle wrap, a time-of-day fold) are one.
- */
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band fmod(Band x, Band y)
+/// @brief The widest quotient `|x / y|` the one-digit fast path takes: the close-range digit width
+/// `bandFmodStep`'s cascade is built for (`2^(kBandFmodChunk + 1)`); past it the chunked loop runs.
+inline constexpr float kBandFmodFastMaxQuotient = 0x1p21f;
+static_assert(kBandFmodFastMaxQuotient == static_cast<float>(1 << (kBandFmodChunk + 1)),
+    "the fast path's quotient ceiling is the close-range digit width");
+
+/// @brief `|x| mod |y|` for finite non-zero `a = |x|`, `b = |y|` by the chunked digit loop: the reference the fast
+/// path must reproduce, and the path for wide quotients.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band fmodLoop(Band a, Band b)
 {
-    const float kNaN = intAsFloat(0x7FC00000);
-    const float kInf = intAsFloat(0x7F800000);
-
-    if (x.hi != x.hi || y.hi != y.hi || y.hi == 0.0f)
-        return Band{ kNaN, 0.0f, 0.0f };
-    if (x.hi == kInf || x.hi == -kInf)
-        return Band{ kNaN, 0.0f, 0.0f };
-    if (y.hi == kInf || y.hi == -kInf)
-        return x; // fmod(x, +-inf) = x
-    if (x.hi == 0.0f)
-        return x; // +-0, sign preserved
-
-    const int  sgn = floatAsInt(x.hi) & static_cast<int>(0x80000000u);
-    Band       a   = applySignMask(x, sgn); // |x|, three XORs
-    const Band b   = abs(y);
-
     for (int it = 0; it < kBandFmodMaxIter; ++it) {
         if (a.hi == 0.0f)
             break; // the remainder is exactly zero
@@ -428,7 +394,78 @@ static_assert(!bandFmodAdmits(60, -40, 73, 0),
         }
     }
 
-    return applySignMask(a, sgn);
+    return a;
+}
+
+/// @brief `|x| mod |y|` (finite, non-zero magnitudes): for `a.hi / b.hi < kBandFmodFastMaxQuotient` one digit
+/// `n = trunc(a.hi / b.hi)` and one exact `bandFmodStep`, then a margin-tested exit — `0 < r.hi < b.hi (1 - 2^-22)`
+/// proves `0 < r < b` from the leading limb alone (`|r - r.hi| <= 2^-23 |r.hi|`, `b >= b.hi (1 - 2^-24)`);
+/// `r.hi < 0` is one digit too many (one `+ b` step); the ambiguous band (`r` near `b`, or `r = 0`) settles with the
+/// exact `r - b` probe the loop makes. Wider quotients take the loop. `kMargin = false` drops the margin: a RED-first
+/// mutant that exists for the tests, never for callers.
+template<bool kMargin = true>
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band fmodMagnitude(Band a, Band b)
+{
+    const float qf = a.hi / b.hi;
+    if (!(qf < kBandFmodFastMaxQuotient))
+        return fmodLoop(a, b);
+    // `n` is an integer float, `n * b` is exact inside `bandFmodStep`, and `r = a - n * b` is exact; the rounding
+    // of `qf` (and the ignored lower limbs) leave `n` off by at most one, so `r` lands in `(-b, 2b)`.
+    const float n = truncf(qf);
+    Band r        = (n == 0.0f) ? a : bandFmodStep(a, n, b);
+    const float top = kMargin ? b.hi * (1.0f - 0x1p-22f) : b.hi;
+    if (r.hi > 0.0f && r.hi < top)
+        return r;
+    if (r.hi < 0.0f)
+        return bandFmodStep(r, -1.0f, b);
+    const Band diff = bandFmodStep(r, 1.0f, b);
+    return diff.hi < 0.0f ? r : diff;
+}
+
+/**
+ * @brief `fmod(x, y)` — the IEEE remainder, truncated quotient, sign of
+ * the dividend. Bit-exact on the admitted domain.
+ *
+ * @par Contract
+ *  - `|fmod(x,y)| < |y|` and `sign(fmod(x,y)) == sign(x)`, including the
+ *    zeros: `fmod(-12,4)` is `-0`.
+ *  - `|x| < |y|` returns `x` bit for bit — the reduction never runs.
+ *  - `fmod(x,y) == fmod(x,-y)` and `fmod(-x,y) == -fmod(x,y)`, limb for
+ *    limb (the signs are XOR masks applied outside the arithmetic).
+ *  - Exact whenever both operands satisfy `bandFmodAdmits`. Not "0.5
+ *    ULP": zero.
+ *
+ * @par Terminals
+ * `y == 0`, a NaN operand and an infinite `x` all return NaN. An infinite
+ * `y` returns `x` (the mathematical limit). `x == +-0` returns `x` with
+ * its sign. The order of these four tests is load-bearing: a NaN test
+ * written as `!(v-v==0)` is also true for an infinity, so folding the NaN
+ * and infinite-dividend cases together would swallow `fmod(x,+-inf)`
+ * (whose answer is `x`, not NaN).
+ *
+ * @par Cost
+ * A quotient below `kBandFmodFastMaxQuotient` (`2^21`) is ONE exact step of
+ * ~72 FP32 plus a leading-limb exit test: about 0.5-0.6x the loop's time on a
+ * chain, and level with the native `double` `fmod` from a quotient of `2^10`
+ * up. Wider quotients run the chunked loop: `1 + ceil((E(x)-E(y))/19)` steps,
+ * worst case over the whole window 12 iterations.
+ */
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band fmod(Band x, Band y)
+{
+    const float kNaN = intAsFloat(0x7FC00000);
+    const float kInf = intAsFloat(0x7F800000);
+
+    if (x.hi != x.hi || y.hi != y.hi || y.hi == 0.0f)
+        return Band{ kNaN, 0.0f, 0.0f };
+    if (x.hi == kInf || x.hi == -kInf)
+        return Band{ kNaN, 0.0f, 0.0f };
+    if (y.hi == kInf || y.hi == -kInf)
+        return x; // fmod(x, +-inf) = x
+    if (x.hi == 0.0f)
+        return x; // +-0, sign preserved
+
+    const int sgn = floatAsInt(x.hi) & static_cast<int>(0x80000000u);
+    return applySignMask(fmodMagnitude(applySignMask(x, sgn), abs(y)), sgn); // |x|, |y|: three XORs each
 }
 
 // =========================================================================

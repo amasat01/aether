@@ -5,7 +5,7 @@
  * @file test_BandCell.cpp
  * @brief `BandCell` conformance (AETHER_CPP_MODE): the shared host battery.
  *
- * See `test_BandCell_common.h` for the scope note (zero CompDD/SoftDouble
+ * See `test_BandCell_common.h` for the scope note (zero CompDD/banded
  * coupling).
  */
 

@@ -9,8 +9,8 @@
  *
  * ONE ROW DROPPED, NOT ADAPTED: `MaterializeFiftyThreeDeliversTheBandToIEEE
  * Value` names `det::materialize<53>` (a demand-typed terminal over
- * `BandedDemandT<53, SoftDouble>`) -- both the demand-ladder selection plane
- * and the `SoftDouble` type it selects between are outside aether's carried
+ * `BandedDemandT<53, Emu>`) -- both the demand-ladder selection plane
+ * and the emulated type it selects between are outside aether's carried
  * surface. It stays `deferred-with-addon`; its device counterpart
  * (`MaterializeFiftyThreeCompilesAndAgreesOnDevice`, `.cu`) is dropped for
  * the same reason.

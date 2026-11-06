@@ -18,10 +18,10 @@ namespace oracle {
 ///        (POW, HYPOT, ATAN2, FMOD); SINCOS is unary-input but dual-output;
 ///        every other entry is unary-input, single-output.
 enum class FuncId {
-    EXP, EXP2, LOG, LOG2, LOG1P, EXPM1,
+    EXP, EXP2, LOG, LOG2, LOG10, LOG1P, EXPM1,
     SQRT, RSQRT, CBRT,
     SIN, COS, TAN, SINCOS, ATAN, ASIN, ACOS,
-    SINH, COSH, TANH,
+    SINH, COSH, TANH, ASINH, ACOSH, ATANH,
     POW, HYPOT, ATAN2, FMOD,
 };
 

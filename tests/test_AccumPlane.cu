@@ -6,7 +6,7 @@
  * @brief Accumulation plane (CUDA mode): the shared host battery
  *        (AccumPlaneCommon.h) plus the DEVICE arms, covering the two
  *        `double` policies aether carries. Rows about an `InCarrier`/
- *        `SoftDouble` plane have no subject here (aether carries no such
+ *        `emulated` plane have no subject here (aether carries no such
  *        plane) and are not reproduced as vacuous passes; rows that would
  *        have mixed a `nat` and an `emu` leg keep their name and the `nat`
  *        leg, documented at each.

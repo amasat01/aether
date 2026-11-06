@@ -6,7 +6,7 @@
 /**
  * @file FmaRaw.h
  * @brief `BandRaw`-level unnormalized FMA primitives (`fmaRaw`/
- *        `fmaRawNoCancel`/`fmaRawS`/`fmaRawSNoCancel`), shared by
+ *        `fmaRawDom`/`fmaRawS`/`fmaRawSDom`), shared by
  *        `BandExpLog.h` (`exp`/`log`'s internal use) and `BandRound.h`
  *        (the public checked `Band fma(Band,Band,Band)`).
  *
@@ -64,15 +64,43 @@ namespace detail {
     return BandRawCancel{ main_sum, mB, resid };
 }
 
-/// @brief `fmaRaw` for a caller who can PROVE, at compile time, that the
-/// product and the addend cannot cancel.
-/// @warning the assertion is the CALLER's — see each call site for its own
-/// one-line argument.
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw fmaRawNoCancel(
-    BandRaw a, BandRaw b, BandRaw c)
+/// @brief `a*b + c` for a caller who can PROVE, at compile time, that the addend dominates the product
+/// (`|a*b| <= 0.414 |c|`, so the sum never cancels and `|c.hi| >= |p_hi|`): the leading `twoSum` is a `fast2Sum`
+/// (3 FP32 ops, not 6) and the result carries no cancellation, so it stays a plain `BandRaw`.
+/// @warning the dominance claim is the CALLER's — see each call site for its own one-line argument.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw fmaRawDom(BandRaw a, BandRaw b, BandRaw c)
 {
-    const BandRawCancel r = fmaRaw(a, b, c);
-    return BandRaw{ r.hi, r.lo, r.tail };
+    float p_hi, p_lo;
+    twoProd(a.hi, b.hi, p_hi, p_lo);
+    float q_hi, q_lo;
+    twoProd(a.hi, b.lo, q_hi, q_lo);
+    float t_hi, t_lo;
+    twoProd(a.lo, b.hi, t_hi, t_lo);
+
+    float sA, eA;
+    twoSum(p_lo, q_hi, sA, eA);
+    float sB, eB;
+    twoSum(sA, t_hi, sB, eB);
+
+    float main_sum, e_main;
+    fast2Sum(c.hi, p_hi, main_sum, e_main);
+
+    float mA, emA;
+    twoSum(e_main, sB, mA, emA);
+    float mB, emB;
+    twoSum(mA, c.lo, mB, emB);
+
+    float resid = addRN(eA, eB);
+    resid       = resid + emA;
+    resid       = resid + emB;
+    resid       = resid + q_lo;
+    resid       = resid + t_lo;
+    resid       = fmaRN(a.lo, b.lo, resid);
+    resid       = fmaRN(a.tail, b.hi, resid);
+    resid       = fmaRN(b.tail, a.hi, resid);
+    resid       = resid + c.tail;
+
+    return BandRaw{ main_sum, mB, resid };
 }
 
 /// @brief `a*b + c` where the addend `c` is a scalar (one float, not a
@@ -117,13 +145,37 @@ namespace detail {
     return BandRawCancel{ main_sum, mA, resid };
 }
 
-/// @brief `fmaRawS` for a caller who can prove, at compile time, that the
-/// product and the scalar addend cannot cancel.
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw fmaRawSNoCancel(
-    BandRaw a, BandRaw b, float c)
+/// @brief `fmaRawDom` with a scalar addend (one float): the dominance-proven Horner step for coefficients that are
+/// exact in one float.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw fmaRawSDom(BandRaw a, BandRaw b, float c)
 {
-    const BandRawCancel r = fmaRawS(a, b, c);
-    return BandRaw{ r.hi, r.lo, r.tail };
+    float p_hi, p_lo;
+    twoProd(a.hi, b.hi, p_hi, p_lo);
+    float q_hi, q_lo;
+    twoProd(a.hi, b.lo, q_hi, q_lo);
+    float t_hi, t_lo;
+    twoProd(a.lo, b.hi, t_hi, t_lo);
+
+    float sA, eA;
+    twoSum(p_lo, q_hi, sA, eA);
+    float sB, eB;
+    twoSum(sA, t_hi, sB, eB);
+
+    float main_sum, e_main;
+    fast2Sum(c, p_hi, main_sum, e_main);
+
+    float mA, emA;
+    twoSum(e_main, sB, mA, emA);
+
+    float resid = addRN(eA, eB);
+    resid       = resid + emA;
+    resid       = resid + q_lo;
+    resid       = resid + t_lo;
+    resid       = fmaRN(a.lo, b.lo, resid);
+    resid       = fmaRN(a.tail, b.hi, resid);
+    resid       = fmaRN(b.tail, a.hi, resid);
+
+    return BandRaw{ main_sum, mA, resid };
 }
 
 } // namespace detail

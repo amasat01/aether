@@ -11,7 +11,7 @@
  *
  * The double-double reference oracle, the effective-bits metric, and the
  * carrier-generic df-vs-oracle bit measurement are ALL pure `double`
- * host-only arithmetic with zero SoftDouble/CompDD coupling.
+ * host-only arithmetic with zero banded/CompDD coupling.
  *
  * Each carrier's own harness (e.g. `test_Ff2Cert_common.h`) consumes this and
  * adds only the carrier-specific extraction (`ff2ExactDf`, the carrier's

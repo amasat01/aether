@@ -18,8 +18,8 @@
  * regenerates the table.
  *
  * @section fmaRawFromExpLog Reuses `BandExpLog.h`'s fma helpers
- * `asinCoreRaw`/`atanCoreRaw`'s Horner ladders consume `fmaRawNoCancel`/
- * `fmaRawSNoCancel`/`ddFma` (unnormalized-fma and double-float Horner
+ * `asinCoreRaw`/`atanCoreRaw`'s Horner ladders consume `fmaRawDom`/
+ * `fmaRawSDom`/`ddFmaDom` (unnormalized-fma and double-float Horner
  * step) from `BandExpLog.h` rather than a second copy of the same
  * helpers.
  *
@@ -71,7 +71,7 @@
 #include "aether/banded/Band.h"
 #include "aether/banded/detail/PiConstants.h"
 #include "aether/banded/AtanSector.h"
-#include "aether/banded/BandExpLog.h" // fmaRaw/fmaRawNoCancel/fmaRawS/fmaRawSNoCancel/ddFma
+#include "aether/banded/BandExpLog.h" // fmaRaw/fmaRawDom/fmaRawS/fmaRawSDom/ddFmaDom
 #include "aether/banded/RsqrtCore.h"  // sqrt_ -- asin/acos's own HIGH branch
 #include "aether/macros.h"
 
@@ -92,7 +92,7 @@ namespace detail {
 // =========================================================================
 //  asinCoreRaw -- `asin(t)/t` as a polynomial in `u = t*t`, `|t| <= 1/2`.
 //  `c_0 == 1` exactly -> the terminal step is a scalar-addend
-//  `fmaRawSNoCancel`, which pins `asin(t) == t` bit-exactly wherever `u`
+//  `fmaRawSDom`, which pins `asin(t) == t` bit-exactly wherever `u`
 //  underflows. `NoCancel` is provable: every `c_j > 0` (positive Taylor
 //  coefficients), so the Horner sum never loses a leading limb to
 //  cancellation -- `exp`'s situation, not `sin`'s.
@@ -117,23 +117,23 @@ namespace detail {
     p       = fmaRN(u.hi, p, 4.6601435170e-03f);  // c15
 
     float ph = p, pl = 0.0f;
-    ddFma(u.hi, u.lo, ph, pl, 5.1533095539e-03f, 1.2845828568e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 5.7400376536e-03f, 1.7246714473e-11f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 6.4472104423e-03f, -1.3038516100e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 7.3125259951e-03f, -1.2147685635e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 8.3903353661e-03f, 4.4348694161e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 9.7616091371e-03f, 3.9213582381e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 1.1551801115e-02f, -2.1913472426e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 1.3964843936e-02f, -1.8626451770e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 1.7352763563e-02f, 8.5968238084e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 2.2372158244e-02f, 8.4665691125e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 3.0381944031e-02f, 4.1392114736e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 5.1533095539e-03f, 1.2845828568e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 5.7400376536e-03f, 1.7246714473e-11f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 6.4472104423e-03f, -1.3038516100e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 7.3125259951e-03f, -1.2147685635e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 8.3903353661e-03f, 4.4348694161e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 9.7616091371e-03f, 3.9213582381e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 1.1551801115e-02f, -2.1913472426e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 1.3964843936e-02f, -1.8626451770e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 1.7352763563e-02f, 8.5968238084e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 2.2372158244e-02f, 8.4665691125e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 3.0381944031e-02f, 4.1392114736e-10f, ph, pl);
 
     BandRaw q{ ph, pl, 0.0f };
-    q = fmaRawNoCancel(u, q, BandRaw{ 4.4642858207e-02f, -1.0643687043e-09f, 4.7580987242e-17f });
-    q = fmaRawNoCancel(u, q, BandRaw{ 7.5000002980e-02f, -2.9802322832e-09f, 4.4408921647e-17f });
-    q = fmaRawNoCancel(u, q, BandRaw{ 1.6666667163e-01f, -4.9670538793e-09f, 1.4802974103e-16f });
-    return fmaRawSNoCancel(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
+    q = fmaRawDom(u, q, BandRaw{ 4.4642858207e-02f, -1.0643687043e-09f, 4.7580987242e-17f });
+    q = fmaRawDom(u, q, BandRaw{ 7.5000002980e-02f, -2.9802322832e-09f, 4.4408921647e-17f });
+    q = fmaRawDom(u, q, BandRaw{ 1.6666667163e-01f, -4.9670538793e-09f, 1.4802974103e-16f });
+    return fmaRawSDom(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
 }
 
 // =========================================================================
@@ -150,13 +150,13 @@ namespace detail {
     p       = fmaRN(u.hi, p, -9.0909093618e-02f);  // c5
 
     float ph = p, pl = 0.0f;
-    ddFma(u.hi, u.lo, ph, pl, 1.1111111194e-01f, -8.2784229471e-10f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, -1.4285714924e-01f, 6.3862120037e-09f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 2.0000000298e-01f, -2.9802322832e-09f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 1.1111111194e-01f, -8.2784229471e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, -1.4285714924e-01f, 6.3862120037e-09f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 2.0000000298e-01f, -2.9802322832e-09f, ph, pl);
 
     BandRaw q{ ph, pl, 0.0f };
-    q = fmaRawNoCancel(u, q, BandRaw{ -3.3333334327e-01f, 9.9341077586e-09f, -2.9605948206e-16f });
-    return fmaRawSNoCancel(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
+    q = fmaRawDom(u, q, BandRaw{ -3.3333334327e-01f, 9.9341077586e-09f, -2.9605948206e-16f });
+    return fmaRawSDom(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
 }
 
 /**
@@ -177,11 +177,12 @@ namespace detail {
  * host/device seed divergence -- @see this file's own header docstring,
  * "asin's two branches" section.
  */
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band asinReducedRaw(Band ax, bool& high, bool& bad)
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw asinReducedRaw(Band ax, bool& high, bool& bad)
 {
     high = ax.hi > 0.5f;
     bad  = false;
-    Band t, u;
+    BandRaw t;
+    Band    u;
     if (high) {
         const Band w = scalePow2f(sub(Band{ 1.0f, 0.0f, 0.0f }, ax), 0.5f);
         // `!(w.hi >= 0)` catches `|x| > 1` AND a non-finite argument in one
@@ -189,15 +190,16 @@ namespace detail {
         // limb alone.
         if (!(w.hi >= 0.0f)) {
             bad = true;
-            return Band{ intAsFloat(0x7FC00000), 0.0f, 0.0f };
+            return BandRaw{ intAsFloat(0x7FC00000), 0.0f, 0.0f };
         }
-        t = sqrt_(w);
+        const BandRawT<1> tr = sqrtRaw(w); // raw exit: no normalise between the root and the product
+        t = BandRaw{ tr.hi, tr.lo, tr.tail };
         u = w;
     } else {
-        t = ax;
+        t = BandRaw{ ax.hi, ax.lo, ax.tail };
         u = normalize(sqrRaw(ax));
     }
-    return normalize(mulRaw(t, asinCoreRaw(u)));
+    return mulRaw(t, asinCoreRaw(u)); // raw exit: the caller owns the one normalise
 }
 
 /**
@@ -222,12 +224,14 @@ namespace detail {
  */
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band asin(Band x)
 {
-    bool       high = false, bad = false;
-    const Band v = asinReducedRaw(abs(x), high, bad);
+    bool          high = false, bad = false;
+    const BandRaw v = asinReducedRaw(abs(x), high, bad);
     if (bad)
-        return v; // already the NaN
-    // asin|x| = high ? pi/2 - 2*asin(s) : asin(|x|)
-    const Band m = high ? sub(bandPiO2(), scalePow2f(v, 2.0f)) : v;
+        return Band{ v.hi, v.lo, v.tail }; // already the NaN
+    // |asin x| = C + s*V in ONE raw add: low (C = 0, s = +1, V = v), high (C = pi/2, s = -1, V = 2v).
+    const Band          pio2 = bandPiO2();
+    const BandRawCancel hs   = addRaw(BandRaw{ pio2.hi, pio2.lo, pio2.tail }, BandRaw{ -2.0f * v.hi, -2.0f * v.lo, -2.0f * v.tail });
+    const Band          m    = normalize(high ? BandRaw{ hs.hi, hs.lo, hs.tail } : v);
     return (floatAsInt(x.hi) < 0) ? neg(m) : m;
 }
 
@@ -253,14 +257,18 @@ namespace detail {
  */
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band acos(Band x)
 {
-    bool       high = false, bad = false;
-    const Band v    = asinReducedRaw(abs(x), high, bad);
+    bool          high = false, bad = false;
+    const BandRaw v = asinReducedRaw(abs(x), high, bad);
     if (bad)
-        return v; // already the NaN
-    const Band pio2 = bandPiO2();
-    // acos|x| = high ? 2*asin(s) : pi/2 - asin(|x|)
-    const Band m = high ? scalePow2f(v, 2.0f) : sub(pio2, v);
-    return (floatAsInt(x.hi) < 0) ? sub(scalePow2f(pio2, 2.0f), m) : m;
+        return Band{ v.hi, v.lo, v.tail }; // already the NaN
+    // acos(x) = C + s*V in ONE raw add (the x < 0 reflection pi - m folded into the constant and sign):
+    //   x >= 0: low pi/2 - v, high 2v;   x < 0: low pi/2 + v, high pi - 2v.
+    const Band  pio2 = bandPiO2();
+    const bool  xneg = floatAsInt(x.hi) < 0;
+    const float sc   = high ? 2.0f : 1.0f;
+    const float sg   = (high != xneg) ? sc : -sc;
+    const float cs   = high ? (xneg ? 2.0f : 0.0f) : 1.0f;
+    return normalize(addRaw(BandRaw{ cs * pio2.hi, cs * pio2.lo, cs * pio2.tail }, BandRaw{ sg * v.hi, sg * v.lo, sg * v.tail }));
 }
 
 /**
@@ -344,17 +352,20 @@ namespace detail {
     // ones do. `AtanSector.h`, do-not-touch -- @see this file's own
     // "matchedpair" section.
     const AtanSector sec = atanSector(b.hi, a.hi);
-    const Band num = normalize(fmaRaw(neg(a), sec.t, b)); // b - a*tan(phi)
-    const Band den = normalize(fmaRaw(b, sec.t, a));      // a + b*tan(phi)
+    const BandRawCancel nc = fmaRaw(neg(a), sec.t, b); // b - a*tan(phi)
+    const BandRaw numR{ nc.hi, nc.lo, nc.tail };
+    // a + b*tan(phi): the addend `a` dominates in the order fast2Sum needs (|b.hi*t.hi| <= a.hi since b.hi <= a.hi and
+    // t < 1), and the sum stays raw into recipRaw, which reads only hi and lo.
+    const BandRaw denR = fmaRawDom(BandRaw{ b.hi, b.lo, b.tail }, BandRaw{ sec.t.hi, sec.t.lo, sec.t.tail }, BandRaw{ a.hi, a.lo, a.tail });
 
-    const Band t = div(num, den); // |t| <= tan(5 deg)
-    const Band u = normalize(sqrRaw(t));
-    const Band s = normalize(mulRaw(t, atanCoreRaw(u)));
+    const Band    t = normalize(mulRaw(numR, recipRaw(denR))); // |t| <= tan(5 deg); den = a + b*tan(phi) > 0 here
+    const BandRaw u = sqrRaw(t);
+    const BandRaw s = mulRaw(t, atanCoreRaw(Band{ u.hi, u.lo, u.tail })); // raw: the add below absorbs it
 
     // A = atan(b/a) in [0, pi/4]. In a rotated sector s can be negative and
     // phi_i is at least 10 deg against |s| <= 5 deg -- one bit, never a
     // cancellation. In the head sector phi is zero and A IS s.
-    const Band A = add(sec.phi, s);
+    const Band A = normalize(addRaw(sec.phi, s));
 
     const Band B = scalePow2f(pio2, swap ? 1.0f : (xNeg ? 2.0f : 0.0f));
     const Band r = add(B, (swap != xNeg) ? neg(A) : A);

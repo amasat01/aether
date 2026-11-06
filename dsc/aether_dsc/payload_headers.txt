@@ -7,7 +7,7 @@
 # `tools/rtc_seal_check.py` gates that claim on every run. This is the
 # ground-truth closure measured for `benchmarks._hawk_arm.grav_body` (hawk
 # repo) via a real `nvcc -MD` build — not a directory walk: measured,
-# ~28 other aether headers (aether/accum/, aether/banded/,
+# ~28 other aether headers (aether/accum/,
 # aether/chunk/, aether/interop/, aether/residency/, aether/backend/,
 # aether/err/, aether/dtype/Format.h, some aether/view/Make*.h) reach std
 # headers the rtc/ shim set does not cover (<algorithm>, <cstring>,
@@ -21,6 +21,32 @@
 # not yet part of the payload either.
 aether/accum/TwoSum.h
 aether/accum/run.h
+aether/banded/Accum.h
+aether/banded/AtanSector.h
+aether/banded/Band.h
+aether/banded/BandCell.h
+aether/banded/BandCell8.h
+aether/banded/BandExpLog.h
+aether/banded/BandHyp.h
+aether/banded/BandInvHyp.h
+aether/banded/BandInvTrig.h
+aether/banded/BandRoot.h
+aether/banded/BandRound.h
+aether/banded/BandTable.h
+aether/banded/BandTrig.h
+aether/banded/BandedLimits.h
+aether/banded/BandedReal.h
+aether/banded/BandedRealOps.h
+aether/banded/Chain.h
+aether/banded/Ff1.h
+aether/banded/Ff2.h
+aether/banded/Ladder.h
+aether/banded/RsqrtCore.h
+aether/banded/banded.h
+aether/banded/detail/ExactSum.h
+aether/banded/detail/FmaRaw.h
+aether/banded/detail/Fp32.h
+aether/banded/detail/PiConstants.h
 aether/device.h
 aether/device/Device.h
 aether/dtype/DType.h

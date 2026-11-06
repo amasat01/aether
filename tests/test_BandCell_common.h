@@ -12,7 +12,7 @@
  * exponent sets. Instruments: bitwise band/cell equality, the `long double`
  * independent reconstruction. Tolerances: every claim here is EXACT —
  * bit-for-bit or `long double`-exact, zero ULP budgets, zero CompDD/
- * SoftDouble coupling, across all 13 host rows and both device rows
+ * banded coupling, across all 13 host rows and both device rows
  * (`test_BandCell.cu`).
  *
  * @section ingest Why the corpus is built from mantissa bits, never bandFromIEEE

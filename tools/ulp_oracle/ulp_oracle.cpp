@@ -27,8 +27,8 @@ void printUsage(const char* prog)
     std::fprintf(stderr, "usage: %s <function> <corpus-spec> <out-header>\n\n", prog);
     std::fprintf(stderr, "functions:\n");
     std::fprintf(stderr,
-        "  unary:  exp exp2 log log2 log1p expm1 sqrt rsqrt cbrt\n"
-        "          sin cos tan sincos atan asin acos sinh cosh tanh\n"
+        "  unary:  exp exp2 log log2 log10 log1p expm1 sqrt rsqrt cbrt\n"
+        "          sin cos tan sincos atan asin acos sinh cosh tanh asinh acosh atanh\n"
         "  binary: pow hypot atan2 fmod   (corpus-spec uses the *2 directives)\n\n");
     std::fprintf(stderr, "corpus-spec grammar and header format: tools/ulp_oracle/README.md\n");
 }
