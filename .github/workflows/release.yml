@@ -438,8 +438,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: dsc/pyproject.toml
       - name: The sdist installs into a clean venv, imports, makes host arrays, refuses device ones by name
         run: |
           python -m venv sv
