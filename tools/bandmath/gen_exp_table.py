@@ -14,7 +14,6 @@ table rows and reduction limbs equal the generated ones (exit 1 on any differenc
 Usage: gen_exp_table.py [--check path/to/BandExpLog.h]
 """
 import math
-import re
 import sys
 from decimal import Decimal, getcontext
 from fractions import Fraction as F
