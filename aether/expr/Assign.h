@@ -129,16 +129,33 @@ struct RecursiveAssign {
         if constexpr (Mode == Extents::Rank) {
             storeWorking<Op>(to.template eval<Is...>(i), evalW<Is...>(from, i));
         } else {
-            loop(std::make_index_sequence<Extents::static_extent(Mode)>{}, i, to, from);
+            loop(std::make_index_sequence<(Extents::static_extent(Mode) + kChunk - 1) / kChunk>{}, i, to, from);
         }
     }
 
 private:
-    // a fold, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200)
-    template<std::size_t... K, class ExprL, class ExprR>
-    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void loop(std::index_sequence<K...>, const SampleIndex& i, ExprL& to, const ExprR& from)
+    // folds, not a recursion: the unroll is one instantiation deep whatever the extent (nvcc stops nesting at 200).
+    // The fold is cut into chunks of kChunk so no fold expression holds more than kChunk operands: clang
+    // refuses a fold of more than 256 (its expression-nesting limit) and the chunking leaves the unrolled code unchanged.
+    static constexpr std::size_t kChunk = 64;
+
+    template<std::size_t... C, class ExprL, class ExprR>
+    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void loop(std::index_sequence<C...>, const SampleIndex& i, ExprL& to, const ExprR& from)
     {
-        (RecursiveAssign<Extents, Op, Mode + 1, Is..., K>::eval(i, to, from), ...);
+        (chunk<C>(i, to, from), ...);
+    }
+
+    template<std::size_t C, class ExprL, class ExprR>
+    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void chunk(const SampleIndex& i, ExprL& to, const ExprR& from)
+    {
+        constexpr std::size_t left = Extents::static_extent(Mode) - C * kChunk;
+        run<C * kChunk>(std::make_index_sequence<(left < kChunk ? left : kChunk)>{}, i, to, from);
+    }
+
+    template<std::size_t Base, std::size_t... J, class ExprL, class ExprR>
+    AETHER_DETAIL_UNROLL_INLINE AETHER_DEVICEHOST() static constexpr void run(std::index_sequence<J...>, const SampleIndex& i, ExprL& to, const ExprR& from)
+    {
+        (RecursiveAssign<Extents, Op, Mode + 1, Is..., Base + J>::eval(i, to, from), ...);
     }
 };
 
