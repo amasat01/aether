@@ -91,3 +91,14 @@ test-integrity gate directly — never the test binary bare, see
 .. code-block:: bash
 
    tests/check_gate.sh cpp build/tests/aether_tests   # or: cuda
+
+Best practices
+--------------
+
+- Keep ``aether-dsc`` at the same release as the other family packages
+  (``raptor-core``, ``raptor-hawk``, ``raptor-eagle``). Pip pulls it in with hawk;
+  do not pin it on its own to an older or newer release.
+
+.. code-block:: bash
+
+   pip install "aether-dsc==0.7.5" "raptor-hawk==0.7.5"
