@@ -49,6 +49,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <type_traits>
+#include <random>
 #include <vector>
 
 namespace aether_tests {
@@ -287,6 +289,332 @@ TEST_F(BandLevers, BandAccumVecExpressionFormMatchesPerLaneLoop)
            "same per-lane addTerm sequence the hand-rolled loop runs -- "
            "same lane order, same Band adds, so the two are the same "
            "computation and must agree bit for bit, not merely closely";
+}
+
+// -------------------------------------------------------------------------
+//  4. The compensated fold: a series that cancels by 2^30 over 2^19 terms.
+//  The reference is an EXACT sum (a Shewchuk grow-expansion in `double`),
+//  so the measured error is the fold's own, not the reference's.
+// -------------------------------------------------------------------------
+
+/// @brief Exactly add `x` into the non-overlapping expansion `e` (smallest first).
+inline void growExpansion(std::vector<double>& e, double x)
+{
+    std::vector<double> h;
+    double              q = x;
+    for (double ei : e) {
+        const double sum = q + ei, bb = sum - q, err = (q - (sum - bb)) + (ei - bb);
+        if (err != 0.0)
+            h.push_back(err);
+        q = sum;
+    }
+    h.push_back(q);
+    e.swap(h);
+}
+
+inline double expansionValue(const std::vector<double>& e)
+{
+    double v = 0.0;
+    for (double c : e)
+        v += c;
+    return v;
+}
+
+struct CancelRun {
+    double ulp53;      ///< |result - exact| in ULPs (53 bits) of the exact sum
+    double err;        ///< |result - exact|
+    double bound;      ///< 18*K^3*2^-95*sum(|acc_k|+|x_k|) + 2^-72*|exact|
+};
+
+/// @brief The accumulator's derived error bound (Accum.h) for renormalise period `K`.
+inline double accumBound(double K, double sumAbs, double S)
+{
+    return 18.0 * K * K * K * std::ldexp(sumAbs, -95) + std::ldexp(std::fabs(S), -72);
+}
+
+/// @brief Fold the cancel-2^-30 class (pairs `a`, `-(a - a*2^-30*u)`) with `lanes` accumulators
+/// (round-robin), merge them by a combine tree, and score the result against the exact sum.
+inline CancelRun cancelClass(int n, int lanes)
+{
+    std::mt19937_64                        g(1234);
+    std::uniform_real_distribution<double> u(1.0, 2.0);
+    std::uniform_int_distribution<int>     ex(-40, 40);
+    std::vector<double>                    v(static_cast<std::size_t>(n));
+    std::vector<double>                    exact;
+    double                                 sumAbs = 0.0;
+    for (int i = 0; i < n; ++i) {
+        if (i % 2 == 0)
+            v[i] = std::ldexp(u(g), ex(g));
+        else
+            v[i] = -(v[i - 1] - v[i - 1] * std::ldexp(u(g) - 1.0, -30));
+        growExpansion(exact, v[i]);
+        sumAbs += std::fabs(v[i]);
+    }
+    std::vector<BandAccum> acc(static_cast<std::size_t>(lanes));
+    for (int i = 0; i < n; ++i) {
+        BandAccum& a = acc[static_cast<std::size_t>(i % lanes)];
+        sumAbs += std::fabs(static_cast<double>(a.s.hi));
+        a.addTerm(bandFromDouble(v[i]));
+    }
+    for (int stride = 1; stride < lanes; stride *= 2)
+        for (int i = 0; i + stride < lanes; i += 2 * stride) {
+            sumAbs += std::fabs(static_cast<double>(acc[i].s.hi)) + std::fabs(static_cast<double>(acc[i + stride].s.hi));
+            acc[i].combine(acc[i + stride]);
+        }
+    const Band r = acc[0].normalized();
+    std::vector<double> diff = exact;
+    growExpansion(diff, -static_cast<double>(r.hi));
+    growExpansion(diff, -static_cast<double>(r.lo));
+    growExpansion(diff, -static_cast<double>(r.tail));
+    const double S   = expansionValue(exact);
+    const double err = std::fabs(expansionValue(diff));
+    int          e   = 0;
+    std::frexp(S, &e);
+    return { err / std::ldexp(1.0, e - 53), err, accumBound(16, sumAbs, S) };
+}
+
+template<unsigned K>
+inline CancelRun adversarialClass(int n)
+{
+    aether::banded::BandAccumK<K> a;
+    std::vector<double>           exact;
+    double                        sumAbs = 0.0;
+    const Band                    one{ 1.0f, 0.0f, 0.0f };
+    a.addTerm(one);
+    growExpansion(exact, 1.0);
+    for (int i = 1; i < n; ++i) {
+        const Band y{ 1.2345678f, 0x1.3c6ef2p-26f, 0x1.b2a416p-51f };
+        sumAbs += std::fabs(static_cast<double>(a.s.hi)) + std::fabs(static_cast<double>(y.hi));
+        a.addTerm(y);
+        growExpansion(exact, static_cast<double>(y.hi));
+        growExpansion(exact, static_cast<double>(y.lo));
+        growExpansion(exact, static_cast<double>(y.tail));
+    }
+    const Band r = a.normalized();
+    std::vector<double> diff = exact;
+    growExpansion(diff, -static_cast<double>(r.hi));
+    growExpansion(diff, -static_cast<double>(r.lo));
+    growExpansion(diff, -static_cast<double>(r.tail));
+    const double S   = expansionValue(exact);
+    const double err = std::fabs(expansionValue(diff));
+    int          e   = 0;
+    std::frexp(S, &e);
+    return { err / std::ldexp(1.0, e - 53), err, accumBound(K, sumAbs, S) };
+}
+
+TEST_F(BandLevers, BandAccumCancelClassSequentialFoldWithinBound)
+{
+    const CancelRun r = cancelClass((1 << 19) - 1, 1);
+    std::printf("[BandAccum/cancel-2^-30 sequential] ulp53=%.5f err=%.3e bound=%.3e\n", r.ulp53, r.err, r.bound);
+    EXPECT_LE(r.ulp53, 0.01);
+    EXPECT_LE(r.err, r.bound);
+}
+
+TEST_F(BandLevers, BandAccumAdversarialPlainSumWithinDerivedBound)
+{
+    const CancelRun r = adversarialClass<16>(1 << 19);
+    std::printf("[BandAccum/adversarial K=16] ulp53=%.5f err=%.3e bound=%.3e\n", r.ulp53, r.err, r.bound);
+    EXPECT_LE(r.ulp53, 0.25);
+    EXPECT_LE(r.err, r.bound);
+}
+
+TEST_F(BandLevers, BandAccumAdversarialNeverRenormalisedExceedsTheBound)
+{
+    // The same corpus with the renormalise period pushed past the term count: the n-growth of the
+    // error lane breaks the K = 16 bound, which is what the periodic fold prevents.
+    const CancelRun bad  = adversarialClass<(1u << 20)>(1 << 19);
+    const CancelRun good = adversarialClass<16>(1 << 19);
+    std::printf("[BandAccum/adversarial K=2^20] ulp53=%.5f err=%.3e vs the K=16 bound %.3e\n", bad.ulp53,
+        bad.err, good.bound);
+    EXPECT_GT(bad.err, good.bound);
+}
+
+// -------------------------------------------------------------------------
+//  Partials: the 16-byte scratch view of a BandAccum and the ordered block combine.
+// -------------------------------------------------------------------------
+static_assert(sizeof(aether::banded::BandPartial) == 16 && alignof(aether::banded::BandPartial) == 16);
+static_assert(std::is_trivially_copyable_v<aether::banded::BandPartial>
+    && std::is_standard_layout_v<aether::banded::BandPartial>);
+
+TEST_F(BandLevers, BandPartialRoundTripFoldsIdentically)
+{
+    BandAccum a, zero;
+    for (int i = 0; i < 100; ++i)
+        a.addTerm(bandFromDouble(std::ldexp(1.0 + 0.01 * i, (i % 17) - 8) * ((i & 1) ? -1.0 : 1.0)));
+    BandAccum b = BandAccum::fromPartial(a.partial());
+    for (int i = 0; i < 100; ++i) {
+        const Band t = bandFromDouble(std::ldexp(1.0 + 0.003 * i, (i % 13) - 6));
+        a.addTerm(t);
+        b.addTerm(t);
+    }
+    const Band na = a.normalized(), nb = b.normalized();
+    EXPECT_EQ(std::memcmp(&na, &nb, sizeof(Band)), 0);
+    // all-zero bytes are the zero partial
+    aether::banded::BandPartial z;
+    std::memset(&z, 0, sizeof z);
+    EXPECT_TRUE(BandAccum::fromPartial(z) == zero);
+    const aether::banded::BandPartial pz = zero.partial();
+    EXPECT_EQ(std::memcmp(&pz, &z, sizeof z), 0);
+}
+
+/// @brief The block-order combine of per-block partials over a class: the carrier figure and the delivered-cell
+/// figure against the exact sum, and the carrier's bits for the repeat check.
+struct PartialsRun {
+    double carrierUlp53, deliveredUlp53;
+    Band   carrier;
+};
+
+inline PartialsRun partialsClass(bool cancel, int n, int blocks)
+{
+    std::mt19937_64                        g(cancel ? 1234 : 4321);
+    std::uniform_real_distribution<double> u(1.0, 2.0);
+    std::uniform_int_distribution<int>     ex(-40, 40);
+    std::vector<double>                    v(static_cast<std::size_t>(n)), exact;
+    for (int i = 0; i < n; ++i) {
+        if (!cancel)
+            v[i] = std::ldexp(u(g), ex(g)) * ((g() & 1) ? 1.0 : -1.0);
+        else if (i % 2 == 0)
+            v[i] = std::ldexp(u(g), ex(g));
+        else
+            v[i] = -(v[i - 1] - v[i - 1] * std::ldexp(u(g) - 1.0, -30));
+        growExpansion(exact, v[i]);
+    }
+    std::vector<aether::banded::BandPartial> parts(static_cast<std::size_t>(blocks));
+    // block b folds the terms i = b, b + blocks, ... (the strided assignment of a grid-stride loop), in order
+    for (int b = 0; b < blocks; ++b) {
+        BandAccum a;
+        for (int i = b; i < n; i += blocks)
+            a.addTerm(bandFromDouble(v[i]));
+        parts[b] = a.partial();
+    }
+    BandAccum total;
+    for (int b = 0; b < blocks; ++b)
+        total.combine(BandAccum::fromPartial(parts[b]));
+    const Band r = total.normalized();
+    auto score = [&](double l0, double l1, double l2) {
+        std::vector<double> diff = exact;
+        growExpansion(diff, -l0);
+        growExpansion(diff, -l1);
+        growExpansion(diff, -l2);
+        int e = 0;
+        std::frexp(expansionValue(exact), &e);
+        return std::fabs(expansionValue(diff)) / std::ldexp(1.0, e - 53);
+    };
+    const Band d = static_cast<Band>(BandedReal(r));
+    return { score(r.hi, r.lo, r.tail), score(d.hi, d.lo, d.tail), r };
+}
+
+TEST_F(BandLevers, BandPartialsBlockOrderCombineIsAccurateAndRepeatable)
+{
+    for (bool cancel : { true, false }) {
+        // the pinned corpus size (2^19 - 1 terms) over 64 blocks
+        const int n = (1 << 19) - 1;
+        const PartialsRun r1 = partialsClass(cancel, n, 64), r2 = partialsClass(cancel, n, 64),
+                          r3 = partialsClass(cancel, n, 64);
+        std::printf("[BandPartials/%s] carrier ulp53=%.5f delivered ulp53=%.5f\n", cancel ? "cancel-2^-30" : "uniform",
+            r1.carrierUlp53, r1.deliveredUlp53);
+        EXPECT_LE(r1.carrierUlp53, 0.01);
+        EXPECT_LE(r1.deliveredUlp53, 0.5);
+        EXPECT_EQ(std::memcmp(&r1.carrier, &r2.carrier, sizeof(Band)), 0);
+        EXPECT_EQ(std::memcmp(&r1.carrier, &r3.carrier, sizeof(Band)), 0);
+    }
+}
+
+// -------------------------------------------------------------------------
+//  A warp-shaped tree combine of accumulators that never reached the renormalise period: 32 lanes of 8 terms each
+//  (pairs `a`, `-(a - a * 2^-30 * u)` across 2^-40..2^40), merged by shuffle-down offsets 16, 8, 4, 2, 1. The lane
+//  states are raw deferred folds, so the combine's renormalise sees limbs whose tail exceeds the residue of hi + lo.
+// -------------------------------------------------------------------------
+
+/// @brief The cancelling series of the warp rows: `n` terms from a fixed LCG (host and device twins share it).
+inline std::vector<double> warpCancelSeries(int n)
+{
+    std::vector<double> v(static_cast<std::size_t>(n));
+    unsigned            lcg  = 12345u;
+    auto                next = [&]() {
+        lcg = lcg * 1664525u + 1013904223u;
+        return (lcg >> 8) / double(1 << 24);
+    };
+    for (int i = 0; i < n; ++i) {
+        if (i % 2 == 0) {
+            const double m = 1.0 + next();
+            v[i]           = std::ldexp(m, static_cast<int>(next() * 80.0) - 40);
+        } else {
+            v[i] = -(v[i - 1] - v[i - 1] * std::ldexp(next(), -30));
+        }
+    }
+    return v;
+}
+
+/// @brief ULPs at 53 bits of the three-limb result `r` against the exact sum of `v`.
+inline double warpCancelUlp53(const std::vector<double>& v, const Band& r)
+{
+    std::vector<double> exact, diff;
+    for (double x : v)
+        growExpansion(exact, x);
+    diff = exact;
+    growExpansion(diff, -static_cast<double>(r.hi));
+    growExpansion(diff, -static_cast<double>(r.lo));
+    growExpansion(diff, -static_cast<double>(r.tail));
+    int e = 0;
+    std::frexp(expansionValue(exact), &e);
+    return std::fabs(expansionValue(diff)) / std::ldexp(1.0, e - 53);
+}
+
+TEST_F(BandLevers, BandAccumWarpShapedTreeOfDeferredLanesIsAccurate)
+{
+    constexpr int lanes = 32, perLane = 8;
+    const std::vector<double> v = warpCancelSeries(lanes * perLane);
+    std::vector<BandAccum>    a(lanes);
+    for (int l = 0; l < lanes; ++l)
+        for (int k = 0; k < perLane; ++k)
+            a[l].addTerm(bandFromDouble(v[l * perLane + k]));
+    for (int off = lanes / 2; off > 0; off >>= 1) {
+        std::vector<BandAccum> next = a;
+        for (int i = 0; i < lanes; ++i) {
+            BandAccum m = a[i];
+            m.combine(i + off < lanes ? a[i + off] : a[i]);
+            next[i] = m;
+        }
+        a = next;
+    }
+    const double ulp = warpCancelUlp53(v, a[0].normalized());
+    std::printf("[BandAccum/warp tree of deferred lanes] ulp53=%.5f\n", ulp);
+    EXPECT_LE(ulp, 0.01);
+}
+
+// A window whose terms cancel down to the tail level: after `period` terms the renormalise leaves the exact value
+// in `lo` alone (hi == 0, not a carrier); every terminal repairs it and delivers the exact 2^-25.
+TEST_F(BandLevers, BandAccumCancelledWindowIsExactAtEveryTerminal)
+{
+    BandAccum a;
+    a.addTerm(Band{ 0x1p48f, 0x1p24f, -1.0f });
+    a.addTerm(Band{ -0x1p48f, -0x1p24f, 0.0f });
+    a.addTerm(Band{ 1.0f, 0x1p-25f, 0.0f });
+    for (unsigned i = 3; i < BandAccum::period; ++i)
+        a.addTerm(Band{ 0.0f, 0.0f, 0.0f });
+    EXPECT_EQ(a.s.hi, 0.0f);
+    EXPECT_EQ(a.s.lo, 0x1p-25f);
+    EXPECT_EQ(a.s.tail, 0.0f);
+    const Band r = a.normalized();
+    EXPECT_EQ(r.hi, 0x1p-25f);
+    EXPECT_EQ(r.lo, 0.0f);
+    EXPECT_EQ(r.tail, 0.0f);
+    const aether::banded::BandPartial p = a.partial();
+    EXPECT_EQ(p.hi, 0x1p-25f);
+    EXPECT_EQ(p.lo + p.tail + p.c, 0.0f);
+    EXPECT_EQ(a.toBandedReal().toDouble(), 0x1p-25);
+    BandAccum b;
+    b.combine(a);
+    EXPECT_EQ(b.toBandedReal().toDouble(), 0x1p-25);
+}
+
+TEST_F(BandLevers, BandAccumCancelClassCombineTreeWithinBound)
+{
+    const CancelRun r = cancelClass((1 << 19) - 1, 16384);
+    std::printf("[BandAccum/cancel-2^-30 tree] ulp53=%.5f err=%.3e bound=%.3e\n", r.ulp53, r.err, r.bound);
+    EXPECT_LE(r.ulp53, 0.01);
+    EXPECT_LE(r.err, r.bound);
 }
 
 // -------------------------------------------------------------------------

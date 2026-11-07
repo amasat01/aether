@@ -340,21 +340,21 @@ inline constexpr float kBandTwoThirdsF = 6.6666668653e-01f;
     if (ay.hi == 0.0f)
         return ax;
 
-    // Exact power-of-two pre-scaling by the larger magnitude's binade.
-    const int   e  = ((floatAsInt(ax.hi) >> 23) & 0xFF) - 127;
-    const int   h1 = (-e) >> 1;
-    const float f1 = intAsFloat((127 + h1) << 23);
-    const float f2 = intAsFloat((127 + (-e - h1)) << 23);
-    const Band  xs = scalePow2f(scalePow2f(ax, f1), f2);
-    const Band  ys = scalePow2f(scalePow2f(ay, f1), f2);
+    // One exact power-of-two scale each way. Admitted operands have |e| <= 107 (bandHypotAdmits), so 2^-e and 2^e
+    // are normal floats; e is clamped to [-126, 126] because 2^-127 and 2^127 are not both normal (a subnormal or
+    // huge leading limb then scales to a slightly different binade, which is as good).
+    const int   e0 = ((floatAsInt(ax.hi) >> 23) & 0xFF) - 127;
+    const int   e  = e0 < -126 ? -126 : (e0 < 126 ? e0 : 126);
+    const float f  = intAsFloat((127 - e) << 23);
+    const Band  xs = scalePow2f(ax, f);
+    const Band  ys = scalePow2f(ay, f);
 
     // No-cancellation argument: both addends are squares, hence
     // non-negative, so the sum cannot cancel.
     const Band s = normalize(addRawNoCancel(sqrRaw(xs), sqrRaw(ys)));
 
-    // Undo the scaling on the root, so the exponent halves: `2^e`, split.
-    const int g1 = e >> 1;
-    return scalePow2f(scalePow2f(sqrt_(s), intAsFloat((127 + g1) << 23)), intAsFloat((127 + (e - g1)) << 23));
+    // xs is finite and positive, so the guard-free sqrt core applies; undo the scaling on the root.
+    return scalePow2f(normalize(sqrtCoreRaw(BandRaw{ s.hi, s.lo, s.tail })), intAsFloat((127 + e) << 23));
 }
 
 // =====================================================================

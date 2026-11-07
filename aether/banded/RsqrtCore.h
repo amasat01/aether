@@ -98,32 +98,64 @@ struct RsqrtCore {
 //  barrier instead of two
 // =====================================================================
 
+/// @brief The sqrt core WITHOUT its operand guards, taking an UNNORMALISED operand (rsqrtCore reads x.hi (seed),
+/// x.lo (FP32 refinement); mulRaw is an exact cascade) and returning an unnormalised root (layer b: raw exit).
+/// The residual is formed on the PRODUCT form  e = 1 - (x*y)*y  with P = x*y the answer's own subexpression:
+/// two mulRaw (48) instead of sqrRaw(y) + mulRaw(yy, x) + mulRaw(x, y) (63). Caller proves x.hi finite and > 0.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw sqrtCoreRaw(BandRaw x)
+{
+    float y0;
+#if defined(__CUDA_ARCH__)
+    asm("rsqrt.approx.f32 %0, %1;" : "=f"(y0) : "f"(x.hi));
+#else
+    y0 = 1.0f / sqrtf(x.hi);
+#endif
+    float s, se;
+    twoProd(y0, y0, s, se);
+    const float t = fmaRN(-x.hi, s, 1.0f);
+    const float w = fmaRN(-x.hi, se, -mulRN(x.lo, s));
+    const float r = addRN(t, w);
+    const float h = mulRN(0.5f, r);
+    const BandRaw y{ y0, mulRN(y0, h), 0.0f };
+
+    const BandRaw P  = mulRaw(x, y);
+    const BandRaw Pr = mulRaw(P, y);
+    const float a    = subRN(1.0f, Pr.hi); // exact (Sterbenz)
+    const float b    = subRN(a, Pr.lo);
+    const float e    = subRN(b, Pr.tail);
+
+    const float he  = mulRN(0.5f, e);
+    const float cHi = mulRN(P.hi, he);
+    const float cLo = addRN(fmaRN(P.hi, he, -cHi), mulRN(P.lo, he));
+    float lo2, t2;
+    fast2Sum(P.lo, cHi, lo2, t2);
+    return BandRaw{ P.hi, lo2, addRN(addRN(t2, P.tail), cLo) };
+}
+
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band sqrt_(Band x)
 {
-    // Specials: an operand guard (the seed destroys the class before a
-    // leading limb exists to guard on, exactly as `recipSeed` does).
     if (bandHiIsSpecial(x.hi)) {
         const bool plusInf = static_cast<std::uint32_t>(floatAsInt(x.hi)) == kBandFp32ExpMask;
         return bandSpecialCarrier(
             plusInf ? x.hi : intAsFloat(static_cast<int>(kBandCanonicalNanBits)));
     }
-    // sqrt(+-0) = +-0 (the limb is the answer, so the zero's sign is kept).
     if (x.hi == 0.0f)
         return Band{ x.hi, 0.0f, 0.0f };
+    return normalize(sqrtCoreRaw(BandRaw{ x.hi, x.lo, x.tail }));
+}
 
-    const RsqrtCore k = rsqrtCore(x);
-
-    // The product of x with the uncorrected root, then the scalar
-    // correction (1 + e/2) applied to that product.
-    const BandRaw P = mulRaw(x, k.y);
-    const float he  = mulRN(0.5f, k.e);
-    const float cHi = mulRN(P.hi, he);
-    const float cLo = addRN(fmaRN(P.hi, he, -cHi), mulRN(P.lo, he));
-    float lo2, t2;
-    fast2Sum(P.lo, cHi, lo2, t2);
-    // P.tail is about 2^-45 here, not 2^-48: k.y is a deliberately
-    // unnormalized 2-limb pair, so mulRaw's residual is large.
-    return normalize(BandRaw{ P.hi, lo2, addRN(addRN(t2, P.tail), cLo) });
+/// @brief Raw-exit twin of `sqrt_`: the exit normalise is deferred to a consumer that reads limbs in order.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> sqrtRaw(Band x)
+{
+    if (bandHiIsSpecial(x.hi)) {
+        const bool plusInf = static_cast<std::uint32_t>(floatAsInt(x.hi)) == kBandFp32ExpMask;
+        const Band c = bandSpecialCarrier(plusInf ? x.hi : intAsFloat(static_cast<int>(kBandCanonicalNanBits)));
+        return BandRawT<1>{ c.hi, c.lo, c.tail };
+    }
+    if (x.hi == 0.0f)
+        return BandRawT<1>{ x.hi, 0.0f, 0.0f };
+    const BandRaw r = sqrtCoreRaw(BandRaw{ x.hi, x.lo, x.tail });
+    return BandRawT<1>{ r.hi, r.lo, r.tail };
 }
 
 // =====================================================================

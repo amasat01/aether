@@ -144,7 +144,19 @@ AETHER_KERNEL() void bandChainKernel(BandedReal* __restrict__ out,
     const Band r   = x / y;
     const Band s   = aether::math::fmax(aether::math::abs(r), ay);
     const Band t   = (s * cap) + r;
-    out[i]         = t - cap;
+    out[i]         = Band(t - cap);
+}
+
+/// @brief The element-wise product of two banded Items inside a view-by-value kernel: `o[s] = a[s] * b[s] + c[s]`.
+/// Compiled for the device here; the host row is `ElementwiseItemProductStaysInTheCarrier`.
+using BandedView = aether::View<BandedReal, aether::extents<aether::dyn>>;
+AETHER_KERNEL() void bandedItemProductKernel(BandedView a, BandedView b, BandedView c, BandedView o, std::size_t n)
+{
+    const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    const aether::SampleIndex s = aether::SampleIndex::make(i);
+    o[s] = a[s].get() * b[s].get() + c[s].get();
 }
 
 /**
@@ -174,7 +186,7 @@ AETHER_KERNEL() void bandFp64InjectedKernel(BandedReal* __restrict__ out,
     const Band r   = x / y;
     const Band s   = aether::math::fmax(aether::math::abs(r), ay);
     const Band t   = (s * cap) + r;
-    out[i]         = t - cap;
+    out[i]         = Band(t - cap);
 }
 
 // =========================================================================
@@ -356,7 +368,7 @@ TEST_F(BandedRealCert, TheAuditedChainKernelAgreesWithTheHostAndItsControlDoesNo
         const Band r   = x / y;
         const Band s   = aether::math::fmax(aether::math::abs(r), ay);
         const Band t   = (s * cap) + r;
-        const BandedReal want = t - cap;
+        const BandedReal want = Band(t - cap);
         if (got[static_cast<std::size_t>(i)].toBits() != want.toBits())
             bad++;
         if (got[static_cast<std::size_t>(i)].isZero())

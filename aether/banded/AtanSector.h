@@ -38,8 +38,8 @@ inline constexpr float kBandAtanSecB3 = 7.0020753145e-01f;
 /// angle that is `atan` of that stored tangent (a matched pair, not a
 /// nominal-angle pairing).
 struct AtanSector {
-    Band t;   ///< `tan(phi_i)` as stored -- the value the rotation uses
-    Band phi; ///< `atan(t)` computed from the stored `t`, to `2^-78`
+    Band t;   ///< the rotation's tangent: ONE float (`lo == tail == 0`), the float nearest `tan(phi_i_nominal)`
+    Band phi; ///< `atan(t)` of that one-float `t`, three limbs, to `2^-78` (any `t` is a valid pair; a one-float `t` makes the rotation's products cheaper)
 };
 
 /// @brief Pick the sector from the leading limbs alone, branchlessly.
@@ -53,24 +53,16 @@ struct AtanSector {
     const bool s2 = b > a * kBandAtanSecB1;
     const bool s3 = b > a * kBandAtanSecB2;
     const bool s4 = b > a * kBandAtanSecB3;
-    const Band t{ s4 ? 8.3909964561e-01f
-                     : (s3 ? 5.7735025883e-01f
-                           : (s2 ? 3.6397022009e-01f : (s1 ? 1.7632697523e-01f : 0.0f))),
-        s4 ? -1.4437343765e-08f
-           : (s3 ? 1.0362416702e-08f
-                 : (s2 ? 1.4177243379e-08f : (s1 ? 5.4820628037e-09f : 0.0f))),
-        s4 ? -2.4673516535e-16f
-           : (s3 ? -4.1063892585e-16f
-                 : (s2 ? 2.4185138514e-16f : (s1 ? -1.1295152588e-16f : 0.0f))) };
+    const Band t{ s4 ? 8.3909964561e-01f : (s3 ? 5.7735025883e-01f : (s2 ? 3.6397022009e-01f : (s1 ? 1.7632697523e-01f : 0.0f))),
+        0.0f, 0.0f };
     const Band phi{ s4 ? 6.9813168049e-01f
-                       : (s3 ? 5.2359879017e-01f
-                             : (s2 ? 3.4906584024e-01f : (s1 ? 1.7453292012e-01f : 0.0f))),
-        s4 ? 2.0309144588e-08f
-           : (s3 ? -1.4570463058e-08f
-                 : (s2 ? 1.0154572294e-08f : (s1 ? 5.0772861471e-09f : 0.0f))),
-        s4 ? 8.1670630901e-16f
-           : (s3 ? -2.7564868795e-16f
-                 : (s2 ? 4.0835315450e-16f : (s1 ? 2.0417657725e-16f : 0.0f))) };
+                       : (s3 ? 5.2359879017e-01f : (s2 ? 3.4906584024e-01f : (s1 ? 1.7453292012e-01f : 0.0f))),
+        s4 ? 2.8781325767e-08f
+           : (s3 ? -2.2342275585e-08f
+                 : (s2 ? -2.3642485747e-09f : (s1 ? -2.3947191452e-10f : 0.0f))),
+        s4 ? 8.2247232698e-16f
+           : (s3 ? -2.5420676771e-18f
+                 : (s2 ? 6.2237142080e-17f : (s1 ? -1.3189705887e-17f : 0.0f))) };
     return AtanSector{ t, phi };
 }
 

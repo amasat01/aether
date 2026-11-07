@@ -92,7 +92,9 @@ struct Ff1 {
 
     /// @brief Host-only terminal: `Ff1` -> `double`. @see `Ff2.h`'s egress
     /// section.
+#ifndef __CUDACC_RTC__ // host-only: double interop
     [[nodiscard]] inline double toDouble() const { return toFf2().toDouble(); }
+#endif // __CUDACC_RTC__
 
     // ── FP32 arithmetic (hidden friends; each ONE correctly-rounded op) ─────
 
@@ -262,7 +264,9 @@ struct Ff1Accum {
     [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Ff1 normalized() const { return s; }
 
     /// @brief Host-only terminal: the accumulated value as a `double`.
+#ifndef __CUDACC_RTC__ // host-only: double interop
     [[nodiscard]] inline double toDouble() const { return s.toDouble(); }
+#endif // __CUDACC_RTC__
 
     /// @brief The accumulated value packed into `BandedReal` (RNE, one pack).
     [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandedReal toBandedReal() const

@@ -166,10 +166,19 @@ BND_HEADROOM=160
 #   The headroom granted below is 160 — under 196 by construction, same
 #   margin the chain-kernel budget carries.
 #
+#   This short unrolled loop never reaches a renormalise, so it keeps the
+#   countdown gate (decrement and branch) that a mask gate folded away. The
+#   renormalise it can reach is an order-free chain of four exact twoSums (the
+#   deferred fold's tail may exceed the residue of hi + lo, which `normalizeSafe`'s
+#   ordered second step cannot take), inlined at each of the 8 unrolled sites:
+#   342 measured, budget 22 above it as before. The wall of the fold is unchanged
+#   (the sum-kernel ratio to the plain fold stays 1.10x; the renormalise runs once
+#   per 16 terms).
+#
 #   ★ Do NOT raise this number to make a red gate green. RE-DERIVE it: change
 #   `kAccumFoldTerms` or the fold body and this comment block moves with it.
 # ---------------------------------------------------------------------------
-ACC_BUDGET="${AETHER_BAND_ACCUM_BUDGET:-328}"
+ACC_BUDGET="${AETHER_BAND_ACCUM_BUDGET:-364}"
 ACC_HEADROOM=160
 
 # ---------------------------------------------------------------------------
@@ -198,10 +207,14 @@ ACC_HEADROOM=160
 #   The MEASURED baseline is minted into the card by the run itself
 #   (`--mint-card`); this default is the baseline plus the derived headroom.
 #
+#   Each pack carries the labelled store guard (`detail::cell8FromBandLabelled`:
+#   one range test and one select); the baseline 906 with it is 24 below the
+#   unguarded pack's 930, the guard's test replacing the codec's special test.
+#
 #   ★ Do NOT raise this number to make a red gate green. RE-DERIVE it: change
 #   `ff2PrimKernel`'s op inventory and this comment block moves with it.
 # ---------------------------------------------------------------------------
-FF2_BUDGET="${AETHER_BAND_FF2PRIM_BUDGET:-950}"
+FF2_BUDGET="${AETHER_BAND_FF2PRIM_BUDGET:-926}"
 FF2_HEADROOM=20
 
 # ---------------------------------------------------------------------------
@@ -226,10 +239,14 @@ FF2_HEADROOM=20
 #   The MEASURED baseline is minted into the card by the run itself
 #   (`--mint-card`); this default is the baseline plus the derived headroom.
 #
+#   Each pack carries the labelled store guard (`detail::cell8FromBandLabelled`:
+#   one range test and one select); the baseline 504 with it is 6 below the
+#   unguarded pack's 510.
+#
 #   ★ Do NOT raise this number to make a red gate green. RE-DERIVE it: change
 #   `rsqrtAtanPrimKernel`'s op inventory and this comment block moves with it.
 # ---------------------------------------------------------------------------
-RSQAT_BUDGET="${AETHER_BAND_RSQATPRIM_BUDGET:-530}"
+RSQAT_BUDGET="${AETHER_BAND_RSQATPRIM_BUDGET:-524}"
 RSQAT_HEADROOM=20
 
 # ---------------------------------------------------------------------------
@@ -728,7 +745,7 @@ fi
 # N/A row is retired below.
 # ---------------------------------------------------------------------------
 FP32_RE='\bFADD|\bFMUL|\bFFMA|\bFSETP|\bFMNMX|\bFSEL|\bMUFU|\bFCHK'
-P11C0_OPS="abs copysign fmax fmin add sub mul exp log pow sqrt rsqrt rsqrtCube cbrt hypot sin cos sincos floor ceil round trunc fdim fmod fma atan atan2 asin acos"
+P11C0_OPS="abs copysign fmax fmin add sub mul exp expm1 log log1p exp2 log2 log10 tanh sinh cosh asinh acosh atanh tan pow sqrt rsqrt rsqrtCube cbrt hypot sin cos sincos floor ceil round trunc fdim fmod fma atan atan2 asin acos partials"
 if [[ -n "${SUBJECT_FILTER}" ]]; then
     P11C0_OPS="${SUBJECT_FILTER}"
 fi

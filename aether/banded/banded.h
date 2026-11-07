@@ -21,6 +21,8 @@
  * @endcode
  *
  * @section why_banded What this module is for
+ * Banded is a device feature: host compilation of this module exists for certification and conversion only, not as an execution path (a CPU has native FP64; use `double` there).
+ *
  * The target hardware for the emulation lane has no FP64 units, or has
  * them at 1:32 of the FP32 rate. `Band` delivers 53 certified significand
  * bits out of three `float` limbs and a handful of integer ops, so a
@@ -74,25 +76,27 @@
  * texture-fetch wiring are not ported — @see that file's own scope notes)
  * and the 16-byte wide-range storage cell (`BandCell.h` — `BandCell`,
  * `cellFromBand`/`bandFromCell`/`loadCell`/`storeCell`; a different,
- * wider-range sibling of the tier-1-windowed `BandCell8`); `exp`/`log`/
- * `pow` and the 16-entry `log` table (`BandExpLog.h`), `pow = exp(y*log
+ * wider-range sibling of the tier-1-windowed `BandCell8`); `exp`/`exp2`/`expm1`/
+ * `log`/`log1p`/`log2`/`log10`/`pow` and the 16-entry `log` table (`BandExpLog.h`), `pow = exp(y*log
  * x)`; `cbrt`/`hypot` and the `rsqrt(+Inf)=+0` IEEE fix (`BandRoot.h`);
  * `trigReduce`/`sincos`/`sin`/`cos` (`BandTrig.h`), the Cody-Waite `pi/2`
  * reduction and `bandTrigAdmits`; `floor`/`ceil`/`round`/`fmod`/`trunc`
  * and the Band `fma` (`BandRound.h`; `fdim` is in `Band.h`); `atan`/
  * `atan2`/`asin`/`acos` (`BandInvTrig.h`), built on `AtanSector.h`'s
- * table. Still deferred: the hyperbolic/exp2-log2/tan constructions, the
- * expression-template/consumer integration, texture arrays and non-zero
+ * table. Still deferred: the expression-template/consumer integration, texture arrays and non-zero
  * array biases.
  */
 
 #include "aether/banded/Band.h"
 #include "aether/banded/BandExpLog.h"
+#include "aether/banded/BandHyp.h"
+#include "aether/banded/BandInvHyp.h"
 #include "aether/banded/BandTrig.h"
 #include "aether/banded/BandRound.h"
 #include "aether/banded/BandCell8.h"
 #include "aether/banded/BandedReal.h"
 #include "aether/banded/BandedRealOps.h"
+#include "aether/banded/Chain.h"
 #include "aether/banded/BandedLimits.h"
 #include "aether/banded/Accum.h"
 #include "aether/banded/Ff2.h"

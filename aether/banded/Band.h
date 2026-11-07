@@ -45,10 +45,14 @@
  * host/device bit-for-bit comparison decidable by construction.
  */
 
+#ifndef __CUDACC_RTC__
 #include <bit>
+#endif
 #include <concepts>
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <cstring>
+#endif
 #include <type_traits>
 
 #include "aether/banded/detail/Fp32.h"
@@ -104,6 +108,57 @@ concept BandWallFamily = std::same_as<std::remove_cvref_t<T>, float>
     || std::same_as<std::remove_cvref_t<T>, Ff2>;
 
 namespace detail {
+struct BandRaw;
+
+/// @brief State R<k> of a banded expression chain: three ordered-but-unrestored limbs, `k` raw hops since the last
+/// normalise. Produced by `Band * Band` (R<1>) and by the chain operators in `Chain.h`; converts implicitly to
+/// `BandRaw` (so every raw op accepts it) and to `Band` only through the normalising constructor.
+template<int K>
+struct BandRawT {
+    static_assert(K >= 0, "BandRawT counts raw hops since the last normalise");
+
+    float hi;   ///< leading limb
+    float lo;   ///< second limb
+    float tail; ///< residue limb
+
+    BandRawT() = default;
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr BandRawT(float h, float l, float t)
+        : hi(h)
+        , lo(l)
+        , tail(t)
+    {
+    }
+
+    /// @brief To the raw-op operand type (defined after `BandRaw`).
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr operator BandRaw() const;
+
+    static constexpr int hops = K;
+};
+
+/// @brief State C of normalised operands: a cancellation-capable sum whose operands were ALL normalised (`Band`, or a
+/// C of this kind bridged by `normalize`). It is exactly what the certified per-op `add` normalises, so `normalize`
+/// (not `normalizeSafe`) is its bridge. @see BandRawCancel.
+struct BandRawCancelN {
+    float hi;
+    float lo;
+    float tail;
+};
+
+/// @brief State C (general): a cancellation-capable sum with at least one unrestored operand. Accepted by nothing but
+/// `normalize`/`normalizeSafe` (and the `Band` constructor, which takes `normalizeSafe`).
+struct BandRawCancel {
+    float hi;   ///< leading limb; the cancellation has already happened here
+    float lo;   ///< second limb, possibly LARGER than `ulp(hi)`
+    float tail; ///< residue limb
+};
+
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalize(BandRaw r);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalize(BandRawCancelN r);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeLimbs(float hi, float lo, float tail);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeSafe(BandRawCancel r);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> mulChain(Band a, Band b);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancelN addChain(Band a, Band b);
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancelN subChain(Band a, Band b);
 // Forward declarations only. Full bodies are defined further down this file
 // (Multiply / Add-subtract / Reciprocal sections). Declaring them here, ahead
 // of `struct Band`, is what lets the operators below stay fully inline.
@@ -145,6 +200,23 @@ struct Band {
     {
     }
 
+    /// @brief Normalising bridges from a chain state: `Band r = a * b + c;` keeps compiling, and the carrier postcondition
+    /// is restored exactly where the expression ends. R is ordered (`normalize`); a C with an unrestored operand is not
+    /// (`normalizeSafe`); a C of normalised operands takes `normalize`, as the certified per-op add always did.
+    template<int K>
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band(detail::BandRawT<K> r)
+        : Band(detail::normalizeLimbs(r.hi, r.lo, r.tail))
+    {
+    }
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band(detail::BandRawCancelN r)
+        : Band(detail::normalize(r))
+    {
+    }
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band(detail::BandRawCancel r)
+        : Band(detail::normalizeSafe(r))
+    {
+    }
+
     // ── Banded arithmetic (hidden friends) ──────────────────────────────────
     //
     // Hidden friends: ADL finds these ONLY when an operand is already a
@@ -153,25 +225,25 @@ struct Band {
     // the certified `detail::` free function forward-declared above; this
     // surface adds NO new numerics.
 
-    /// @brief Banded add. @see detail::add.
-    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band operator+(Band a, Band b)
+    /// @brief Banded add: state C (normalised operands), normalised by the consumer. @see detail::add.
+    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() detail::BandRawCancelN operator+(Band a, Band b)
     {
-        return detail::add(a, b);
+        return detail::addChain(a, b);
     }
     /// @brief Banded unary negate. @see detail::neg.
     [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band operator-(Band a)
     {
         return detail::neg(a);
     }
-    /// @brief Banded sub. @see detail::sub.
-    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band operator-(Band a, Band b)
+    /// @brief Banded sub: state C, as `+`. @see detail::sub.
+    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() detail::BandRawCancelN operator-(Band a, Band b)
     {
-        return detail::sub(a, b);
+        return detail::subChain(a, b);
     }
-    /// @brief Banded mul. @see detail::mul.
-    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band operator*(Band a, Band b)
+    /// @brief Banded mul: state R<1>, normalised by the consumer. @see detail::mul.
+    [[nodiscard]] friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() detail::BandRawT<1> operator*(Band a, Band b)
     {
-        return detail::mul(a, b);
+        return detail::mulChain(a, b);
     }
     /// @brief Banded div — ONE named primitive with its own body and its own
     /// battery, never the composition `mul(a, recip(b))`. @see detail::div.
@@ -182,17 +254,17 @@ struct Band {
 
     friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band& operator+=(Band& a, Band b)
     {
-        a = a + b;
+        a = Band(a + b);
         return a;
     }
     friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band& operator-=(Band& a, Band b)
     {
-        a = a - b;
+        a = Band(a - b);
         return a;
     }
     friend AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band& operator*=(Band& a, Band b)
     {
-        a = a * b;
+        a = Band(a * b);
         return a;
     }
     // There is deliberately NO `operator/=`: division is only ever the
@@ -285,16 +357,26 @@ namespace detail {
  * instructions come from.
  *
  * @par Why a TYPE and not a comment
- * A naming convention cannot be checked. The hazard is also invisible to the
- * instrument consumers actually run: a dropped normalize can leave every
- * delivered double identical on an ordinary workload and be catastrophic on an
- * amplifying one. The rules, all three enforced by the compiler:
- *  - `Band -> BandRaw` is IMPLICIT and free (a certified carrier satisfies
- *    everything a raw operand may assume);
- *  - `BandRaw -> Band` DOES NOT EXIST — `normalize`/`normalizeSafe` is the
- *    only bridge, and it is the operation that makes the promise true;
- *  - therefore a `BandRaw` cannot reach the codec, a comparison or any other
- *    `Band`-typed boundary without passing through that bridge.
+ * A naming convention cannot be checked, and a dropped normalize is invisible
+ * to the instrument consumers actually run (every delivered double identical
+ * on an ordinary workload, catastrophic on an amplifying one). So the raw
+ * states are types and the compiler enforces where the normalize is paid:
+ *  - `Band -> BandRaw` is IMPLICIT and free: a certified carrier satisfies
+ *    everything a raw operand may assume;
+ *  - `BandRawT<K> -> Band` and `BandRawCancel -> Band` ARE the normalize: the
+ *    converting constructors call `normalize` (ordered input, three
+ *    `fast2Sum`) and `normalizeSafe` (a cancellation-capable input), and
+ *    `BandRawCancelN -> Band` calls `normalize`. `Band r = a * b + c;`
+ *    therefore pays exactly one normalize, at the one place a `Band` is
+ *    demanded (a store, a division, a root, a transcendental) and never
+ *    between the raw hops (`kBandChainMaxHops`, Chain.h);
+ *  - the limb-ORDER readers (`abs`, `fmax`, `fmin`, `copysign`) and the
+ *    comparisons refuse a raw operand with a deleted overload that names the
+ *    fix. They are a few instructions each; an implicit normalize hidden
+ *    inside them would silently dominate, so there the author chooses, with
+ *    `Band(x)`, in the source.
+ * A plain `BandRaw` (the operand type of the raw ops) still converts to
+ * nothing: `normalize` is its only bridge.
  */
 struct BandRaw {
     float hi;   ///< leading limb, NOT promised to dominate the other two
@@ -319,6 +401,12 @@ struct BandRaw {
     }
 };
 
+template<int K>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr BandRawT<K>::operator BandRaw() const
+{
+    return BandRaw{ hi, lo, tail };
+}
+
 /**
  * @brief What a CANCELLATION-CAPABLE add returns: a raw value so disordered
  *        that `normalize`/`normalizeSafe` is the only thing allowed to touch it.
@@ -326,19 +414,17 @@ struct BandRaw {
  * `addRaw` sums two carriers whose signs it does not know. When they oppose,
  * the leading limbs cancel and `|lo|` exceeds `ulp(hi)` by the amplification
  * factor — the most disordered carrier a chain ever holds, not merely an
- * unrestored one. `BandRawCancel` converts to nothing and is accepted by
- * nothing except the two normalize overloads.
+ * unrestored one. `BandRawCancel` is accepted by nothing except the two
+ * normalize overloads and `Band`'s converting constructor, which calls
+ * `normalizeSafe`. A `BandRawCancel` built from two normalised operands is
+ * `BandRawCancelN` and bridges with `normalize`, exactly as the certified
+ * per-op add always has.
  *
  * The one sanctioned escape is `addRawNoCancel`, for an adder that can rule
  * cancellation out STATICALLY (summing squares, a Newton residual bounded away
  * from cancellation by its own convergence). Every call site of it owes a
  * one-line argument, and "the inputs are usually positive" is not one.
  */
-struct BandRawCancel {
-    float hi;   ///< leading limb; the cancellation has already happened here
-    float lo;   ///< second limb, possibly LARGER than `ulp(hi)`
-    float tail; ///< residue limb
-};
 
 // =====================================================================
 //  Metadata-free zero-cost ops
@@ -500,11 +586,29 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
 }
 
 /// @brief Normalize the output of a cancellation-capable add. @see normalize.
-/// These two overloads are the ONLY functions that accept a `BandRawCancel`,
-/// and that is the whole content of the type.
+/// These two overloads (and `Band`'s converting constructor, which calls the second) are the ONLY
+/// consumers of a `BandRawCancel`, and that is the whole content of the type.
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalize(BandRawCancel r)
 {
     return normalize(BandRaw{ r.hi, r.lo, r.tail });
+}
+
+/// @brief `normalize(BandRaw{hi, lo, tail})`, spelled on bare limbs so `Band`'s own constructor need not name `BandRaw`.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeLimbs(float hi, float lo, float tail)
+{
+    return normalize(BandRaw{ hi, lo, tail });
+}
+
+/// @brief Normalize a C whose operands were all normalised — the bridge the certified per-op `add` always used.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalize(BandRawCancelN r)
+{
+    return normalize(BandRaw{ r.hi, r.lo, r.tail });
+}
+
+/// @brief The order-free bridge also accepts a C of normalised operands (the explicit, conservative spelling).
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeSafe(BandRawCancelN r)
+{
+    return normalizeSafe(BandRaw{ r.hi, r.lo, r.tail });
 }
 
 /// @brief Order-free normalize of a cancellation-capable add's output — the
@@ -512,6 +616,19 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeSafe(BandRawCancel r)
 {
     return normalizeSafe(BandRaw{ r.hi, r.lo, r.tail });
+}
+
+/// @brief `normalizeSafe` for a sum whose leading limb an admission guard has already proved finite: the specials
+/// test at the exit is dead, so it is not paid. Same bits as `normalizeSafe` on every admitted input.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band normalizeSafeAdmitted(BandRawCancel r)
+{
+    float h1, l1;
+    twoSum(r.hi, r.lo, h1, l1);
+    float lc, lb;
+    fast2Sum(l1, r.tail, lc, lb);
+    float h, l;
+    fast2Sum(h1, lc, h, l);
+    return Band{ h, l, lb };
 }
 
 // =====================================================================
@@ -544,6 +661,24 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
     return BandRaw{ p_hi, sB, resid };
 }
 
+/// @brief `a * f` for a one-limb operand `f` (a float-exact literal), raw: `mulRaw(a, {f, 0, 0})` with the zero
+/// limbs folded away, two `twoProd`s and one FMA instead of three and five cross terms.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw mulRawS(BandRaw a, float f)
+{
+    float p_hi, p_lo;
+    twoProd(a.hi, f, p_hi, p_lo);
+    float t_hi, t_lo;
+    twoProd(a.lo, f, t_hi, t_lo);
+
+    float sB, eB;
+    twoSum(p_lo, t_hi, sB, eB);
+
+    float resid = eB + t_lo;
+    resid       = fmaRN(a.tail, f, resid);
+
+    return BandRaw{ p_hi, sB, resid };
+}
+
 /**
  * @brief `a * a`, raw: the square, WITHOUT the duplicated cross term a general
  *        multiply is obliged to compute.
@@ -559,8 +694,8 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
  * same exact quantity `p_lo + 2*q_hi` is SPLIT differently between the `lo` limb
  * and the residual, so the guard bits below the delivered 53 move.
  *
- * Kept here because it is the shape later composites (`sumSq3`,
- * `rsqrtCore`, `rsqrtCube`) are built on; it has no in-library call site yet.
+ * It is the shape the composites (`sumSq3`, `rsqrtCore`, `rsqrtCube`, the trig
+ * and inverse-trig argument squares, `Chain.h`) are built on.
  */
 [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw sqrRaw(BandRaw a)
 {
@@ -585,6 +720,13 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
     resid       = fmaRN(a.tail + a.tail, a.hi, resid);
 
     return BandRaw{ p_hi, sA, resid };
+}
+
+/// @brief `Band * Band`: the raw product, state R<1>.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> mulChain(Band a, Band b)
+{
+    const BandRaw r = mulRaw(a, b);
+    return BandRawT<1>{ r.hi, r.lo, r.tail };
 }
 
 /// @brief `a * b` as a certified carrier — `mulRaw` plus the exit barrier.
@@ -623,6 +765,37 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
     return BandRawCancel{ s_hi, s_lo2, resid };
 }
 
+/// @brief `addRaw` for a caller who can prove `|a.hi| >= |b.hi|` or `a.hi == 0` (a constant that bounds the other
+/// operand, or an exact zero): the leading `twoSum` is a `fast2Sum` (3 FP32 ops, not 6), bit-for-bit the same sum.
+/// Cancellation-capable like `addRaw`. @warning the dominance claim is the CALLER's -- see each call site.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancel addRawDom(BandRaw a, BandRaw b)
+{
+    float s_hi, e_hi;
+    fast2Sum(a.hi, b.hi, s_hi, e_hi);
+    float s_lo, e_lo;
+    twoSum(a.lo, b.lo, s_lo, e_lo);
+    float s_lo2, e_lo2;
+    twoSum(s_lo, e_hi, s_lo2, e_lo2);
+
+    float resid = addRN(e_lo, e_lo2);
+    resid       = addRN(resid, a.tail);
+    resid       = addRN(resid, b.tail);
+
+    return BandRawCancel{ s_hi, s_lo2, resid };
+}
+
+/// @brief `a + f` for a one-limb operand `f`, raw: `addRaw(a, {f, 0, 0})` without the two `twoSum`s on zero limbs
+/// (which the compiler cannot fold: `twoSum(x, 0)` is not syntactically zero). Cancellation-capable like `addRaw`.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancel addRawS(BandRaw a, float f)
+{
+    float s_hi, e_hi;
+    twoSum(a.hi, f, s_hi, e_hi);
+    float s_lo2, e_lo2;
+    twoSum(a.lo, e_hi, s_lo2, e_lo2);
+
+    return BandRawCancel{ s_hi, s_lo2, addRN(e_lo2, a.tail) };
+}
+
 /**
  * @brief `addRaw` for a caller who can prove, at COMPILE TIME, that these two
  *        operands cannot cancel — the one sanctioned exit from
@@ -638,6 +811,20 @@ inline constexpr std::uint32_t kBandCanonicalNanBits = 0x7FC00000u;
 {
     const BandRawCancel r = addRaw(a, b);
     return BandRaw{ r.hi, r.lo, r.tail };
+}
+
+/// @brief `Band + Band`: the raw sum, state C of normalised operands.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancelN addChain(Band a, Band b)
+{
+    const BandRawCancel r = addRaw(a, b);
+    return BandRawCancelN{ r.hi, r.lo, r.tail };
+}
+
+/// @brief `Band - Band`: the raw sum with the negated subtrahend.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawCancelN subChain(Band a, Band b)
+{
+    const BandRawCancel r = addRaw(a, neg(b));
+    return BandRawCancelN{ r.hi, r.lo, r.tail };
 }
 
 /// @brief `a + b` as a certified carrier.
@@ -744,7 +931,7 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
  * owes the barrier, while `div` consumes the result through `mulRaw`, an exact
  * cascade that never reads limb ORDER and for which the barrier is dead weight.
  */
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw recipRaw(Band b)
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw recipRaw(BandRaw b)
 {
     // ONE seed, host and device. @see recipSeed.
     const float y0 = recipSeed(b.hi);
@@ -832,6 +1019,26 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
     return normalize(mulRaw(a, recipRaw(b)));
 }
 
+/// @brief `a / b` with a raw numerator, raw: `div`'s body without the numerator's normalise or the exit one
+/// (`mulRaw` is exact for any ordered input); same operand guard. The result is one raw hop, `BandRawT<1>`, for a
+/// consumer that normalises where it reads limbs in order (an exact zero quotient loses its sign there).
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> divRaw(BandRaw a, Band b)
+{
+    if (bandHiIsSpecial(a.hi, b.hi) || b.hi == 0.0f) {
+        const Band c = bandSpecialCarrier(a.hi / b.hi);
+        return BandRawT<1>{ c.hi, c.lo, c.tail };
+    }
+
+    const BandRaw r = mulRaw(a, recipRaw(b));
+    return BandRawT<1>{ r.hi, r.lo, r.tail };
+}
+
+/// @brief `divRaw` plus the exit barrier.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band div(BandRaw a, Band b)
+{
+    return normalize(BandRaw(divRaw(a, b)));
+}
+
 // =====================================================================
 //  Sign and order -- the EXACT ops (the four certified facade entries)
 // =====================================================================
@@ -877,10 +1084,27 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
         a, (floatAsInt(a.hi) ^ floatAsInt(b.hi)) & static_cast<int>(0x80000000u));
 }
 
+/// @brief `a < b` on non-NaN carriers: the sign of the certified `sub`, decided on the leading limbs alone when they
+/// are far enough apart. Normalised lower limbs move `a - b` by at most 2^-22 of the larger leading limb, so
+/// `|a.hi - b.hi| > 2^-21 * max(|a.hi|, |b.hi|) + 2^-140` (a 2x margin; the second term covers subnormal leading
+/// limbs) fixes the sign of the whole difference. Equal leading limbs, a closer pair, an infinity or a NaN
+/// difference fail the test and take the full `sub`, so the result is the `sub` decision in every case.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() bool bandLess(Band a, Band b)
+{
+    const float dh  = a.hi - b.hi;
+    const float aa  = a.hi < 0.0f ? -a.hi : a.hi;
+    const float ab  = b.hi < 0.0f ? -b.hi : b.hi;
+    const float m   = aa > ab ? aa : ab;
+    const float adh = dh < 0.0f ? -dh : dh;
+    if (adh > fmaRN(m, 0x1p-21f, 0x1p-140f))
+        return dh < 0.0f;
+    return sub(a, b).hi < 0.0f;
+}
+
 /**
  * @brief The larger of two carriers.
  *
- * @par The comparison is a `sub`, and the reason is a counterexample
+ * @par The comparison is a `sub`'s sign, and the reason is a counterexample
  * The tempting body is a lexicographic limb compare, and it is WRONG: two
  * normalized carriers can have `a.hi > b.hi` and still satisfy `a < b`, e.g.
  * `a = (1, -2^-24, 0)` against `b = (1 - 2^-24, +2^-25, 0)`. The certified `sub`
@@ -903,7 +1127,7 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
         return b;
     if (b.hi != b.hi)
         return a;
-    return (sub(a, b).hi < 0.0f) ? b : a;
+    return bandLess(a, b) ? b : a;
 }
 
 /// @brief The smaller of two carriers. @see fmax — same comparison, same NaN
@@ -914,7 +1138,7 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
         return b;
     if (b.hi != b.hi)
         return a;
-    return (sub(a, b).hi < 0.0f) ? a : b;
+    return bandLess(a, b) ? a : b;
 }
 
 /**
@@ -1064,6 +1288,7 @@ inline constexpr std::uint32_t kBandRecipSeedMagic = 0x7EF311C2u;
     return r;
 }
 
+#ifndef __CUDACC_RTC__ // host-only ingest: needs std::memcpy
 /**
  * @brief `Band` -> IEEE double halves. HOST ONLY, the CARRIER's own egress
  * terminal, symmetric with `bandFromIEEE` above.
@@ -1119,6 +1344,7 @@ inline void bandToIEEE(
     ieee_lo = static_cast<std::uint32_t>(bits64);
     ieee_hi = static_cast<std::uint32_t>(bits64 >> 32);
 }
+#endif // __CUDACC_RTC__
 
 // =====================================================================
 //  Admission guard -- the DECLARED working envelope

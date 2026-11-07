@@ -211,7 +211,7 @@ def write_list_header(out_path: str, head, op: str, arity: int, bound, row_struc
     body.append("};\n")
 
     rows_text = "\n".join(["inline constexpr Row kRows[] = {"] + row_lines + ["};"]) + "\n"
-    md5 = hashlib.md5(rows_text.encode("utf-8")).hexdigest()
+    md5 = hashlib.md5(rows_text.encode("utf-8"), usedforsecurity=False).hexdigest()
 
     body.append(f"// ---8<--- GOLDEN ROWS BEGIN (md5 = {md5}) ---8<---")
     body.append(rows_text.rstrip("\n"))

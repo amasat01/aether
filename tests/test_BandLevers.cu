@@ -204,6 +204,138 @@ TEST_F(BandLevers, TheAuditedAccumFoldKernelAgreesWithTheHostAndItsControlDoesNo
 }
 
 // =========================================================================
+//  ★ THE PARTIALS-COMBINE AUDIT SUBJECT (the per-op subject `partials` in `tests/sass/check_band_fp64free.sh`).
+//  Fixed names; do not rename. One thread per key folds `nBlocks` partials in block order with `combine` and packs
+//  the result once: the combine stage of the banded block reduction, as a kernel.
+//  Codec boundary crossings: 1 pack.
+// =========================================================================
+AETHER_KERNEL() void bandmathPartialsKernel(BandedReal* __restrict__ out,
+    const aether::banded::BandPartial* __restrict__ parts, int nBlocks, int n)
+{
+    const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (i >= n)
+        return;
+    BandAccum acc;
+    for (int b = 0; b < nBlocks; ++b)
+        acc.combine(BandAccum::fromPartial(parts[b * n + i]));
+    out[i] = acc.toBandedReal();
+}
+
+/// @brief The positive control: the identical body with one FP64 operation scaling the first partial's leading limb.
+AETHER_KERNEL() void bandmathPartialsFp64InjectedKernel(BandedReal* __restrict__ out,
+    const aether::banded::BandPartial* __restrict__ parts, int nBlocks, int n, double poison)
+{
+    const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (i >= n)
+        return;
+    const float spoilt = static_cast<float>(poison * 2.0 + 1.0);
+    BandAccum   acc;
+    for (int b = 0; b < nBlocks; ++b) {
+        aether::banded::BandPartial p = parts[b * n + i];
+        if (b == 0)
+            p.hi = p.hi * spoilt;
+        acc.combine(BandAccum::fromPartial(p));
+    }
+    out[i] = acc.toBandedReal();
+}
+
+// A warp reduce of deferred accumulators (8 terms per lane, the renormalise period never reached), shuffling the
+// carrier and the error lane, merged by `combine`: the device twin of the warp-shaped host row.
+AETHER_KERNEL() void bandAccumWarpTreeKernel(const float* limbs, float* out)
+{
+    BandAccum acc;
+    for (int k = 0; k < kAccumFoldTerms; ++k) {
+        const int i = (threadIdx.x * kAccumFoldTerms + k) * 3;
+        acc.addTerm(Band(limbs[i], limbs[i + 1], limbs[i + 2]));
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        BandAccum o;
+        o.s = Band{ __shfl_down_sync(0xffffffffu, acc.s.hi, off), __shfl_down_sync(0xffffffffu, acc.s.lo, off),
+            __shfl_down_sync(0xffffffffu, acc.s.tail, off) };
+        o.c = __shfl_down_sync(0xffffffffu, acc.c, off);
+        acc.combine(o);
+    }
+    if (threadIdx.x == 0) {
+        const Band r = acc.normalized();
+        out[0]       = r.hi;
+        out[1]       = r.lo;
+        out[2]       = r.tail;
+    }
+}
+
+TEST_F(BandLevers, BandAccumWarpShapedTreeOfDeferredLanesIsAccurateOnDevice)
+{
+    constexpr int lanes = 32, n = lanes * kAccumFoldTerms;
+    const std::vector<double> v = warpCancelSeries(n);
+    std::vector<float>        limbs(3 * n);
+    for (int i = 0; i < n; ++i) {
+        const Band b = bandFromDouble(v[i]);
+        limbs[3 * i] = b.hi; limbs[3 * i + 1] = b.lo; limbs[3 * i + 2] = b.tail;
+    }
+    float *dIn = nullptr, *dOut = nullptr;
+    ASSERT_EQ(cudaMalloc(&dIn, sizeof(float) * limbs.size()), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&dOut, sizeof(float) * 3), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(dIn, limbs.data(), sizeof(float) * limbs.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    bandAccumWarpTreeKernel<<<1, lanes>>>(dIn, dOut);
+    aether::cuda::checkLastLaunch("bandAccumWarpTreeKernel");
+    float r[3];
+    ASSERT_EQ(cudaMemcpy(r, dOut, sizeof(r), cudaMemcpyDeviceToHost), cudaSuccess);
+    cudaFree(dIn);
+    cudaFree(dOut);
+    const double ulp = warpCancelUlp53(v, Band{ r[0], r[1], r[2] });
+    std::printf("[BandLevers/device] warp tree of deferred lanes: ulp53=%.5f\n", ulp);
+    EXPECT_LE(ulp, 0.01);
+}
+
+TEST_F(BandLevers, TheAuditedPartialsCombineKernelAgreesWithTheHostAndItsControlDoesNotOnDevice)
+{
+    const int n = 256, nBlocks = 24;
+    std::vector<aether::banded::BandPartial> parts(static_cast<std::size_t>(n) * nBlocks);
+    for (int b = 0; b < nBlocks; b++)
+        for (int i = 0; i < n; i++) {
+            BandAccum a;
+            for (int t = 0; t < kAccumFoldTerms; t++)
+                a.addTerm(static_cast<Band>(BandedReal::fromDouble(
+                    std::sin(0.037 * i + 0.61 * t + 0.13 * b) * std::ldexp(1.0, ((i + 3 * t + b) % 23) - 11))));
+            parts[static_cast<std::size_t>(b) * n + i] = a.partial();
+        }
+    aether::banded::BandPartial* dParts = nullptr;
+    BandedReal *dOut = nullptr, *dInj = nullptr;
+    ASSERT_EQ(cudaMalloc(&dParts, sizeof(aether::banded::BandPartial) * parts.size()), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&dOut, sizeof(BandedReal) * n), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&dInj, sizeof(BandedReal) * n), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(dParts, parts.data(), sizeof(aether::banded::BandPartial) * parts.size(),
+                  cudaMemcpyHostToDevice),
+        cudaSuccess);
+    bandmathPartialsKernel<<<(n + kBlock - 1) / kBlock, kBlock>>>(dOut, dParts, nBlocks, n);
+    aether::cuda::checkLastLaunch("bandmathPartialsKernel");
+    bandmathPartialsFp64InjectedKernel<<<(n + kBlock - 1) / kBlock, kBlock>>>(dInj, dParts, nBlocks, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathPartialsFp64InjectedKernel");
+    std::vector<BandedReal> got(static_cast<std::size_t>(n)), inj(static_cast<std::size_t>(n));
+    ASSERT_EQ(cudaMemcpy(got.data(), dOut, sizeof(BandedReal) * n, cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(inj.data(), dInj, sizeof(BandedReal) * n, cudaMemcpyDeviceToHost), cudaSuccess);
+    cudaFree(dParts);
+    cudaFree(dOut);
+    cudaFree(dInj);
+    std::size_t bad = 0, injDiff = 0, trivial = 0;
+    for (int i = 0; i < n; i++) {
+        BandAccum acc;
+        for (int b = 0; b < nBlocks; b++)
+            acc.combine(BandAccum::fromPartial(parts[static_cast<std::size_t>(b) * n + i]));
+        const BandedReal want = acc.toBandedReal();
+        bad += got[static_cast<std::size_t>(i)].toBits() != want.toBits();
+        injDiff += inj[static_cast<std::size_t>(i)].toBits() != want.toBits();
+        trivial += got[static_cast<std::size_t>(i)].isZero();
+    }
+    std::printf("[BandLevers/device] partials combine over %d keys x %d blocks: %zu mismatches, %zu injected-arm "
+                "differences\n",
+        n, nBlocks, bad, injDiff);
+    EXPECT_EQ(bad, 0u);
+    EXPECT_EQ(injDiff, 0u);
+    EXPECT_LT(trivial, static_cast<std::size_t>(n) / 4);
+}
+
+// =========================================================================
 //  ★ THE SECOND FP64-FREE AUDIT SUBJECT (Subject 4
 //  in `tests/sass/check_band_fp64free.sh`). Fixed names; do not rename.
 //

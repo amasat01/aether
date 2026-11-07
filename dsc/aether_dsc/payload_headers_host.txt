@@ -22,6 +22,12 @@
 # NVRTC never reaches these headers through any real include chain either;
 # the exclusion here is belt-and-braces, not a response to an NVRTC failure
 # ever observed.
+#
+# Also here: `aether/err/Error.h`, which `aether/banded/BandCell8.h` includes
+# under `#ifndef __CUDACC_RTC__` (host only), so a host build of anything
+# that includes `aether/banded/banded.h` needs it. Measured with
+# `g++ -MM -DAETHER_CPP_MODE` on a TU including `banded.h`: it is the only
+# header of that closure outside both manifests.
 aether/backend/cpu/simd/math/PacketArcTrig.h
 aether/backend/cpu/simd/math/PacketExpLog.h
 aether/backend/cpu/simd/math/PacketExpLogTables.h
@@ -30,4 +36,5 @@ aether/backend/cpu/simd/math/PacketMathCore.h
 aether/backend/cpu/simd/math/PacketMisc.h
 aether/backend/cpu/simd/math/PacketRounding.h
 aether/backend/cpu/simd/math/PacketSinCos.h
+aether/err/Error.h
 aether/math/detail/HostVectorMath.h

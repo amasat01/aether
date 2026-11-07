@@ -36,12 +36,16 @@
 
 #include <cmath>
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <cstring>
 #include <string>
+#endif
 #include <type_traits>
 
 #include "aether/banded/Band.h"
+#ifndef __CUDACC_RTC__
 #include "aether/err/Error.h"
+#endif
 #include "aether/macros.h"
 
 #ifdef AETHER_DEBUG_MODE
@@ -373,28 +377,19 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void storeCell8(BandCell8* p, BandCell8
 //  The tier-1 codec
 // =====================================================================
 
-/// @brief `Band` -> `BandCell8`: pack three limbs into one word.
+/// @brief `Band` -> `BandCell8` for a finite leading limb: pack three limbs into one word.
 ///
 /// The two lower limbs are scaled by the RECIPROCAL of the leading limb's
 /// exponent (an exact power of two assembled as an integer field, so the scaling
 /// is exact) into `[-2^-23, 2^-23]`, then rounded to a 55-bit-scaled integer.
 /// A NEGATIVE remainder borrows one from the leading limb's word — and at an
 /// exact power of two that borrow crosses a binade, where the continuation's
-/// worth doubles, which is what the `cross` shift corrects.
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandCell8 cell8FromBand(Band b)
+/// worth doubles, which is what the `cross` shift corrects. Unchecked: the caller owns the window (@see
+/// cell8FromBand, which asserts it, and the labelled store, which maps what lies outside it).
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandCell8 cell8FromBandFinite(Band b)
 {
     const std::uint32_t bh0 = static_cast<std::uint32_t>(floatAsInt(b.hi));
 
-    if ((bh0 & kBandFp32ExpMask) == kBandFp32ExpMask)
-        return cell8SpecialFromFloatBits(bh0);
-
-#ifdef AETHER_DEBUG_MODE
-    assert(cell8BandIsStorable(b)
-        && "BandCell8: the Band is not normalized and inside the storage window "
-           "-- either it did not come from a certified op, or its magnitude is "
-           "outside [2^-94, 2^126) where the codec's own scaling constants stop "
-           "being normal floats");
-#endif
     const std::uint32_t bh  = bh0;
     const std::uint32_t sgn = bh & 0x80000000u;
     const std::uint32_t ex  = bh & kBandFp32ExpMask;
@@ -416,6 +411,23 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void storeCell8(BandCell8* p, BandCell8
     const std::uint32_t w1 = bh - borrow;
     return BandCell8{ (static_cast<std::uint64_t>(w1) << 32)
         | static_cast<std::uint32_t>(rem) };
+}
+
+/// @brief `Band` -> `BandCell8` for any leading limb: specials take their own words, everything else the finite
+/// encode above.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandCell8 cell8FromBand(Band b)
+{
+    const std::uint32_t bh0 = static_cast<std::uint32_t>(floatAsInt(b.hi));
+    if ((bh0 & kBandFp32ExpMask) == kBandFp32ExpMask)
+        return cell8SpecialFromFloatBits(bh0);
+#ifdef AETHER_DEBUG_MODE
+    assert(cell8BandIsStorable(b)
+        && "BandCell8: the Band is not normalized and inside the storage window "
+           "-- either it did not come from a certified op, or its magnitude is "
+           "outside [2^-94, 2^126) where the codec's own scaling constants stop "
+           "being normal floats");
+#endif
+    return cell8FromBandFinite(b);
 }
 
 /// @brief `BandCell8` -> `Band`: unpack one word into three limbs.
@@ -735,6 +747,7 @@ struct EscapeParts {
         && arrayBias <= kBandCell8RebiasHighSafe;
 }
 
+#ifndef __CUDACC_RTC__ // host-only: double interop
 // =====================================================================
 //  Host-only `double` terminals
 // =====================================================================
@@ -749,15 +762,6 @@ inline void cell8IeeeWords(double x, std::uint32_t& lo, std::uint32_t& hi)
     std::memcpy(&u, &x, sizeof(u));
     lo = static_cast<std::uint32_t>(u);
     hi = static_cast<std::uint32_t>(u >> 32);
-}
-
-/// @brief …and back. Host only.
-[[nodiscard]] inline double cell8DoubleFromWords(std::uint32_t lo, std::uint32_t hi)
-{
-    const std::uint64_t u = (static_cast<std::uint64_t>(hi) << 32) | lo;
-    double x;
-    std::memcpy(&x, &u, sizeof(x));
-    return x;
 }
 
 /// @brief The unbiased base-2 exponent of a finite nonzero `double`; `0` for a
@@ -868,6 +872,8 @@ inline void cell8IeeeWords(double x, std::uint32_t& lo, std::uint32_t& hi)
     return (static_cast<double>(b.hi) + static_cast<double>(b.lo))
         + static_cast<double>(b.tail);
 }
+
+#endif // __CUDACC_RTC__
 
 } // namespace detail
 

@@ -19,11 +19,11 @@
  * new dispatch machinery. `pow` already lives in `math.h` and is not
  * repeated here.
  *
- * `exp`/`log` also accept `aether::banded::{Band, BandedReal}` and forward
- * through `aether::banded::detail::BandedFacade<T>::{exp,log}`
+ * `exp`/`exp2`/`expm1`/`log`/`log2`/`log10`/`log1p` also accept `aether::banded::{Band, BandedReal}` and forward
+ * through `aether::banded::detail::BandedFacade<T>::{exp,exp2,expm1,log,log2,log10,log1p}`
  * (`BandedRealOps.h`) to the bodies in `aether/banded/BandExpLog.h`,
  * exactly as `abs`/`copysign`/`fmax`/`fmin`/`pow` already do in `math.h`.
- * `exp2`/`exp10`/`expm1`/`log2`/`log10`/`log1p` stay `float`/`double`-only.
+ * `exp10` stays `float`/`double`-only.
  */
 
 #include <cmath>
@@ -44,12 +44,18 @@ AETHER_MATH_UNARY_BAND(exp, exp)
 
 /** @brief Base `2` exponential function. */
 AETHER_MATH_UNARY(exp2, exp2f, ::exp2, AETHER_MATH_HOST_ROUTE(exp2, x))
+/** @brief …on a banded operand: `exp(x * ln2)` with a three-limb `ln2`. */
+AETHER_MATH_UNARY_BAND(exp2, exp2)
 
 /** @brief Base `10` exponential function. */
 AETHER_MATH_UNARY(exp10, exp10f, ::exp10, AETHER_MATH_HOST_ROUTE_OR(exp10, std::pow(T(10), x), x))
 
 /** @brief `exp(x) - 1`, accurate for small `|x|`. */
 AETHER_MATH_UNARY(expm1, expm1f, ::expm1, AETHER_MATH_HOST_ROUTE(expm1, x))
+/** @brief …on a banded operand: `exp`'s reduction with the `-1` folded in
+ *         exactly, so the result keeps full relative accuracy down to
+ *         `x = 0` (`expm1(-0) = -0`). */
+AETHER_MATH_UNARY_BAND(expm1, expm1)
 
 /** @brief Base `e` logarithm of the argument. */
 AETHER_MATH_UNARY(log, logf, ::log, AETHER_MATH_HOST_ROUTE(log, x))
@@ -60,12 +66,20 @@ AETHER_MATH_UNARY_BAND(log, log)
 
 /** @brief Base `2` logarithm of the argument. */
 AETHER_MATH_UNARY(log2, log2f, ::log2, AETHER_MATH_HOST_ROUTE(log2, x))
+/** @brief …on a banded operand: `log(x)` times a three-limb `log2(e)`. */
+AETHER_MATH_UNARY_BAND(log2, log2)
 
 /** @brief Base `10` logarithm of the argument. */
 AETHER_MATH_UNARY(log10, log10f, ::log10, AETHER_MATH_HOST_ROUTE(log10, x))
+/** @brief …on a banded operand: `log(x)` times a three-limb `log10(e)`. */
+AETHER_MATH_UNARY_BAND(log10, log10)
 
 /** @brief `log(1 + x)`, accurate for small `|x|`. */
 AETHER_MATH_UNARY(log1p, log1pf, ::log1p, AETHER_MATH_HOST_ROUTE(log1p, x))
+/** @brief …on a banded operand: a series below `2^-19`, `log(1 + x)` above,
+ *         accurate relative to the result near `0` and near `-1`
+ *         (`log1p(-0) = -0`). */
+AETHER_MATH_UNARY_BAND(log1p, log1p)
 
 } // namespace math
 } // namespace aether

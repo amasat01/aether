@@ -27,7 +27,7 @@
 // TOLERANCE NOTE (mirrors test_MathExpLog.cpp's own note for exactly this
 // situation): every new/exercised facade entry is a THIN WRAPPER over
 // `std::` on the host route (no alternate formula, no emulation arm — this
-// this suite adds no SoftDouble/Banded backend), so every check below is BIT-EXACT
+// this suite adds no Banded backend), so every check below is BIT-EXACT
 // (`EXPECT_DOUBLE_EQ`/`EXPECT_FLOAT_EQ`, NaN compared via `std::isnan` since
 // NaN != NaN), never a tolerance — a stronger check than any epsilon, and it
 // is also what lets a single corpus safely include INVALID-DOMAIN entries

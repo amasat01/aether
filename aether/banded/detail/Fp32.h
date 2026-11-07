@@ -41,7 +41,9 @@
  */
 
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <cstring>
+#endif
 
 #include "aether/macros.h"
 

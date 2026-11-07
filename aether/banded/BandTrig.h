@@ -19,8 +19,8 @@
  *    behaviour.
  *
  * @section reuse Reuses `BandExpLog.h`'s raw-carrier family
- * `sinCoreRaw`/`cosCoreRaw`/`trigSelectCore` consume `fmaRawNoCancel`/
- * `fmaRawSNoCancel` (`BandRaw`-level fma) and `trigReduce` consumes
+ * `sinCoreRaw`/`cosCoreRaw`/`trigSelectCore` consume `fmaRawDom`/
+ * `fmaRawSDom` (`BandRaw`-level fma) and `trigReduce` consumes
  * `exactSum4` (four-term exact-sum cascade), both from `BandExpLog.h`
  * rather than a second copy of the same helpers.
  *
@@ -242,56 +242,57 @@ static_assert(kBandTrigAbsBoundExp + 53 - (kBandTrigUlpFloorExp - 1) > -2,
     twoProd(kf, cw4, p4h, p4l);
 
     // Level 0 (~2^0.65) and level 1 (~2^-23.4), each summed exactly.
-    const Band a = exactSum4(x.hi - p1h, x.lo, -p1l, -p2h);
-    const Band b = exactSum4(x.tail, -p2l, -p3h, -(p3l + p4h));
-    return normalizeSafe(addRaw(a, b));
+    // Admitted x cannot give a special leading limb; normalizeSafe below re-guards.
+    const Band a = exactSum4Admitted(x.hi - p1h, x.lo, -p1l, -p2h);
+    const Band b = exactSum4Admitted(x.tail, -p2l, -p3h, -(p3l + p4h));
+    return normalizeSafeAdmitted(addRaw(a, b)); // admitted x: finite, no specials test
 }
 
 // =========================================================================
 //  sinCoreRaw / cosCoreRaw / trigSelectCore.
-//  Demand ladder: FP32 rung (j high), double-float rung (`ddFma`), Band
-//  rung (`fmaRawNoCancel`/`fmaRawSNoCancel`), ONE `normalize` at the exit.
+//  Demand ladder: FP32 rung (j high), double-float rung (`ddFmaDom`), Band
+//  rung (`fmaRawDom`/`fmaRawSDom`), ONE `normalize` at the exit.
 // =========================================================================
 
 /// @brief `sin(r)/r` as a polynomial in `u = r*r`, `|r| <= pi/4`. Two Band
 /// steps (not three): `c_2` evaluates on the double-float rung, a 2.32x
 /// measured margin over the 0.5 ULP contract.
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw sinCoreRaw(Band u)
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw sinCoreRaw(BandRaw u)
 {
     float p = 2.8114573590e-15f;                  // c8
     p       = fmaRN(u.hi, p, -7.6471636098e-13f);  // c7
     p       = fmaRN(u.hi, p, 1.6059044372e-10f);   // c6
 
     float ph = p, pl = 0.0f;
-    ddFma(u.hi, u.lo, ph, pl, -2.5052107944e-08f, -4.4176230446e-16f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 2.7557318845e-06f, 3.7935712243e-14f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, -1.9841270114e-04f, 2.7255968749e-12f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 8.3333337680e-03f, -4.3461720334e-10f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, -2.5052107944e-08f, -4.4176230446e-16f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 2.7557318845e-06f, 3.7935712243e-14f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, -1.9841270114e-04f, 2.7255968749e-12f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 8.3333337680e-03f, -4.3461720334e-10f, ph, pl);
 
     BandRaw q{ ph, pl, 0.0f };
-    q = fmaRawNoCancel(u, q,
+    q = fmaRawDom(u, q,
         BandRaw{ -1.6666667163e-01f, 4.9670538793e-09f, -1.4802974103e-16f });
-    return fmaRawSNoCancel(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
+    return fmaRawSDom(u, q, 1.0f); // c0 == 1 exactly -> scalar addend
 }
 
 /// @brief `cos(r)` as a polynomial in `u = r*r`, `|r| <= pi/4`.
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw cosCoreRaw(Band u)
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw cosCoreRaw(BandRaw u)
 {
     float p = -1.5619206969e-16f;                 // d9
     p       = fmaRN(u.hi, p, 4.7794772561e-14f);   // d8
     p       = fmaRN(u.hi, p, -1.1470745361e-11f);  // d7
 
     float ph = p, pl = 0.0f;
-    ddFma(u.hi, u.lo, ph, pl, 2.0876755880e-09f, 1.1082839147e-16f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, -2.7557319981e-07f, 7.5751122091e-15f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, 2.4801587642e-05f, -3.4069960937e-13f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl, -1.3888889225e-03f, 3.3631094437e-11f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 2.0876755880e-09f, 1.1082839147e-16f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, -2.7557319981e-07f, 7.5751122091e-15f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, 2.4801587642e-05f, -3.4069960937e-13f, ph, pl);
+    ddFmaDom(u.hi, u.lo, ph, pl, -1.3888889225e-03f, 3.3631094437e-11f, ph, pl);
 
     BandRaw q{ ph, pl, 0.0f };
-    q = fmaRawNoCancel(u, q,
+    q = fmaRawDom(u, q,
         BandRaw{ 4.1666667908e-02f, -1.2417634698e-09f, 3.7007435257e-17f });
-    q = fmaRawSNoCancel(u, q, -0.5f); // d1 == -1/2 exactly
-    return fmaRawSNoCancel(u, q, 1.0f); // d0 == 1 exactly
+    q = fmaRawSDom(u, q, -0.5f); // d1 == -1/2 exactly
+    return fmaRawSDom(u, q, 1.0f); // d0 == 1 exactly
 }
 
 /**
@@ -303,11 +304,11 @@ static_assert(kBandTrigAbsBoundExp + 53 - (kBandTrigUlpFloorExp - 1) > -2,
  * bound, neither a re-spelling of the other).
  *
  * @param r       the reduced argument, `|r| <= pi/4`.
- * @param u       `r*r`.
+ * @param u       `r*r`, raw (the cores consume it through exact cascades).
  * @param wantCos select the cosine series (and drop the trailing `* r`).
  */
-[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band trigSelectCore(
-    Band r, Band u, bool wantCos)
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRaw trigSelectCoreRaw(
+    Band r, BandRaw u, bool wantCos)
 {
     // FP32 rung, j = 9, 8, 7. sin's c_9 is 0 -- its series stops at 8.
     float p = wantCos ? -1.5619206969e-16f : 0.0f;
@@ -316,36 +317,42 @@ static_assert(kBandTrigAbsBoundExp + 53 - (kBandTrigUlpFloorExp - 1) > -2,
 
     // double-float rung, j = 6, 5, 4, 3.
     float ph = p, pl = 0.0f;
-    ddFma(u.hi, u.lo, ph, pl,
+    ddFmaDom(u.hi, u.lo, ph, pl,
         wantCos ? 2.0876755880e-09f : 1.6059044372e-10f,
         wantCos ? 1.1082839147e-16f : -5.3525265116e-18f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl,
+    ddFmaDom(u.hi, u.lo, ph, pl,
         wantCos ? -2.7557319981e-07f : -2.5052107944e-08f,
         wantCos ? 7.5751122091e-15f : -4.4176230446e-16f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl,
+    ddFmaDom(u.hi, u.lo, ph, pl,
         wantCos ? 2.4801587642e-05f : 2.7557318845e-06f,
         wantCos ? -3.4069960937e-13f : 3.7935712243e-14f, ph, pl);
-    ddFma(u.hi, u.lo, ph, pl,
+    ddFmaDom(u.hi, u.lo, ph, pl,
         wantCos ? -1.3888889225e-03f : -1.9841270114e-04f,
         wantCos ? 3.3631094437e-11f : 2.7255968749e-12f, ph, pl);
 
     // Band rung, j = 2, 1, 0.
     BandRaw q{ ph, pl, 0.0f };
-    q = fmaRawNoCancel(u, q,
+    q = fmaRawDom(u, q,
         BandRaw{ wantCos ? 4.1666667908e-02f : 8.3333337680e-03f,
             wantCos ? -1.2417634698e-09f : -4.3461720334e-10f,
             wantCos ? 3.7007435257e-17f : 1.8503718042e-18f });
-    q = fmaRawNoCancel(u, q,
+    q = fmaRawDom(u, q,
         BandRaw{ wantCos ? -5.0000000000e-01f : -1.6666667163e-01f,
             wantCos ? 0.0f : 4.9670538793e-09f,
             wantCos ? 0.0f : -1.4802974103e-16f });
-    q = fmaRawSNoCancel(u, q, 1.0f); // c0 == d0 == 1 -> F-S on BOTH branches
+    q = fmaRawSDom(u, q, 1.0f); // c0 == d0 == 1 -> F-S on BOTH branches
 
     // The cosine series IS the answer; the sine series is `r * P(u)`. One
     // multiply serves both, by selecting the multiplicand.
     const BandRaw m{ wantCos ? 1.0f : r.hi, wantCos ? 0.0f : r.lo,
         wantCos ? 0.0f : r.tail };
-    return normalize(mulRaw(m, q));
+    return mulRaw(m, q);
+}
+
+/// @brief `trigSelectCoreRaw` plus the exit barrier.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band trigSelectCore(Band r, BandRaw u, bool wantCos)
+{
+    return normalize(trigSelectCoreRaw(r, u, wantCos));
 }
 
 // =========================================================================
@@ -403,7 +410,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void sincos(Band x, Band& sinOut, Band&
 
     int        k = 0;
     const Band r = trigReduce(x, k);
-    const Band u = normalize(sqrRaw(r));
+    const BandRaw u = sqrRaw(r); // raw: its consumers are exact cascades
 
     const Band s = normalize(mulRaw(r, sinCoreRaw(u)));
     const Band c = normalize(cosCoreRaw(u));
@@ -439,7 +446,7 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void sincos(Band x, Band& sinOut, Band&
 
     int        k = 0;
     const Band r = trigReduce(x, k);
-    const Band u = normalize(sqrRaw(r));
+    const BandRaw u = sqrRaw(r); // raw: its consumers are exact cascades
     // sin(k*pi/2 + r): k=0 +sin, k=1 +cos, k=2 -sin, k=3 -cos.
     const Band v = trigSelectCore(r, u, (k & 1) != 0);
     return (k & 2) != 0 ? neg(v) : v;
@@ -456,9 +463,73 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() void sincos(Band x, Band& sinOut, Band&
 
     int        k = 0;
     const Band r = trigReduce(x, k);
-    const Band u = normalize(sqrRaw(r));
+    const BandRaw u = sqrRaw(r); // raw: its consumers are exact cascades
     const Band v = trigSelectCore(r, u, (k & 1) == 0);
     return ((k + 1) & 2) != 0 ? neg(v) : v;
+}
+
+/// @brief `sin(x)` without the exit barrier: one raw hop, `BandRawT<1>`; `normalize` of it is `sin(x)` (the barrier is an
+/// error-free transform, so the value is unchanged; an exact zero loses its sign there). For a consumer that normalises where it reads limbs in order.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> sinRaw(Band x)
+{
+    if (!(x.hi >= -kBandTrigSatMax && x.hi <= kBandTrigSatMax))
+        return BandRawT<1>{ intAsFloat(0x7FC00000), 0.0f, 0.0f };
+    if (x.hi == 0.0f)
+        return BandRawT<1>{ x.hi, 0.0f, 0.0f };
+
+    int        k = 0;
+    const Band r = trigReduce(x, k);
+    const BandRaw u = sqrRaw(r);
+    const BandRaw v = trigSelectCoreRaw(r, u, (k & 1) != 0);
+    return (k & 2) != 0 ? BandRawT<1>{ -v.hi, -v.lo, -v.tail } : BandRawT<1>{ v.hi, v.lo, v.tail };
+}
+
+/// @brief `cos(x)` without the exit barrier. @see sinRaw.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandRawT<1> cosRaw(Band x)
+{
+    if (!(x.hi >= -kBandTrigSatMax && x.hi <= kBandTrigSatMax))
+        return BandRawT<1>{ intAsFloat(0x7FC00000), 0.0f, 0.0f };
+    if (x.hi == 0.0f)
+        return BandRawT<1>{ 1.0f, 0.0f, 0.0f };
+
+    int        k = 0;
+    const Band r = trigReduce(x, k);
+    const BandRaw u = sqrRaw(r);
+    const BandRaw v = trigSelectCoreRaw(r, u, (k & 1) == 0);
+    return ((k + 1) & 2) != 0 ? BandRawT<1>{ -v.hi, -v.lo, -v.tail } : BandRawT<1>{ v.hi, v.lo, v.tail };
+}
+
+/**
+ * @brief `tan(x) = sin(x)/cos(x)`: `div` of `sincos`'s two legs.
+ *
+ * Certified to 1.5 ULP at 53 bits (half a ULP per leg: sin, cos, div) where
+ * both `|cos x|` and `|sin x|` are at least `2^-13` (or `|x|` is below the
+ * reduction's first sector), the range over which the legs' own claims are
+ * relative. Below that a leg carries an absolute `2^-68` bound, so the error
+ * grows as `0.25 * 2^-13 / |cos x|` ULP: about 5 ULP at `|cos x|` near
+ * `2^-30..2^-20`, and nothing is delivered within `2^-30` of a pole (the
+ * reduction's absolute bound, not the division, sets this). `tan(+-0) = +-0`;
+ * `tan(+-inf)` and `tan(NaN)` are NaN (as `sincos`).
+ */
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band tan(Band x)
+{
+    // One division of the two unnormalised cores, the quadrant folded into numerator and denominator:
+    // tan(k*pi/2 + r) = s/c (k even), -c/s (k odd). Only the quotient pays a normalise.
+    if (!(x.hi >= -kBandTrigSatMax && x.hi <= kBandTrigSatMax))
+        return Band{ intAsFloat(0x7FC00000), 0.0f, 0.0f };
+    if (x.hi == 0.0f)
+        return x;
+    int        k = 0;
+    const Band r = trigReduce(x, k);
+    const BandRaw u   = sqrRaw(r);
+    const BandRaw s   = mulRaw(r, sinCoreRaw(u));
+    const BandRaw c   = cosCoreRaw(u);
+    const bool    swap = (k & 1) != 0;
+    const BandRaw num = swap ? BandRaw{ -c.hi, -c.lo, -c.tail } : s;
+    const BandRaw den = swap ? s : c;
+    if (den.hi == 0.0f)
+        return bandSpecialCarrier(num.hi / den.hi);
+    return normalize(mulRaw(num, recipRaw(den)));
 }
 
 } // namespace detail

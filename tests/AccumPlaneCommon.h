@@ -483,7 +483,7 @@ TEST_F(AccumPlane, ExactSumOracleKnownAnswers)
 //  Rows: policy traits and defaults
 //
 //  Only the double-policy static_asserts apply here: aether has no
-//  InCarrier/SoftDouble accumulation plane.
+//  InCarrier/emulated accumulation plane.
 // =========================================================================
 
 TEST_F(AccumPlane, TraitsDeclarePolicyConcurrency)

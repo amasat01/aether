@@ -114,9 +114,21 @@ BANDMATH_SASS_BINARY(bandmathFmin, bd::fmin(x, y))
 BANDMATH_SASS_BINARY(bandmathAdd, bd::add(x, y))
 BANDMATH_SASS_BINARY(bandmathSub, bd::sub(x, y))
 BANDMATH_SASS_BINARY(bandmathMul, bd::mul(x, y))
-// exp/log unary, pow binary.
+// exp/expm1/log/log1p/exp2/log2/log10/tanh/sinh/cosh/asinh/acosh/atanh/tan unary, pow binary.
 BANDMATH_SASS_UNARY(bandmathExp, bd::exp(x))
+BANDMATH_SASS_UNARY(bandmathExpm1, bd::expm1(x))
 BANDMATH_SASS_UNARY(bandmathLog, bd::log(x))
+BANDMATH_SASS_UNARY(bandmathLog1p, bd::log1p(x))
+BANDMATH_SASS_UNARY(bandmathExp2, bd::exp2(x))
+BANDMATH_SASS_UNARY(bandmathTan, bd::tan(x))
+BANDMATH_SASS_UNARY(bandmathTanh, bd::tanh(x))
+BANDMATH_SASS_UNARY(bandmathAsinh, bd::asinh(x))
+BANDMATH_SASS_UNARY(bandmathAcosh, bd::acosh(x))
+BANDMATH_SASS_UNARY(bandmathAtanh, bd::atanh(x))
+BANDMATH_SASS_UNARY(bandmathSinh, bd::sinh(x))
+BANDMATH_SASS_UNARY(bandmathCosh, bd::cosh(x))
+BANDMATH_SASS_UNARY(bandmathLog2, bd::log2(x))
+BANDMATH_SASS_UNARY(bandmathLog10, bd::log10(x))
 BANDMATH_SASS_BINARY(bandmathPow, bd::pow(x, y))
 // `rsqrt` audits `BandRoot.h::rsqrtIeee`, not `RsqrtCore.h::rsqrt`
 // directly -- the same body `BandedFacade::rsqrt` forwards to.
@@ -281,10 +293,70 @@ TEST(BandMathSass, KernelsAreLiveAndComputeTheClaimedOp)
     bandmathExpFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
     aether::cuda::checkLastLaunch("bandmathExpFp64InjectedKernel");
 
+    bandmathExpm1Kernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathExpm1Kernel");
+    bandmathExpm1Fp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathExpm1Fp64InjectedKernel");
+
     bandmathLogKernel<<<grid, kBlock>>>(dOut, dA, n);
     aether::cuda::checkLastLaunch("bandmathLogKernel");
     bandmathLogFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
     aether::cuda::checkLastLaunch("bandmathLogFp64InjectedKernel");
+
+    bandmathLog1pKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathLog1pKernel");
+    bandmathLog1pFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathLog1pFp64InjectedKernel");
+
+    bandmathExp2Kernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathExp2Kernel");
+    bandmathExp2Fp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathExp2Fp64InjectedKernel");
+
+    bandmathLog2Kernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathLog2Kernel");
+    bandmathLog2Fp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathLog2Fp64InjectedKernel");
+
+    bandmathLog10Kernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathLog10Kernel");
+    bandmathLog10Fp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathLog10Fp64InjectedKernel");
+
+    bandmathTanhKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathTanhKernel");
+    bandmathTanhFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathTanhFp64InjectedKernel");
+
+    bandmathSinhKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathSinhKernel");
+    bandmathSinhFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathSinhFp64InjectedKernel");
+
+    bandmathCoshKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathCoshKernel");
+    bandmathCoshFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathCoshFp64InjectedKernel");
+
+    bandmathAsinhKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathAsinhKernel");
+    bandmathAsinhFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathAsinhFp64InjectedKernel");
+
+    bandmathAcoshKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathAcoshKernel");
+    bandmathAcoshFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathAcoshFp64InjectedKernel");
+
+    bandmathAtanhKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathAtanhKernel");
+    bandmathAtanhFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathAtanhFp64InjectedKernel");
+
+    bandmathTanKernel<<<grid, kBlock>>>(dOut, dA, n);
+    aether::cuda::checkLastLaunch("bandmathTanKernel");
+    bandmathTanFp64InjectedKernel<<<grid, kBlock>>>(dInj, dA, n, 0.0);
+    aether::cuda::checkLastLaunch("bandmathTanFp64InjectedKernel");
 
     bandmathPowKernel<<<grid, kBlock>>>(dOut, dA, dB, n);
     aether::cuda::checkLastLaunch("bandmathPowKernel");

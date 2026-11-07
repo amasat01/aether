@@ -235,6 +235,7 @@ endif()
 # shadows the root project's PROJECT_VERSION with an empty string in this
 # scope.
 target_compile_definitions(aether_tests PRIVATE AETHER_TEST_EXPECTED_VERSION="${AETHER_VERSION}")
+target_compile_definitions(aether_tests PRIVATE AETHER_RTC_ROW="${CMAKE_CURRENT_SOURCE_DIR}/rtc")
 
 # CUDA device TUs are capped at C++20 (nvcc's device-code ceiling); fix it
 # explicitly on the test binary target so the requirement holds regardless

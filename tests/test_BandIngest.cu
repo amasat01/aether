@@ -10,7 +10,7 @@
  * reference, so host and device have to agree exactly, not closely.
  *
  * `MaterializeFiftyThreeCompilesAndAgreesOnDevice` is not carried: it names
- * `SoftDouble` as its kernel's return type and `det::materialize<53>` over
+ * an emulated-FP64 type as its kernel's return type and `det::materialize<53>` over
  * `BandedDemandT` -- neither exists in aether's carried surface -- and
  * stays `deferred-with-addon`.
  *
@@ -166,7 +166,7 @@ TEST_F(BandIngest, LeadingLimbIsCorrectlyRoundedBelowTheFloorOnDevice)
 }
 
 // NOTE: `MaterializeFiftyThreeCompilesAndAgreesOnDevice` is not carried
-// -- its kernel returns `SoftDouble`, a type aether does not
+// -- its kernel returns an emulated-FP64 type, a type aether does not
 // carry. See `test_BandIngest_common.h`'s header comment.
 
 } // namespace BandIngestTest

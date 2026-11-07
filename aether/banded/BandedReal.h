@@ -55,6 +55,9 @@
 
 #include <cstdint>
 #include <type_traits>
+#ifdef AETHER_DEBUG_MODE
+#include <cassert>
+#endif
 
 #include "aether/banded/Band.h"
 #include "aether/banded/BandCell8.h"
@@ -63,6 +66,32 @@
 
 namespace aether {
 namespace banded {
+
+namespace detail {
+
+/// @brief The labelled-guard store: a leading limb outside the codec's window `[2^-94, 2^126)` is stored as the
+/// labelled outcome (overflow: signed infinity; underflow, subnormal or zero: signed zero; infinity and NaN: their
+/// own words), where the codec's scaling constants would otherwise stop being normal floats. One unsigned range
+/// test on the leading limb's exponent field and one select between two words, no branch.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandCell8 cell8FromBandLabelled(Band b)
+{
+    const std::uint32_t bh  = static_cast<std::uint32_t>(floatAsInt(b.hi));
+    const std::uint32_t ex  = bh & kBandFp32ExpMask;
+    const std::uint32_t sgn = bh & 0x80000000u;
+    const bool inWindow     = ex - ((127u - 94u) << 23) < (220u << 23);
+#ifdef AETHER_DEBUG_MODE
+    assert((!inWindow || cell8BandIsStorable(b))
+        && "BandedReal: the Band is not normalized -- it did not come from a certified op");
+#endif
+    const std::uint64_t encoded = cell8FromBandFinite(b).w;
+    const std::uint64_t outside
+        = (ex == kBandFp32ExpMask && (bh & 0x7FFFFFu) != 0u)
+              ? kBandCell8NanWord
+              : static_cast<std::uint64_t>(ex >= (253u << 23) ? (sgn | kBandCell8SpecialTag) : sgn) << 32;
+    return BandCell8{ inWindow ? encoded : outside };
+}
+
+} // namespace detail
 
 // =====================================================================
 //  BandedReal -- the value type
@@ -115,11 +144,22 @@ struct alignas(8) BandedReal {
         return c;
     }
 
-    /// @brief Pack a working carrier at bias 0. Implicit: this is the
-    /// assignment terminal a `Band` chain lands on, and it is the only place a
-    /// chain is meant to pay an encode.
+    /// @brief Pack a working carrier at bias 0; outside the window the labelled outcome is stored (@see
+    /// detail::cell8FromBandLabelled). Implicit: this is the assignment terminal a `Band` chain lands on, and it is the only
+    /// place a chain is meant to pay an encode.
     AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandedReal(Band b)
-        : c(detail::cell8FromBand(b))
+        : c(detail::cell8FromBandLabelled(b))
+    {
+    }
+
+    /// @brief The store terminal of an unrestored chain (`Chain.h`): normalise
+    /// (`normalizeSafe` for a cancel-capable sum), then pack. Implicit, like
+    /// `Band`'s own normalising constructors: `BandedReal r = a * b + c;` and
+    /// `r = a + b;` land here (a second user conversion through `Band` is not allowed).
+    template<typename T>
+        requires requires(T t) { chainNormalize(t); }
+    AETHER_DEVICEHOST() AETHER_FORCEINLINE() BandedReal(T t)
+        : c(detail::cell8FromBandLabelled(chainNormalize(t)))
     {
     }
 
@@ -165,6 +205,7 @@ struct alignas(8) BandedReal {
     // through `cell8FromDouble`, the terminal that carries the loud
     // out-of-window throw — there is no second copy of the encode to drift.
 
+#ifndef __CUDACC_RTC__ // host-only: double interop
     /// @brief Host only. `double` -> `BandedReal` at bias 0, escape tier off.
     /// @throws aether::Error when the value is finite and outside tier 1's
     ///         exact window.
@@ -185,6 +226,7 @@ struct alignas(8) BandedReal {
         : c(detail::cell8FromDouble(x, 0, false))
     {
     }
+#endif // __CUDACC_RTC__
 
     // ── Classification (the reserved code points) ───────────────────────────
 

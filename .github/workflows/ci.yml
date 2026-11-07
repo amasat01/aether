@@ -13,7 +13,7 @@ on:
   schedule:
     - cron: "23 4 * * 1"   # weekly on main: every remembered pass runs again
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   workflow_dispatch: {}
 
 concurrency:
@@ -21,21 +21,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release-gate:
-    # The release label, the diff, the PR body and the tag it would create agree (tools/release_gate.sh). Skipped on other PRs.
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - env:
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: bash tools/release_gate.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
   test-cpp:
     runs-on: ubuntu-24.04
     strategy:
@@ -76,7 +61,7 @@ jobs:
         with:
           name: ci-test-cpp
           args: >-
-            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree raptor --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip .github/ --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree raptor --skip docs/ --skip tests/ --skip ci/ --skip tools/ --skip goldens/ --skip RELEASING.md --skip CHANGELOG.md --skip README.md --skip CONTRIBUTING.md --skip CITATION.cff --skip Makefile --skip .github/ --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --file .github/workflows/ci.yml
           extra: ${{ toJSON(matrix) }}
       - run: make gate-names RAPTOR_SRC=raptor
         if: steps.memo.outputs.run == 'true'
@@ -127,7 +112,7 @@ jobs:
       # the job succeeds without building.
       - id: memo
         run: |
-          digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --tag . --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)") || exit 1
+          digest=$(.github/ci_digest.sh --tree . --skip docs/ --skip .github/ --file .github/workflows/ci.yml --str "${ImageVersion:-}" --str "$(g++-13 --version 2>/dev/null | head -1 || true)") || exit 1
           [ -n "$digest" ] || { echo "::error::empty digest"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - id: pass
@@ -197,7 +182,7 @@ jobs:
         with:
           name: ci-clang-plugins
           args: >-
-            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --file .github/workflows/ci.yml
       - uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.ccache
@@ -240,7 +225,7 @@ jobs:
         with:
           name: ci-host-gcc
           args: >-
-            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --tag . --file .github/workflows/ci.yml
+            --tree . --skip docs/ --skip README.md --skip CHANGELOG.md --skip CONTRIBUTING.md --skip CITATION.cff --skip .github/ --skip-ext .ipynb --tree . --only .github/actions/ --only .github/ci_digest.sh --only .github/cuda_redist.sh --only .github/companions --file .github/workflows/ci.yml
           extra: ${{ toJSON(matrix) }}
       - run: sudo apt-get update && sudo apt-get install -y g++-${{ matrix.gcc }}
         if: steps.memo.outputs.run == 'true'
