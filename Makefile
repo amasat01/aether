@@ -232,6 +232,10 @@ gate-hostgcc: gate-need-cxx
 	if [ -n "$(GATE_NECESSITY)" ]; then tests/packetmath/check_hvm_masked.sh "$$CXX" --necessity; fi
 	tests/hosttu/check_select_pta.sh "$$CXX"
 
+# The aarch64 GCC route of aether::math::pow (GCC on aarch64 only; SKIP elsewhere)
+gate-hostgcc-arm: gate-need-cxx
+	tests/packetmath/check_hvm_arm.sh "$$CXX"
+
 # The arrays binding and its CUDA 12 plugin built with clang, zero warnings; the plugin exports only the seam
 gate-clang: gate-venv gate-need-cuda
 	$(gate_env)
