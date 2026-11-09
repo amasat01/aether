@@ -130,6 +130,8 @@ sanitize-gate: configure
 # it must be GREEN as is, and must catch a planted 2-ULP error in every
 # function (non-vacuity).
 golden_dir ?= $(builddir)/faithful_golden
+# aarch64 routes pow alone: the checker has no other function there
+faithful_only := $(if $(filter aarch64 arm64,$(shell uname -m)),--only pow)
 .PHONY: faithful-gate
 faithful-gate: configure
 	$(mkcmd) aether_faithful_check
@@ -137,8 +139,8 @@ faithful-gate: configure
 		python3 tools/packet_math_ref/gen_golden.py --out $(golden_dir) --jobs $(j)
 		( cd $(golden_dir) && md5sum --quiet --strict -c $(CURDIR)/tests/packetmath/faithful_golden.md5 )
 	fi
-	$(builddir)/tests/aether_faithful_check $(golden_dir)
-	$(builddir)/tests/aether_faithful_check $(golden_dir) --plant
+	$(builddir)/tests/aether_faithful_check $(golden_dir) $(faithful_only)
+	$(builddir)/tests/aether_faithful_check $(golden_dir) $(faithful_only) --plant
 
 # docs: doxygen (docs/Doxyfile.in -> docs/_doxybuild/html)
 # THEN Sphinx (docs/conf.py + docs/content/*.rst -> docs/_build/html), both
