@@ -40,7 +40,7 @@ bool never() { return false; }
 #if defined(__clang__)
 double powW1(double a, double b) { return ::aether::simd::pm::vpow<double>(a, b); }
 #else
-double powW1(double a, double b) { return ::aether_hvm_pow(a, b); }
+double powW1(double a, double b) { return ::aether::math::detail::hvm_abi::pow_s1(a, b); }
 float64x2_t powW2(float64x2_t a, float64x2_t b)
 {
     namespace abi = ::aether::math::detail::hvm_abi;
