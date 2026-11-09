@@ -72,7 +72,12 @@ inline double doubleOf(Band v)
 // The reference is `__float128` (113 bits): a Band carries ~70 certified bits, so
 // a 64-bit `long double` reference could not resolve its error and a rounded
 // `double` read would hide it behind the 0.5 ULP of the store.
+#if defined(__aarch64__)
+// aarch64 has no __float128; long double is the same 113-bit format on Linux
+using Q = long double;
+#else
 using Q = __float128;
+#endif
 inline Q qabs(Q x) { return x < 0 ? -x : x; }
 inline Q qOf(Band b) { return static_cast<Q>(b.hi) + b.lo + b.tail; }
 /// Error of `got` against `ref` in ULP53 of `ref` (no rounding of `got`).

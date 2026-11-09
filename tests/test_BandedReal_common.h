@@ -1018,7 +1018,12 @@ TEST_F(BandedRealCert, ElementwiseItemProductStaysInTheCarrier)
         // the same value by hand: decode both, one carrier product, one carrier sum, one encode
         const BandedReal hand = BandedReal(static_cast<Band>(ba[i]) * static_cast<Band>(bb[i]) + static_cast<Band>(bc[i]));
         EXPECT_EQ(bo[i].toBits(), hand.toBits());
+#if defined(__aarch64__)
+        // aarch64 has no __float128; long double is the same 113-bit format on Linux
+        using Q = long double;
+#else
         using Q = __float128;
+#endif
         const Q ref = static_cast<Q>(ba[i].toDouble()) * bb[i].toDouble() + bc[i].toDouble();
         int e = 0;
         std::frexp(static_cast<double>(ref), &e);

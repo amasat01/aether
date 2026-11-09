@@ -390,7 +390,12 @@ TEST(BandMathRound, FmaRedFirstIdentityMutant)
 // =========================================================================
 namespace fmod_fast {
 
+#if defined(__aarch64__)
+// aarch64 has no __float128; long double is the same 113-bit format on Linux
+using Q = long double;
+#else
 using Q = __float128;
+#endif
 inline Q val(Band b) { return static_cast<Q>(b.hi) + b.lo + b.tail; }
 inline Band fromQ(Q v)
 {
