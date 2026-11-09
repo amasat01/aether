@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -74,6 +75,46 @@ TEST_F(StreamMemoryTest, StreamOrderedAllocateAndFreeOnADevice)
     }   // freed on stream_, behind the work queued there
     EXPECT_EQ(aether::deferredFreeCount(), 0u);
     CUDA_OK(cudaStreamSynchronize(stream_));
+}
+
+/** @brief Forces "no memory pools" for the scope. */
+struct NoPoolsScope {
+    NoPoolsScope() { aether::detail::memoryPoolsSupportedOverride() = 0; }
+    ~NoPoolsScope() { aether::detail::memoryPoolsSupportedOverride() = -1; }
+};
+
+TEST_F(StreamMemoryTest, NoPoolDeviceFallsBackToPlainMallocRoundTrip)
+{
+    NoPoolsScope noPools;
+    {
+        auto chunk = aether::Chunk::allocate(aether::Device(kDLCUDA), 1024, stream_);
+        EXPECT_NE(chunk.data(), nullptr);
+        EXPECT_FALSE(chunk.streamOrdered());
+        EXPECT_EQ(chunk.stream(), nullptr);
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(chunk.data()) % 256, 0u);
+        CUDA_OK(cudaMemsetAsync(chunk.data(), 0x3c, chunk.size(), stream_));
+        std::vector<std::byte> host(chunk.size());
+        CUDA_OK(cudaMemcpyAsync(host.data(), chunk.data(), chunk.size(), cudaMemcpyDeviceToHost, stream_));
+        CUDA_OK(cudaStreamSynchronize(stream_));
+        for (std::byte b : host)
+            ASSERT_EQ(b, std::byte(0x3c));
+    }   // freed with plain cudaFree, nothing queued
+    EXPECT_EQ(aether::deferredFreeCount(), 0u);
+}
+
+TEST_F(StreamMemoryTest, NoPoolDeviceRefusesAllocationUnderCapture)
+{
+    NoPoolsScope noPools;
+    CUDA_OK(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeGlobal));
+    try {
+        auto chunk = aether::Chunk::allocate(aether::Device(kDLCUDA), 1024, stream_);
+        ADD_FAILURE() << "allocation under capture on a no-pool device did not throw";
+    } catch (const aether::Error& e) {
+        EXPECT_NE(std::string(e.what()).find("no memory pools"), std::string::npos) << e.what();
+    }
+    cudaGraph_t graph = nullptr;
+    CUDA_OK(cudaStreamEndCapture(stream_, &graph));
+    cudaGraphDestroy(graph);
 }
 
 TEST_F(StreamMemoryTest, StreamOrderedAllocateOnPinnedHost)

@@ -21,6 +21,7 @@
  * the queue stays empty — the same API, the synchronous host behaviour.
  */
 
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <mutex>
@@ -67,6 +68,42 @@ private:
     bool active_;
     cudaStreamCaptureMode mode_ = cudaStreamCaptureModeRelaxed;
 };
+
+/** @brief Test hook: `-1` queries the device, `0` forces "no memory pools", `1` forces "pools supported". */
+inline std::atomic<int>& memoryPoolsSupportedOverride()
+{
+    static std::atomic<int> value{ -1 };
+    return value;
+}
+
+/**
+ * @brief Whether `device` supports stream-ordered allocation (`cudaDevAttrMemoryPoolsSupported`).
+ *
+ * Read once per device and cached (thread-safe). A failed query answers `true`: the allocation call then
+ * reports its own error.
+ */
+inline bool memoryPoolsSupported(int device) noexcept
+{
+    int forced = memoryPoolsSupportedOverride().load(std::memory_order_relaxed);
+    if (forced >= 0)
+        return forced != 0;
+    constexpr int kCached = 64;
+    static std::atomic<int> cache[kCached] = {};
+    // 0 = unknown, 1 = no pools, 2 = pools
+    if (device >= 0 && device < kCached) {
+        int known = cache[device].load(std::memory_order_acquire);
+        if (known != 0)
+            return known == 2;
+    }
+    int supported = 1;
+    if (cudaDeviceGetAttribute(&supported, cudaDevAttrMemoryPoolsSupported, device) != cudaSuccess) {
+        cudaGetLastError();
+        return true;
+    }
+    if (device >= 0 && device < kCached)
+        cache[device].store(supported != 0 ? 2 : 1, std::memory_order_release);
+    return supported != 0;
+}
 
 /** @brief Makes `device` the calling thread's current device while alive. */
 class DeviceGuard {
