@@ -201,9 +201,6 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
     COMPILE_DEFINITIONS "AETHER_HOST_VECTOR_MATH")
   list(APPEND TEST_FILES ${AETHER_PM_SOURCES})
   message(STATUS "> packet-math kernel TUs: " "${AETHER_PM_SOURCES}")
-else()
-  # The suite scores every function at the x86 widths; aarch64 routes pow alone, checked by `make faithful-gate`.
-  list(FILTER TEST_FILES EXCLUDE REGEX "test_PacketMath\\.(cpp|cu)$")
 endif()
 
 add_executable(aether_tests ${TEST_FILES})
