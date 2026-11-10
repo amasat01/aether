@@ -2,7 +2,7 @@
 
 Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
 
-## Unreleased
+## 0.7.5 (2026-11-10)
 
 This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ version. The public API is unchanged; the banded mode (double precision on GPUs with weak or no FP64) grows.
 
