@@ -12,6 +12,8 @@ This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ ver
 - **Banded expression chains.** `a * b + c` on banded values keeps the result unrestored between ops and normalises only where a consumer reads the parts in order (a division, a root, a comparison, a store). Where an op would need a normalised value and has none, the overload is deleted and the error names the fix.
 - Banded headers compile under NVRTC, and `aether-dsc` ships them in its payload.
 - The install page has a Best practices section: keep `aether-dsc` at the family release.
+- **`pow` vectorises on aarch64 with GCC.** Under `AETHER_HOST_VECTOR_MATH`, `aether::math::pow` has the aarch64 vector variants GCC asks for, faithfully rounded (error < 1 ULP) and checked by `make faithful-gate`, which now runs on aarch64. Every other function stays libm's there, and clang keeps libm.
+- The C++ test suite builds and runs on aarch64, Linux and macOS: the x86-only packet-math tests report skipped there, and so do the few whose reference needs a `long double` wider than `double` (Apple arm64).
 
 ### Changed
 
@@ -22,6 +24,7 @@ This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ ver
 ### Fixed
 
 - Banded headers build without warnings under C++23 with libc++ (Apple clang): the deprecated denorm style in the banded `numeric_limits` no longer warns.
+- The build finds OpenMP under Apple clang with Homebrew's `libomp`: the OpenMP flags pass as separate arguments, and `libomp`'s headers are on the include path.
 - Device allocation works on GPUs without memory pools (`cudaDevAttrMemoryPoolsSupported == 0`, common on virtualised GPUs): a stream-ordered `Chunk::allocate` falls back to plain `cudaMalloc` there, the chunk reports `streamOrdered() == false`, and allocating during a stream capture throws an error that names the missing pools.
 - `Assign` with a long unrolled fold builds under clang: the fold is chunked so clang's 256-operand limit is not hit.
 
