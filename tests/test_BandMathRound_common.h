@@ -51,6 +51,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include "tests/bandmath/BandMathCertRound.h"
 #include "tests/bandmath/golden_floor.h"
 #include "tests/bandmath/golden_ceil.h"
@@ -481,6 +483,7 @@ std::size_t mismatches(const std::vector<Pair>& rows)
 
 TEST(BandMathRound, FmodFastPathEqualsTheLoop)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     const char* names[] = { "general", "ambiguous", "small", "wide", "EDGE" };
     for (int w = 0; w < 5; ++w) {
         const auto rows = fmod_fast::corpus(w, 60000);

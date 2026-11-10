@@ -28,6 +28,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include "aether/banded/banded.h"
 
 #include <algorithm>
@@ -297,6 +299,7 @@ TEST(BandChain, AccuracyLazyWithinPerOpBound)
 /// the unrestored form leave the per-op bound? Evidence for `kBandChainMaxHops`.
 TEST(BandChain, HopsEvidence)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     std::mt19937_64 g(0x40B5u);
     for (int n = 1; n <= kMax + 3; ++n) {
         double maxRaw = 0, maxPer = 0;
@@ -597,6 +600,7 @@ TEST(BandChain, FacadeDoorsAdmitChainStates)
 
 TEST(BandChain, FmaHopsWithinBound)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     // The bound is relative to the magnitude the hop works at (the product and the addend), not to a result that
     // a cancelling addend has shrunk: the error is measured against the largest intermediate of the chain.
     std::mt19937_64 g(0xF3A5u);
@@ -653,6 +657,7 @@ inline bool sameRaw(bd::BandRaw x, bd::BandRaw y)
 
 TEST(BandChain, SingleLimbProductMatchesTheFullProduct)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     std::mt19937_64 g(0x5A17u);
     double maxErr[kMax + 2] = {};
     for (int it = 0; it < 20000; ++it) {
@@ -712,6 +717,7 @@ TEST(BandChain, ScalePow2OnRawIsExactAndKeepsTheState)
 
 TEST(BandChain, RecipRawAcceptsRawOperands)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     std::mt19937_64 g(0x4EC1Bu);
     double maxN = 0, maxR = 0;
     for (int it = 0; it < 20000; ++it) {
@@ -784,6 +790,7 @@ TEST(BandChain, RawExitTwinsKeepTheSignOfAnExactZero)
 
 TEST(BandChain, RawExitTwinsFeedTheChainWithinTheBound)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     std::mt19937_64 g(0x7B17u);
     double worst[4] = {};
     const auto rel = [](Q ref, const bd::BandRaw& got) {

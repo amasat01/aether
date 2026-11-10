@@ -20,6 +20,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include <aether/aether.h>
 
 namespace aether_tests {
@@ -573,6 +575,7 @@ TEST(LinalgTeamCholesky, AgreesAcrossTeamSizesAndInPlace)
 
 TEST(LinalgTeamCholesky, FactorMatchesTheOneThreadFactorToAFewUlp)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     // Entry for entry the same arithmetic as `linalg::cholesky`; the compiler may contract the two loops differently.
     constexpr std::size_t N = 32;
     const std::vector<double> a = spdMatrix<double>(N, 81), b = randomVector<double>(N, 82);

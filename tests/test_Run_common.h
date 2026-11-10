@@ -20,6 +20,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 namespace aether_tests {
 namespace {
 
@@ -173,16 +175,19 @@ TEST(AccumRun, AlignedRunCommitsOncePerWarp)
 
 TEST(AccumRun, HalfWarpRunCommitsOncePerHalf)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     runAll(byQuotient("aligned_48", Form::Aligned16, 1024 * 48, 48));
 }
 
 TEST(AccumRun, MisalignedWarpCommitsPerLane)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     runAll(byQuotient("misaligned", Form::Aligned32, 64 * 1024, 32, 1000));
 }
 
 TEST(AccumRun, TestedRunCommitsOncePerUniformWarp)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     runAll(byQuotient("tested_64", Form::Tested, 64 * 8192, 64));
     runAll(byQuotient("tested_8", Form::Tested, 64 * 1024, 8));
 }
