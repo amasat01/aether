@@ -124,11 +124,14 @@ TEST_F(PacketBatchedForTest, KnownAnswerScheduleThreeSizes)
         // Sanity: prove the tile-restart claim isn't vacuous — at least one
         // packet in this trace is a mid-stream tail packet (strictly
         // narrower than W), not merely the one at the very end of [0,100).
+        // At W = 1 (no SIMD ISA detected, e.g. aarch64) every packet is full: there is no tail.
         bool sawInteriorTail = false;
         for (std::size_t k = 0; k + 1 < expected.size(); ++k)
             if (expected[k].width < W)
                 sawInteriorTail = true;
-        EXPECT_TRUE(sawInteriorTail) << "Size3 must exercise a mid-stream tile-restart tail packet";
+        if (W > 1) {
+            EXPECT_TRUE(sawInteriorTail) << "Size3 must exercise a mid-stream tile-restart tail packet";
+        }
     }
 }
 

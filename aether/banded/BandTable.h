@@ -30,13 +30,17 @@
 
 #include "aether/banded/Band.h"
 #include "aether/banded/BandedReal.h"
+#ifndef __CUDACC_RTC__
 #include "aether/err/Error.h"
+#endif
 #include "aether/macros.h"
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <string>
+#endif
 #include <type_traits>
 
 namespace aether {
@@ -98,14 +102,6 @@ struct alignas(8) BandPair {
         : hi(h)
         , lo(l)
     {
-    }
-
-    /// @brief Named construction from limbs already known to satisfy the
-    /// pair invariant (a transcribed literal, for instance).
-    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr BandPair fromLimbs(
-        float h, float l)
-    {
-        return BandPair{ h, l };
     }
 
     // ── Decode ─────────────────────────────────────────────────────────────
@@ -201,6 +197,7 @@ static_assert(sizeof(BandPair) == 8 && alignof(BandPair) == 8, "BandPair must be
 static_assert(std::is_trivially_copyable_v<BandPair>,
     "BandPair must stay trivially copyable (SoA buffers, cudaMemcpy)");
 
+#ifndef __CUDACC_RTC__ // host-only: double interop
 // =====================================================================
 //  Host-side ingest (host only -- `double` must not appear in device code)
 // =====================================================================
@@ -350,6 +347,7 @@ inline BandPairTableStats bandPairTableFromDoubles(
     }
     return st;
 }
+#endif // __CUDACC_RTC__
 
 } // namespace banded
 } // namespace aether

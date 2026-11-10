@@ -311,7 +311,7 @@ std::size_t countRedUnderReductionConstantPerturbation(const Row* rows, std::siz
 // =========================================================================
 //  RED-first arm 2: DROPPED-POLYNOMIAL-TERM TWIN. sinCoreRaw/cosCoreRaw
 //  with their `c_0`/`d_0` Band-rung term skipped (the terminal
-//  `fmaRawSNoCancel(u, q, 1.0f)` step simply not run), over the REAL
+//  `fmaRawSDom(u, q, 1.0f)` step simply not run), over the REAL
 //  trigReduce. @see file docstring.
 //
 //  ★ WHY `c_0`/`d_0` and not a higher-order term: a first draft dropped
@@ -337,14 +337,14 @@ inline bd::BandRaw sinCoreRawDroppedC0(Band u)
     p       = bd::fmaRN(u.hi, p, -7.6471636098e-13f);
     p       = bd::fmaRN(u.hi, p, 1.6059044372e-10f);
     float ph = p, pl = 0.0f;
-    bd::ddFma(u.hi, u.lo, ph, pl, -2.5052107944e-08f, -4.4176230446e-16f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 2.7557318845e-06f, 3.7935712243e-14f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, -1.9841270114e-04f, 2.7255968749e-12f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 8.3333337680e-03f, -4.3461720334e-10f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, -2.5052107944e-08f, -4.4176230446e-16f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 2.7557318845e-06f, 3.7935712243e-14f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, -1.9841270114e-04f, 2.7255968749e-12f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 8.3333337680e-03f, -4.3461720334e-10f, ph, pl);
     bd::BandRaw q{ ph, pl, 0.0f };
-    q = bd::fmaRawNoCancel(u, q,
+    q = bd::fmaRawDom(u, q,
         bd::BandRaw{ -1.6666667163e-01f, 4.9670538793e-09f, -1.4802974103e-16f });
-    // c_0 (== 1) DROPPED -- the certified body's terminal fmaRawSNoCancel
+    // c_0 (== 1) DROPPED -- the certified body's terminal fmaRawSDom
     // scalar-addend step is simply not run.
     return q;
 }
@@ -354,14 +354,14 @@ inline bd::BandRaw cosCoreRawDroppedD0(Band u)
     p       = bd::fmaRN(u.hi, p, 4.7794772561e-14f);
     p       = bd::fmaRN(u.hi, p, -1.1470745361e-11f);
     float ph = p, pl = 0.0f;
-    bd::ddFma(u.hi, u.lo, ph, pl, 2.0876755880e-09f, 1.1082839147e-16f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, -2.7557319981e-07f, 7.5751122091e-15f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, 2.4801587642e-05f, -3.4069960937e-13f, ph, pl);
-    bd::ddFma(u.hi, u.lo, ph, pl, -1.3888889225e-03f, 3.3631094437e-11f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 2.0876755880e-09f, 1.1082839147e-16f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, -2.7557319981e-07f, 7.5751122091e-15f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, 2.4801587642e-05f, -3.4069960937e-13f, ph, pl);
+    bd::ddFmaDom(u.hi, u.lo, ph, pl, -1.3888889225e-03f, 3.3631094437e-11f, ph, pl);
     bd::BandRaw q{ ph, pl, 0.0f };
-    q = bd::fmaRawNoCancel(u, q,
+    q = bd::fmaRawDom(u, q,
         bd::BandRaw{ 4.1666667908e-02f, -1.2417634698e-09f, 3.7007435257e-17f });
-    q = bd::fmaRawSNoCancel(u, q, -0.5f); // d_1 kept
+    q = bd::fmaRawSDom(u, q, -0.5f); // d_1 kept
     // d_0 (== 1) DROPPED -- straight back to the caller without the
     // terminal scalar addend.
     return q;

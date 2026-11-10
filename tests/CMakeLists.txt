@@ -224,6 +224,23 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
   target_link_libraries(aether_faithful_check aether)
   target_include_directories(aether_faithful_check PRIVATE ../)
   target_compile_options(aether_faithful_check PRIVATE -Wall -Wextra -O3)
+elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+  # pow alone, the function routed on aarch64 (`make faithful-gate` passes --only pow).
+  set(AETHER_PM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/packetmath)
+  set(AETHER_PM_CHECK_MAIN ${AETHER_PM_DIR}/faithful_check_main.cpp)
+  set(AETHER_PM_ARM ${AETHER_PM_DIR}/pm_kernels_arm.cpp)
+  set_source_files_properties(${AETHER_PM_CHECK_MAIN} PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-ffp-contract=off")
+  if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(${AETHER_PM_ARM} PROPERTIES LANGUAGE CXX
+      COMPILE_OPTIONS "-ffp-contract=fast;-fno-trapping-math;-fno-math-errno;-mcpu=native"
+      COMPILE_DEFINITIONS "AETHER_HOST_VECTOR_MATH")
+  else()
+    set_source_files_properties(${AETHER_PM_ARM} PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-ffp-contract=off;-fno-math-errno")
+  endif()
+  add_executable(aether_faithful_check EXCLUDE_FROM_ALL ${AETHER_PM_CHECK_MAIN} ${AETHER_PM_ARM})
+  target_link_libraries(aether_faithful_check aether)
+  target_include_directories(aether_faithful_check PRIVATE ../)
+  target_compile_options(aether_faithful_check PRIVATE -Wall -Wextra -O3)
 endif()
 
 # test_Version.{cpp,cu} reads the expected version string at test-configure
@@ -235,6 +252,7 @@ endif()
 # shadows the root project's PROJECT_VERSION with an empty string in this
 # scope.
 target_compile_definitions(aether_tests PRIVATE AETHER_TEST_EXPECTED_VERSION="${AETHER_VERSION}")
+target_compile_definitions(aether_tests PRIVATE AETHER_RTC_ROW="${CMAKE_CURRENT_SOURCE_DIR}/rtc")
 
 # CUDA device TUs are capped at C++20 (nvcc's device-code ceiling); fix it
 # explicitly on the test binary target so the requirement holds regardless

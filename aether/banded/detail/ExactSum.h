@@ -64,6 +64,25 @@ namespace detail {
     return Band{ s3, u2, addRN(v2, v1) };
 }
 
+/// @brief `exactSum4` without the special-leading-limb early return: for
+/// callers whose operands are inside the admitted range by construction --
+/// the caller's normalise re-guards.
+[[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band exactSum4Admitted(
+    float x, float y, float z, float w)
+{
+    float s1, e1;
+    twoSum(z, w, s1, e1);
+    float s2, e2;
+    twoSum(y, s1, s2, e2);
+    float s3, e3;
+    twoSum(x, s2, s3, e3);
+    float u1, v1;
+    twoSum(e3, e2, u1, v1);
+    float u2, v2;
+    twoSum(u1, e1, u2, v2);
+    return Band{ s3, u2, addRN(v2, v1) };
+}
+
 } // namespace detail
 } // namespace banded
 } // namespace aether

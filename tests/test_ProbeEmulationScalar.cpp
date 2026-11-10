@@ -6,7 +6,7 @@
 //
 // Question: is aether's rank-generic core (Item/View/expr/assign/reductions)
 // already scalar-generic — usable with a future non-native (e.g.
-// SoftDouble/emulation) scalar type — or does it silently assume
+// banded/emulation) scalar type — or does it silently assume
 // `double`/`float` somewhere an emulation-scalar rollout would trip over?
 // `ProbeSd` is a stub non-native scalar: a plain aggregate wrapping one
 // `double`, with the arithmetic/compare operators the core machinery below
@@ -61,7 +61,7 @@ AETHER_DEVICEHOST() constexpr ProbeSd operator*(ProbeSd a, ProbeSd b) { return P
 AETHER_DEVICEHOST() constexpr ProbeSd operator/(ProbeSd a, ProbeSd b) { return ProbeSd{ a.v / b.v }; }
 AETHER_DEVICEHOST() constexpr bool operator<(ProbeSd a, ProbeSd b) { return a.v < b.v; }
 AETHER_DEVICEHOST() constexpr bool operator>(ProbeSd a, ProbeSd b) { return a.v > b.v; }
-AETHER_DEVICEHOST() constexpr bool operator==(ProbeSd a, ProbeSd b) { return a.v == b.v; }
+[[maybe_unused]] AETHER_DEVICEHOST() constexpr bool operator==(ProbeSd a, ProbeSd b) { return a.v == b.v; }
 
 class ProbeEmulationScalarTest : public ::testing::Test { };
 

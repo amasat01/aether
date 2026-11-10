@@ -82,7 +82,7 @@ namespace math {
 AETHER_MATH_UNARY(abs, fabsf, ::fabs, AETHER_MATH_HOST_ROUTE(abs, x))
 /** @brief …on a banded operand: three XORs against the leading limb's own sign
  *         bit, exact and total, returning the working carrier. */
-AETHER_MATH_UNARY_BAND(abs, abs)
+AETHER_MATH_UNARY_BAND_ORDERED(abs, abs)
 
 /** @brief `|a|` with the sign of `b`. `copysign` is one of the five certified
  *         banded entry points, and a facade entry that exists for the
@@ -90,7 +90,7 @@ AETHER_MATH_UNARY_BAND(abs, abs)
  *         trap of exactly the kind this facade exists to prevent. */
 AETHER_MATH_BINARY(copysign, copysignf, ::copysign, AETHER_MATH_HOST_ROUTE(copysign, a, b))
 /** @brief …on a banded operand: ONE XOR of two sign bits, then the mask. */
-AETHER_MATH_BINARY_BAND(copysign, copysign)
+AETHER_MATH_BINARY_BAND_ORDERED(copysign, copysign)
 
 /** @brief Floor. */
 AETHER_MATH_UNARY(floor, floorf, ::floor, AETHER_MATH_HOST_ROUTE(floor, x))
@@ -101,14 +101,14 @@ AETHER_MATH_BINARY(fmax, fmaxf, ::fmax, AETHER_MATH_HOST_ROUTE(fmax, a, b))
 /** @brief …on a banded operand. The comparison is the certified `sub`'s leading
  *         limb, never a lexicographic limb compare (which is WRONG — see
  *         `banded::detail::fmax`'s own counterexample). */
-AETHER_MATH_BINARY_BAND(fmax, fmax)
+AETHER_MATH_BINARY_BAND_ORDERED(fmax, fmax)
 /** @brief …on an integer type: the exact integer maximum (no floating-point round trip). */
 AETHER_MATH_BINARY_INT(fmax, >)
 
 /** @brief Minimum of two values (floating-point `fmin` semantics). */
 AETHER_MATH_BINARY(fmin, fminf, ::fmin, AETHER_MATH_HOST_ROUTE(fmin, a, b))
 /** @brief …on a banded operand. @see fmax. */
-AETHER_MATH_BINARY_BAND(fmin, fmin)
+AETHER_MATH_BINARY_BAND_ORDERED(fmin, fmin)
 /** @brief …on an integer type: the exact integer minimum. */
 AETHER_MATH_BINARY_INT(fmin, <)
 
@@ -117,7 +117,7 @@ AETHER_MATH_BINARY_INT(fmin, <)
 AETHER_MATH_BINARY(min, fminf, ::fmin, AETHER_MATH_HOST_ROUTE(fmin, a, b))
 /** @brief …on a banded operand — the same certified `fmin`, under the alias
  *         spelling, so a consumer migrating by spelling swap keeps both names. */
-AETHER_MATH_BINARY_BAND(min, fmin)
+AETHER_MATH_BINARY_BAND_ORDERED(min, fmin)
 /** @brief …on an integer type: the exact integer minimum. */
 AETHER_MATH_BINARY_INT(min, <)
 
@@ -133,7 +133,7 @@ AETHER_MATH_UNARY(sqrt, sqrtf, ::sqrt, AETHER_MATH_HOST_ROUTE(sqrt, x))
 
 /// \cond AETHER_DOXYGEN_REQUIRES_OWN_LINE_WORKAROUND
 template<class T>
-    requires(!aether::banded::IsBandedFamily<T>)
+    requires(!aether::banded::IsBandedDoor<T>)
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() T fma(T a, T b, T c)
 {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>, "aether::math::fma: T must be float or double");

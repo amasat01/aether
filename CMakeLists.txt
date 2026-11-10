@@ -138,6 +138,8 @@ endif()
 # include OpenMP
 find_package(OpenMP REQUIRED)
 message(STATUS "> Found OpenMP")
+# One flag string can hold several arguments (Apple clang: "-Xclang -fopenmp"): pass them as a list
+separate_arguments(AETHER_OPENMP_CXX_FLAGS NATIVE_COMMAND "${OpenMP_CXX_FLAGS}")
 
 # Compile/link flags for CUDA/C++
 if(NOT DEFINED AETHER_MARCH)
@@ -172,7 +174,7 @@ if(NOT AETHER_CPP_MODE)
 endif()
 
 # C++ >= 23 is required (host side; device TUs are capped at C++20, see above)
-list(APPEND AETHER_CXX_FLAGS ${AETHER_COMMON_FLAGS} ${OpenMP_CXX_FLAGS} -Wpedantic)
+list(APPEND AETHER_CXX_FLAGS ${AETHER_COMMON_FLAGS} ${AETHER_OPENMP_CXX_FLAGS} -Wpedantic)
 
 # Treat warnings as errors - for CI pipeline
 if (AETHER_WARN_AS_ERR)
@@ -209,6 +211,10 @@ target_include_directories(${AETHER_LIB} INTERFACE
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(${AETHER_LIB} INTERFACE ${OpenMP_CXX_LIBRARIES})
+# omp.h outside the compiler's own search path (a separately installed libomp)
+if(OpenMP_CXX_INCLUDE_DIRS)
+  target_include_directories(${AETHER_LIB} SYSTEM INTERFACE "$<BUILD_INTERFACE:${OpenMP_CXX_INCLUDE_DIRS}>")
+endif()
 # Common options
 target_compile_features(${AETHER_LIB} INTERFACE cxx_std_23)
 target_compile_definitions(${AETHER_LIB} INTERFACE ${AETHER_DEFINES})

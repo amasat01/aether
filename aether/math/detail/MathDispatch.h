@@ -88,7 +88,7 @@
 #if defined(AETHER_DEVICE_COMPILE)
 #define AETHER_MATH_BINARY(NAME, FLOATFN, DOUBLEFN, STDEXPR)                                                         \
     template<class T>                                                                                                \
-        requires(!aether::banded::IsBandedFamily<T> && !std::is_integral_v<T>)                                       \
+        requires(!aether::banded::IsBandedDoor<T> && !std::is_integral_v<T>)                                         \
     AETHER_DEVICEHOST() AETHER_FORCEINLINE() T NAME(T a, T b)                                                        \
     {                                                                                                                \
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
@@ -102,7 +102,7 @@
 #else
 #define AETHER_MATH_BINARY(NAME, FLOATFN, DOUBLEFN, STDEXPR)                                                         \
     template<class T>                                                                                                \
-        requires(!aether::banded::IsBandedFamily<T> && !std::is_integral_v<T>)                                       \
+        requires(!aether::banded::IsBandedDoor<T> && !std::is_integral_v<T>)                                         \
     AETHER_MATH_HOST_ABI AETHER_DEVICEHOST() AETHER_FORCEINLINE() T NAME(T a, T b)                                                        \
     {                                                                                                                \
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
@@ -148,21 +148,29 @@
 //
 // Identical for the device and host passes — the banded backends are
 // AETHER_DEVICEHOST() — so there is no #ifdef pair here.
-#define AETHER_MATH_UNARY_BAND(NAME, BANDFN)                                                                         \
+#define AETHER_MATH_UNARY_BAND_ON(CONCEPT, NAME, BANDFN)                                                             \
     template<class T>                                                                                                \
-        requires aether::banded::IsBandedFamily<T>                                                                    \
+        requires aether::banded::CONCEPT<T>                                                                          \
     [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() auto NAME(T x)                                            \
     {                                                                                                                \
         return aether::banded::detail::BandedFacade<T>::BANDFN(                                                      \
             static_cast<aether::banded::detail::BandedWorkingOfT<T>>(x));                                            \
     }
 
-#define AETHER_MATH_BINARY_BAND(NAME, BANDFN)                                                                        \
+#define AETHER_MATH_BINARY_BAND_ON(CONCEPT, NAME, BANDFN)                                                            \
     template<class A, class B>                                                                                       \
-        requires(aether::banded::IsBandedFamily<A> && aether::banded::IsBandedFamily<B>)                             \
+        requires(aether::banded::CONCEPT<A> && aether::banded::CONCEPT<B>)                                           \
     [[nodiscard]] AETHER_DEVICEHOST() AETHER_FORCEINLINE() auto NAME(A a, B b)                                       \
     {                                                                                                                \
         return aether::banded::detail::BandedFacade<A>::BANDFN(                                                      \
             static_cast<aether::banded::detail::BandedWorkingOfT<A>>(a),                                             \
             static_cast<aether::banded::detail::BandedWorkingOfT<B>>(b));                                            \
     }
+
+// A DOOR companion also admits an unrestored chain state (`exp(a * b + c)`): the cast to `Band` is the
+// normalising constructor, so the chain pays its one normalise here. The limb-order readers (`_ORDERED`)
+// admit the family only, so a chain state reaching them stays a compile error.
+#define AETHER_MATH_UNARY_BAND(NAME, BANDFN) AETHER_MATH_UNARY_BAND_ON(IsBandedDoor, NAME, BANDFN)
+#define AETHER_MATH_BINARY_BAND(NAME, BANDFN) AETHER_MATH_BINARY_BAND_ON(IsBandedDoor, NAME, BANDFN)
+#define AETHER_MATH_UNARY_BAND_ORDERED(NAME, BANDFN) AETHER_MATH_UNARY_BAND_ON(IsBandedFamily, NAME, BANDFN)
+#define AETHER_MATH_BINARY_BAND_ORDERED(NAME, BANDFN) AETHER_MATH_BINARY_BAND_ON(IsBandedFamily, NAME, BANDFN)

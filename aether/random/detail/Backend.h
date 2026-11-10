@@ -21,7 +21,7 @@
  * word and the draws are independent. The raw block words equal cuRAND's;
  * the uniform conversion is aether's own open-interval one (below).
  *
- * No SoftDouble arm: aether carries no SoftDouble/Banded scalar backend in
+ * No banded arm: aether carries no Banded scalar backend in
  * this module yet — that is not yet implemented.
  *
  * Keying: the SplitMix64 finalizer, the `streamKey` mixing,
@@ -185,7 +185,7 @@ template<typename Real>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real uniform01(std::uint64_t seed, offset_t global, std::uint64_t counter)
 {
     static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
-        "aether::random: Real must be float or double (SoftDouble support is not yet implemented)");
+        "aether::random: Real must be float or double (banded support is not yet implemented)");
     const Uint4 x = philoxBlock(seed, global, counter);
     if constexpr (std::is_same_v<Real, double>) {
         return uniformDoubleFromWord(x.x);
@@ -210,7 +210,7 @@ template<typename Real>
 AETHER_DEVICEHOST() AETHER_FORCEINLINE() Real standardNormal(std::uint64_t seed, offset_t global, std::uint64_t counter)
 {
     static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>,
-        "aether::random: Real must be float or double (SoftDouble support is not yet implemented)");
+        "aether::random: Real must be float or double (banded support is not yet implemented)");
     const Uint4 x = philoxBlock(seed, global, counter);
     if constexpr (std::is_same_v<Real, double>) {
         const double u = uniformDoubleHq(x.x, x.y);

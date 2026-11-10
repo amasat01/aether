@@ -36,6 +36,15 @@ AETHER_DEVICEHOST() constexpr detail::Sum<L, R, true> operator-(const L& l, cons
     return detail::Sum<L, R, true>(l, r);
 }
 
+/** @brief Component-wise `l * r` of two same-shaped expressions. Matrix products (`Product.h`'s rank-2 operands) are
+ *         more constrained and win for those ranks; the scalar overloads below take `element_type`, which an
+ *         expression operand never matches. */
+template<aether_expression L, aether_expression R>
+AETHER_DEVICEHOST() constexpr detail::Product<L, R> operator*(const L& l, const R& r)
+{
+    return detail::Product<L, R>(l, r);
+}
+
 /** @brief `scalar * expr`, component-wise. */
 template<aether_expression E>
 AETHER_DEVICEHOST() constexpr detail::CWiseScale<E> operator*(const typename E::element_type& s, const E& e)

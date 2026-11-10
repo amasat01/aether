@@ -47,6 +47,8 @@
 #include "aether/banded/Band.h"
 #include "aether/banded/BandedReal.h"
 #include "aether/banded/BandExpLog.h"
+#include "aether/banded/BandHyp.h"
+#include "aether/banded/BandInvHyp.h"
 #include "aether/banded/BandRoot.h"
 #include "aether/banded/BandTrig.h"
 #include "aether/banded/BandRound.h"
@@ -186,6 +188,67 @@ struct BandedFacade {
         return banded::detail::exp(a);
     }
     /**
+     * @brief `e^a - 1`. One-line forward to `banded::detail::expm1`
+     *        (`BandExpLog.h`).
+     */
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band expm1(Band a)
+    {
+        return banded::detail::expm1(a);
+    }
+    /**
+     * @brief `log(1 + a)`. One-line forward to `banded::detail::log1p`
+     *        (`BandExpLog.h`).
+     */
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band log1p(Band a)
+    {
+        return banded::detail::log1p(a);
+    }
+    /// @brief `2^a`. One-line forward to `banded::detail::exp2` (`BandExpLog.h`).
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band exp2(Band a)
+    {
+        return banded::detail::exp2(a);
+    }
+    /// @brief Base `2` logarithm. One-line forward to `banded::detail::log2`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band log2(Band a)
+    {
+        return banded::detail::log2(a);
+    }
+    /// @brief Base `10` logarithm. One-line forward to `banded::detail::log10`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band log10(Band a)
+    {
+        return banded::detail::log10(a);
+    }
+    /// @brief Inverse hyperbolic sine. One-line forward to `banded::detail::asinh` (`BandInvHyp.h`).
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band asinh(Band a)
+    {
+        return banded::detail::asinh(a);
+    }
+    /// @brief Inverse hyperbolic cosine. One-line forward to `banded::detail::acosh`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band acosh(Band a)
+    {
+        return banded::detail::acosh(a);
+    }
+    /// @brief Inverse hyperbolic tangent. One-line forward to `banded::detail::atanh`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band atanh(Band a)
+    {
+        return banded::detail::atanh(a);
+    }
+    /// @brief Hyperbolic tangent. One-line forward to `banded::detail::tanh` (`BandHyp.h`).
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band tanh(Band a)
+    {
+        return banded::detail::tanh(a);
+    }
+    /// @brief Hyperbolic sine. One-line forward to `banded::detail::sinh`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band sinh(Band a)
+    {
+        return banded::detail::sinh(a);
+    }
+    /// @brief Hyperbolic cosine. One-line forward to `banded::detail::cosh`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band cosh(Band a)
+    {
+        return banded::detail::cosh(a);
+    }
+    /**
      * @brief Base `e` logarithm. One-line forward to `banded::detail::log`
      *        (`BandExpLog.h`).
      */
@@ -246,6 +309,11 @@ struct BandedFacade {
     [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band sin(Band a)
     {
         return banded::detail::sin(a);
+    }
+    /// @brief `tan(x)`. Forwards to `BandTrig.h`'s `tan`.
+    [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band tan(Band a)
+    {
+        return banded::detail::tan(a);
     }
     /// @brief `cos(x)`. Forwards to `BandTrig.h`'s `cos`.
     [[nodiscard]] static AETHER_DEVICEHOST() AETHER_FORCEINLINE() Band cos(Band a)

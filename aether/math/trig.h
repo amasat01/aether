@@ -25,11 +25,8 @@
  * primitive with no `aether::math` unary/binary shape, staying
  * `aether::banded::detail`-only (see `BandTrig.h`).
  *
- * `tan`/`tanh` use the plain `AETHER_MATH_UNARY` scaffold directly, the
- * same as `atan`/`asin`/`acos` in `invtrig.h`. Real-only (`float`/
- * `double`): no `AETHER_MATH_UNARY_BAND` companion is defined for either
- * name yet, so a `Band`/`BandedReal` argument hits the scaffold's own
- * `static_assert` and fails to compile with that message.
+ * `tan` and `tanh` use the plain `AETHER_MATH_UNARY` scaffold directly,
+ * followed by their `AETHER_MATH_UNARY_BAND` companions.
  */
 
 #include <cmath>
@@ -41,11 +38,16 @@
 namespace aether {
 namespace math {
 
-/** @brief Tangent of `x`. Real-only: no banded overload yet. */
+/** @brief Tangent of `x`. */
 AETHER_MATH_UNARY(tan, tanf, ::tan, AETHER_MATH_HOST_ROUTE(tan, x))
+/** @brief …on a banded operand: `sin/cos` (`BandTrig.h::tan`); the claim is
+ *         relative only where `|cos x| >= 2^-13`. */
+AETHER_MATH_UNARY_BAND(tan, tan)
 
-/** @brief Hyperbolic tangent of `x`. Real-only: no banded overload yet. */
+/** @brief Hyperbolic tangent of `x`. */
 AETHER_MATH_UNARY(tanh, tanhf, ::tanh, AETHER_MATH_HOST_ROUTE(tanh, x))
+/** @brief …on a banded operand: `expm1(2|x|)/(expm1(2|x|) + 2)` (`BandHyp.h`). */
+AETHER_MATH_UNARY_BAND(tanh, tanh)
 
 /** @brief …`sin` on a banded operand: forwards to the certified
  *         `BandTrig.h::sin` (coefficient-swap core) via `BandedFacade`. */

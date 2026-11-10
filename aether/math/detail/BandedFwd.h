@@ -50,6 +50,12 @@ namespace banded {
 // Names only. The definitions live in aether/banded/{Band,BandedReal}.h.
 struct Band;
 struct BandedReal;
+namespace detail {
+template<int K>
+struct BandRawT;
+struct BandRawCancel;
+struct BandRawCancelN;
+} // namespace detail
 
 /* ── The BANDED family ────────────────────────────────────────────────────
  *
@@ -74,6 +80,23 @@ template<typename T>
 concept IsBandedStorage = std::same_as<std::remove_cvref_t<T>, BandedReal>;
 template<typename T>
 concept IsBandedFamily = IsBandedWorking<T> || IsBandedStorage<T>;
+
+/// @brief The unrestored chain states (`Band * Band`, `Band + Band`, ...): they convert to `Band` through the
+/// normalising constructor, so a facade door that takes a `Band` takes them too, normalising once at entry.
+template<typename T>
+inline constexpr bool kIsBandedChainState = false;
+template<int K>
+inline constexpr bool kIsBandedChainState<detail::BandRawT<K>> = true;
+template<>
+inline constexpr bool kIsBandedChainState<detail::BandRawCancel> = true;
+template<>
+inline constexpr bool kIsBandedChainState<detail::BandRawCancelN> = true;
+template<typename T>
+concept IsBandedChain = kIsBandedChainState<std::remove_cvref_t<T>>;
+/// @brief What a facade door admits: the family, or a chain state that the door normalises on entry. The
+/// limb-order readers (`abs`, `copysign`, `fmax`, `fmin`, `min`) admit the family only.
+template<typename T>
+concept IsBandedDoor = IsBandedFamily<T> || IsBandedChain<T>;
 
 namespace detail {
 

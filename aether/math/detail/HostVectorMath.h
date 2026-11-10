@@ -12,7 +12,8 @@
  *
  * ACTIVATION. Only when the TU defines `AETHER_HOST_VECTOR_MATH` before
  * including any aether header (e.g. `-DAETHER_HOST_VECTOR_MATH`), and only
- * for host compiles by GCC on x86-64 that are not nvcc passes. Without the
+ * for host compiles by GCC on x86-64 or aarch64 that are not nvcc passes
+ * (aarch64 routes `pow` only, see AARCH64 below). Without the
  * macro this header is never included and every `aether::math` host leg is
  * the `std::` call it always was — same tokens, same code, same bits.
  *
@@ -85,6 +86,15 @@
  * tests/test_PacketMath_common.h's `HookUnderContractionMatchesKernels`
  * (pm_hook.cpp is built with `-ffp-contract=fast`).
  *
+ * AARCH64. GCC on aarch64 requests `_ZGVnN2vv_` (and, for a conditional call,
+ * `_ZGVnM2vv_`) for a function declared `simd`, so `pow` gets exactly those two
+ * variants, under the same anchors as on x86-64, with the same `pm::vpow` body
+ * on `float64x2_t`. The variants use the vector calling convention the
+ * vectoriser expects of them (`aarch64_vector_pcs`). `pow` is the one
+ * function whose scalar libm call keeps the calling loop scalar and which has
+ * a variant here; every other `hostvec::` name on this target is the `std::`
+ * call it always was. Clang on aarch64 has no route: it keeps libm.
+ *
  * ODR. Every TU in one binary that defines the macro must be compiled for
  * the same `-m`/`-march` target, as for any inline function whose body
  * depends on ISA flags.
@@ -100,8 +110,8 @@
  * keep the loop scalar.
  */
 
-#if !defined(__GNUC__) || defined(__clang__) || !defined(__x86_64__)
-#error "AETHER_HOST_VECTOR_MATH needs GCC targeting x86-64 (vector function ABI)"
+#if !defined(__GNUC__) || defined(__clang__) || !(defined(__x86_64__) || defined(__aarch64__))
+#error "AETHER_HOST_VECTOR_MATH needs GCC targeting x86-64 or aarch64 (vector function ABI)"
 #endif
 
 #if !defined(AETHER_HVM_MASKED)
@@ -111,6 +121,135 @@
 #define AETHER_HVM_MASKED 1
 #endif
 #endif
+
+// Masked variants exist only when AETHER_HVM_MASKED is 1 (see the header
+// comment): the argument list of AETHER_HVM_IF_MASKED vanishes otherwise.
+#if AETHER_HVM_MASKED
+#define AETHER_HVM_IF_MASKED(...) __VA_ARGS__
+#define AETHER_HVM_SIMD_ATTR simd
+#else
+#define AETHER_HVM_IF_MASKED(...)
+#define AETHER_HVM_SIMD_ATTR simd("notinbranch")
+#endif
+
+#if defined(__aarch64__)
+
+#include <arm_neon.h>
+#include <cmath>
+#include <type_traits>
+
+// Contraction off for the packet math and the symbols below (CONTRACTION
+// above); <arm_neon.h> comes first so the intrinsics keep their own attributes.
+#pragma GCC push_options
+#pragma GCC optimize("fp-contract=off")
+
+#include "aether/backend/cpu/simd/math/PacketExpLog.h"
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
+
+#define AETHER_HVM_ATTR __attribute__((visibility("hidden"))) inline
+#define AETHER_HVM_VATTR __attribute__((visibility("hidden"), aarch64_vector_pcs)) inline
+
+extern "C" {
+__attribute__((AETHER_HVM_SIMD_ATTR, const, nothrow)) double aether_hvm_pow(double, double);
+}
+
+namespace aether {
+namespace math {
+namespace detail {
+namespace hvm_abi {
+AETHER_HVM_ATTR double pow_s1(double x, double y) __asm__("aether_hvm_pow");
+AETHER_HVM_ATTR double pow_s1(double x, double y) { return ::aether::simd::pm::vpow(x, y); }
+AETHER_HVM_VATTR float64x2_t pow_n2(float64x2_t x, float64x2_t y) __asm__("_ZGVnN2vv_aether_hvm_pow");
+AETHER_HVM_VATTR float64x2_t pow_n2(float64x2_t x, float64x2_t y) { return ::aether::simd::pm::vpow(x, y); }
+AETHER_HVM_IF_MASKED(
+    AETHER_HVM_VATTR float64x2_t pow_m2(float64x2_t x, float64x2_t y, float64x2_t m) __asm__("_ZGVnM2vv_aether_hvm_pow");
+    AETHER_HVM_VATTR float64x2_t pow_m2(float64x2_t x, float64x2_t y, float64x2_t m) {
+        namespace pm = ::aether::simd::pm;
+        const auto on = pm::inz(pm::bits(m));
+        return pm::vpow(pm::select<float64x2_t>(on, x, pm::bc<float64x2_t>(1.0)),
+                        pm::select<float64x2_t>(on, y, pm::bc<float64x2_t>(1.0)));
+    })
+
+/// The emission anchor of `pow` (EMISSION above).
+struct pow_keep_t {
+    decltype(&pow_s1) s1;
+    decltype(&pow_n2) n2;
+    AETHER_HVM_IF_MASKED(decltype(&pow_m2) m2;)
+};
+template<class D>
+__attribute__((used, visibility("hidden"))) inline constexpr pow_keep_t pow_keep{
+    &pow_s1, &pow_n2 AETHER_HVM_IF_MASKED(, &pow_m2)};
+} // namespace hvm_abi
+} // namespace detail
+} // namespace math
+} // namespace aether
+
+#undef AETHER_HVM_VATTR
+#undef AETHER_HVM_ATTR
+
+#pragma GCC pop_options
+
+namespace aether {
+namespace math {
+namespace detail {
+/// `pow` goes to the simd-declared symbol; every other name is `std::`'s.
+namespace hostvec {
+template<class D>
+    requires std::is_same_v<D, double>
+inline D pow(D a, D b)
+{
+    (void)&hvm_abi::pow_keep<D>;
+    return ::aether_hvm_pow(a, b);
+}
+inline float pow(float a, float b) { return std::pow(a, b); }
+using std::abs;
+using std::acos;
+using std::acosh;
+using std::asin;
+using std::asinh;
+using std::atan;
+using std::atan2;
+using std::atanh;
+using std::cbrt;
+using std::ceil;
+using std::copysign;
+using std::cos;
+using std::cosh;
+using std::exp;
+using std::exp2;
+using std::expm1;
+using std::fdim;
+using std::floor;
+using std::fmax;
+using std::fmin;
+using std::hypot;
+using std::log;
+using std::log10;
+using std::log1p;
+using std::log2;
+using std::rint;
+using std::round;
+using std::sin;
+using std::sinh;
+using std::sqrt;
+using std::tan;
+using std::tanh;
+using std::trunc;
+// The two facade legs spelled by a fallback expression on the default path.
+template<class T>
+inline T exp10(T x) { return std::pow(T(10), x); }
+template<class T>
+inline T rsqrt(T x) { return T(1) / std::sqrt(x); }
+} // namespace hostvec
+} // namespace detail
+} // namespace math
+} // namespace aether
+
+#pragma GCC diagnostic pop
+
+#else // x86-64
 
 #include <cmath>
 #include <immintrin.h>
@@ -149,16 +288,6 @@
 #define AETHER_HVM_IF_AVX512(...) __VA_ARGS__
 #else
 #define AETHER_HVM_IF_AVX512(...)
-#endif
-
-// Masked variants exist only when AETHER_HVM_MASKED is 1 (see the header
-// comment): the argument list of AETHER_HVM_IF_MASKED vanishes otherwise.
-#if AETHER_HVM_MASKED
-#define AETHER_HVM_IF_MASKED(...) __VA_ARGS__
-#define AETHER_HVM_SIMD_ATTR simd
-#else
-#define AETHER_HVM_IF_MASKED(...)
-#define AETHER_HVM_SIMD_ATTR simd("notinbranch")
 #endif
 
 // One vector-ABI variant: C++ name NAME_TAG, assembler name SYM.
@@ -312,8 +441,6 @@ AETHER_HVM_DEFINE_BINARY(fdim, vfdim)
 #undef AETHER_HVM_IF_AVX
 #undef AETHER_HVM_IF_AVX2
 #undef AETHER_HVM_IF_AVX512
-#undef AETHER_HVM_IF_MASKED
-#undef AETHER_HVM_SIMD_ATTR
 #undef AETHER_HVM_ATTR
 
 #pragma GCC pop_options
@@ -405,3 +532,8 @@ inline float fmin(float a, float b) { return std::fmin(a, b); }
 } // namespace aether
 
 #pragma GCC diagnostic pop
+
+#endif // aarch64 / x86-64
+
+#undef AETHER_HVM_IF_MASKED
+#undef AETHER_HVM_SIMD_ATTR

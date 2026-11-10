@@ -51,6 +51,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include "tests/bandmath/BandMathCertRound.h"
 #include "tests/bandmath/golden_floor.h"
 #include "tests/bandmath/golden_ceil.h"
@@ -62,6 +64,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <random>
+#include <vector>
 
 namespace aether_tests {
 namespace bandmath {
@@ -376,6 +381,133 @@ TEST(BandMathRound, FmaRedFirstIdentityMutant)
     std::fprintf(stderr, "BandMathRound fma RED-first(identity-mutant): %zu/%zu rows RED\n", red,
         ::aether_tests::bandmath_golden::fma::kInDomainCount);
     EXPECT_GT(red, ::aether_tests::bandmath_golden::fma::kInDomainCount / 10);
+}
+
+// =========================================================================
+//  fmod's one-digit fast path against the chunked loop it replaces, limb for limb, on four corpora: general
+//  quotients below 2^24 with random three-limb divisors, the ambiguous band (a remainder within 2^-k of 0 or of
+//  |y|), |x| < |y| with exact multiples, and wide quotients (the loop path); plus the EDGE corpus (a divisor with
+//  b.lo = -1/2 ulp(b.hi) and x = n*b +- t) that only the margin-tested exit survives. The mutant arm drops the
+//  margin and must go RED on the EDGE corpus.
+// =========================================================================
+namespace fmod_fast {
+
+#if defined(__aarch64__)
+// aarch64 has no __float128; long double is the same 113-bit format on Linux
+using Q = long double;
+#else
+using Q = __float128;
+#endif
+inline Q val(Band b) { return static_cast<Q>(b.hi) + b.lo + b.tail; }
+inline Band fromQ(Q v)
+{
+    const float h = static_cast<float>(v);
+    Q r           = v - h;
+    const float l = static_cast<float>(r);
+    r -= l;
+    return Band{ h, l, static_cast<float>(r) };
+}
+inline Q pow2(int e) { return static_cast<Q>(std::ldexp(1.0, e)); }
+
+struct Pair {
+    Band x, y;
+};
+
+inline std::vector<Pair> corpus(int which, std::size_t count)
+{
+    std::mt19937_64 g(0xF30D + which);
+    std::uniform_real_distribution<double> u01(0, 1);
+    std::vector<Pair> out;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (which == 0) { // general
+            const int e = -40 + static_cast<int>(g() % 81);
+            Band yb     = fromQ(pow2(e) * (1 + static_cast<Q>(u01(g))));
+            Q y         = val(yb);
+            const long n = static_cast<long>(u01(g) * (1 << (g() % 25)));
+            Q x         = n * y + static_cast<Q>(u01(g)) * y;
+            if (g() & 1) x = -x;
+            if (g() & 1) { y = -y; yb = fromQ(y); }
+            out.push_back({ fromQ(x), yb });
+        } else if (which == 1) { // ambiguous band
+            const int e  = -20 + static_cast<int>(g() % 41);
+            const Q y    = val(fromQ(pow2(e) * (1 + static_cast<Q>(u01(g)))));
+            const long n = 1 + static_cast<long>(u01(g) * (1 << (g() % 24)));
+            const int k  = 18 + static_cast<int>(g() % 43);
+            const Q dlt  = pow2(-k) * (1 + static_cast<Q>(u01(g))) * y;
+            Q x          = (g() & 1) ? n * y + dlt : n * y - dlt;
+            if (g() & 1) x = -x;
+            out.push_back({ fromQ(x), fromQ(y) });
+        } else if (which == 2) { // |x| < |y| and exact multiples
+            const int e = -20 + static_cast<int>(g() % 41);
+            const Q y   = val(fromQ(pow2(e) * (1 + static_cast<Q>(u01(g)))));
+            Q x         = (g() & 1) ? y * static_cast<Q>(u01(g)) : static_cast<Q>(1 + static_cast<long>(u01(g) * 1000)) * y;
+            if (g() & 1) x = -x;
+            out.push_back({ fromQ(x), fromQ(y) });
+        } else if (which == 3) { // wide quotients
+            const int e = -10 + static_cast<int>(g() % 21);
+            const Q y   = val(fromQ(pow2(e) * (1 + static_cast<Q>(u01(g)))));
+            const int k = 24 + static_cast<int>(g() % 40);
+            Q x         = pow2(e + k) * (1 + static_cast<Q>(u01(g)));
+            if (g() & 1) x = -x;
+            out.push_back({ fromQ(x), fromQ(y) });
+        } else { // EDGE: b.lo = -1/2 ulp(b.hi), x = n*b +- t, t << ulp
+            const int e  = -10 + static_cast<int>(g() % 21);
+            float bh     = std::ldexp(1.0f + static_cast<float>(u01(g)), e);
+            bh           = std::ldexp(std::floor(std::ldexp(bh, 23 - e)), e - 23);
+            const float ub = std::ldexp(1.0f, e - 23);
+            const Band yb{ bh, -0.5f * ub, 0.0f };
+            const long n = 1 + static_cast<long>(u01(g) * (1 << (g() % 24)));
+            const int k  = 25 + static_cast<int>(g() % 40);
+            const Q t    = pow2(-k) * (1 + static_cast<Q>(u01(g))) * ub;
+            out.push_back({ fromQ(n * val(yb) + ((g() & 1) ? t : -t)), yb });
+        }
+    }
+    return out;
+}
+
+template<bool kMargin>
+std::size_t mismatches(const std::vector<Pair>& rows)
+{
+    std::size_t bad = 0;
+    for (const auto& r : rows) {
+        const Band a = bd::abs(r.x), b = bd::abs(r.y);
+        if (a.hi == 0.0f || b.hi == 0.0f)
+            continue;
+        const Band ref = bd::fmodLoop(a, b), got = bd::fmodMagnitude<kMargin>(a, b);
+        bad += std::memcmp(&ref, &got, sizeof(Band)) != 0;
+    }
+    return bad;
+}
+
+} // namespace fmod_fast
+
+TEST(BandMathRound, FmodFastPathEqualsTheLoop)
+{
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
+    const char* names[] = { "general", "ambiguous", "small", "wide", "EDGE" };
+    for (int w = 0; w < 5; ++w) {
+        const auto rows = fmod_fast::corpus(w, 60000);
+        const std::size_t bad = fmod_fast::mismatches<true>(rows);
+        std::fprintf(stderr, "BandMathRound fmod fast path %-9s %zu rows, %zu mismatches vs the loop\n", names[w],
+            rows.size(), bad);
+        EXPECT_EQ(bad, 0u);
+    }
+    // the public entry point is the same thing with the sign applied outside
+    const auto rows = fmod_fast::corpus(0, 2000);
+    for (const auto& r : rows) {
+        const Band got = bd::fmod(r.x, r.y);
+        const Band ref = bd::applySignMask(bd::fmodLoop(bd::abs(r.x), bd::abs(r.y)),
+            bd::floatAsInt(r.x.hi) & static_cast<int>(0x80000000u));
+        EXPECT_EQ(std::memcmp(&got, &ref, sizeof(Band)), 0);
+    }
+}
+
+TEST(BandMathRound, FmodFastPathMarginMutantIsRedOnTheEdgeCorpus)
+{
+    const auto rows       = fmod_fast::corpus(4, 60000);
+    const std::size_t bad = fmod_fast::mismatches<false>(rows);
+    std::fprintf(stderr, "BandMathRound fmod fast path RED-first(no margin): %zu/%zu EDGE rows wrong\n", bad, rows.size());
+    EXPECT_GT(bad, 0u);
 }
 
 } // namespace

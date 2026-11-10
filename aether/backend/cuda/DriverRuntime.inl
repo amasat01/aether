@@ -363,6 +363,16 @@ cudaError_t cudaDeviceCanAccessPeer(int* can, int device, int peer) {
     if (CUresult r = get(&b, peer); r != CUDA_SUCCESS) return fromDriver(r);
     return fromDriver(access(can, a, b));
 }
+cudaError_t cudaDeviceGetAttribute(int* value, cudaDeviceAttr attr, int device) {
+    // the runtime's cudaDeviceAttr values are the driver's CUdevice_attribute values
+    static_assert(static_cast<int>(cudaDevAttrMemoryPoolsSupported) ==
+                  static_cast<int>(CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED));
+    AETHER_DRV(attribute, cuDeviceGetAttribute);
+    AETHER_DRV(get, cuDeviceGet);
+    CUdevice dev = 0;
+    if (CUresult r = get(&dev, device); r != CUDA_SUCCESS) return fromDriver(r);
+    return fromDriver(attribute(value, static_cast<CUdevice_attribute>(attr), dev));
+}
 cudaError_t cudaDeviceEnablePeerAccess(int peer, unsigned int flags) {
     AETHER_CTX();
     AETHER_DRV(enable, cuCtxEnablePeerAccess);

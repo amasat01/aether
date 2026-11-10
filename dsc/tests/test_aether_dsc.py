@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -176,6 +177,29 @@ def test_serve_materialises_the_host_only_section_too():
     with p.serve() as root:
         for name in p.host_only_names:
             assert (root / name).is_file(), f"host-only {name!r} not served"
+
+
+@pytest.mark.skipif(shutil.which(os.environ.get("CXX", "g++")) is None, reason="no C++ compiler")
+def test_a_host_banded_tu_compiles_against_the_served_payload_alone(tmp_path):
+    """`aether/banded/banded.h` (host arm) reaches headers outside the NVRTC
+    set (`aether/err/Error.h`, via `BandCell8.h`): a host TU with one
+    `BandedReal` op must compile with the served payload as its ONLY include
+    root."""
+    tu = tmp_path / "banded_host.cpp"
+    tu.write_text(
+        '#include "aether/banded/banded.h"\n'
+        "int main() {\n"
+        "    using aether::banded::BandedReal;\n"
+        "    const BandedReal a = BandedReal::fromDouble(1.5), b = a + a;\n"
+        "    return b.toDouble() == 3.0 ? 0 : 1;\n"
+        "}\n"
+    )
+    p = aether_dsc.payload()
+    with p.serve() as root:
+        exe = tmp_path / "banded_host"
+        subprocess.run([os.environ.get("CXX", "g++"), "-std=c++23", "-DAETHER_CPP_MODE", "-I", str(root),
+                        str(tu), "-o", str(exe)], check=True, capture_output=True, text=True)
+    assert subprocess.run([str(exe)]).returncode == 0
 
 
 # ---------------------------------------------------------------------------

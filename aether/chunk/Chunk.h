@@ -25,7 +25,10 @@
  * `Chunk::allocate(device, bytes, stream)` is the stream-ordered form
  * (`cudaMallocAsync` on `stream`): the chunk remembers its stream and frees
  * with `cudaFreeAsync` on it, deferring the free while a capture makes it
- * illegal (`aether/chunk/StreamOrdered.h`).
+ * illegal (`aether/chunk/StreamOrdered.h`). On a device without memory pools
+ * (`cudaDevAttrMemoryPoolsSupported == 0`) it falls back to plain `cudaMalloc`
+ * and the chunk is not stream-ordered (`streamOrdered()` is `false`, freed with
+ * `cudaFree`); under a stream capture there it throws instead.
  */
 
 #include <cassert>
@@ -170,7 +173,8 @@ public:
     /** @brief `true` for a chunk from `allocate()` (frees on destruction);
      *         `false` for a chunk from `borrow()` (never frees). */
     bool owns() const { return owns_; }
-    /** @brief `true` for a chunk from the stream-ordered `allocate(device, bytes, stream)`. */
+    /** @brief `true` for a chunk from the stream-ordered `allocate(device, bytes, stream)` (`false` when the
+     *         device has no memory pools and the allocation fell back to `cudaMalloc`). */
     bool streamOrdered() const { return streamOrdered_; }
     /** @brief The stream a stream-ordered chunk was allocated on (`nullptr` otherwise). */
     Stream stream() const { return stream_; }
@@ -187,6 +191,15 @@ private:
         if (bytes == 0)
             return chunk;
         chunk.size_ = bytes;
+#ifdef AETHER_HAS_CUDA
+        if (ordered && device.type() == kDLCUDA && !detail::memoryPoolsSupported(device.id())) {
+            if (streamCapturing(stream)) {
+                err::fail("Chunk::allocate", err::device_label(device), bytes,
+                    "no memory pools on this device; capture needs stream-ordered allocation");
+            }
+            ordered = false; // plain cudaMalloc below; the chunk is not stream-ordered
+        }
+#endif
 
         switch (device.type()) {
         case kDLCPU:
@@ -252,7 +265,7 @@ private:
             err::fail("Chunk::allocate", err::device_label(device), bytes, "unsupported device kind");
         }
 
-        chunk.stream_        = stream;
+        chunk.stream_        = ordered ? stream : nullptr;
         chunk.streamOrdered_ = ordered;
         return chunk;
     }

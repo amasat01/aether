@@ -2,6 +2,32 @@
 
 Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases): the notes are the pull request body.
 
+## 0.7.5 (2026-11-10)
+
+This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ version. The public API is unchanged; the banded mode (double precision on GPUs with weak or no FP64) grows.
+
+### Added
+
+- **More banded functions:** `tan`, `exp2`, `expm1`, `log2`, `log10`, `log1p`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh` and `atanh`, each with a stated per-op ULP bound and a golden corpus behind it.
+- **Banded expression chains.** `a * b + c` on banded values keeps the result unrestored between ops and normalises only where a consumer reads the parts in order (a division, a root, a comparison, a store). Where an op would need a normalised value and has none, the overload is deleted and the error names the fix.
+- Banded headers compile under NVRTC, and `aether-dsc` ships them in its payload.
+- The install page has a Best practices section: keep `aether-dsc` at the family release.
+- **`pow` vectorises on aarch64 with GCC.** Under `AETHER_HOST_VECTOR_MATH`, `aether::math::pow` has the aarch64 vector variants GCC asks for, faithfully rounded (error < 1 ULP) and checked by `make faithful-gate`, which now runs on aarch64. Every other function stays libm's there, and clang keeps libm.
+- The C++ test suite builds and runs on aarch64, Linux and macOS: the x86-only packet-math tests report skipped there, and so do the few whose reference needs a `long double` wider than `double` (Apple arm64).
+
+### Changed
+
+- **Banded storage handles values outside the cell's range by label.** A magnitude at or above 2^126 is stored as signed infinity, one below 2^-94 as signed zero, and infinities and NaN keep their own words; it is one range test and a select, with no branch.
+- Banded inverse trigonometry is tighter: a one-float sector tangent with a matched `atan` phase, exact `1 - |x|` in `asin` and `acos`.
+- CI takes the release version from the top heading of `CHANGELOG.md`; the label is only checked against it. Memo digests are narrowed to real inputs, and the sdist-install job needs no pip cache.
+
+### Fixed
+
+- Banded headers build without warnings under C++23 with libc++ (Apple clang): the deprecated denorm style in the banded `numeric_limits` no longer warns.
+- The build finds OpenMP under Apple clang with Homebrew's `libomp`: the OpenMP flags pass as separate arguments, and `libomp`'s headers are on the include path.
+- Device allocation works on GPUs without memory pools (`cudaDevAttrMemoryPoolsSupported == 0`, common on virtualised GPUs): a stream-ordered `Chunk::allocate` falls back to plain `cudaMalloc` there, the chunk reports `streamOrdered() == false`, and allocating during a stream capture throws an error that names the missing pools.
+- `Assign` with a long unrolled fold builds under clang: the fold is chunked so clang's 256-operand limit is not hit.
+
 ## 0.7.3 (2026-11-05)
 
 This section covers what changes from 0.7.2. `aether-dsc` moves with the C++ version. The library's API is unchanged; this release is about how it is built and shipped.

@@ -19,7 +19,7 @@
  *     static_assert.
  *   * `TheLadderSelectsTheBandedRungAndLeavesTheSdOneAlone` — the demand
  *     `Ladder` and the `Ff1`/`Ff2` rungs exist, but its inertness half names
- *     a SoftDouble surface aether will never carry.
+ *     an emulated-FP64 surface aether will never carry.
  *   * `TheArrayBiasOfTheValueTypeIsPinnedToZero` — aether has no per-array bias
  *     declaration mechanism yet.
  *   * `ExpressionAlgebraReducesInTheWorkingCarrier` — covered in two places
@@ -71,6 +71,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include <aether/aether.h>
 #include <aether/backend/cuda/Launch.h>
 
@@ -82,6 +84,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <random>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -158,7 +161,7 @@ static_assert(std::is_same_v<decltype(std::declval<BandedReal>()
  * `requires(!IsBandedFamily<T>)` clause) is reached by EVERY `aether::math`
  * entry point in the library, so this is where a regression in it would surface
  * first — and it is a REAL control, because that clause is on the same
- * templates these five rows resolve through. Aether carries no SoftDouble
+ * templates these five rows resolve through. Aether carries no emulated-double
  * type, so the native pair IS the control here. */
 static_assert(std::is_same_v<decltype(fm::abs(std::declval<double>())), double>);
 static_assert(std::is_same_v<decltype(fm::abs(std::declval<float>())), float>);
@@ -586,7 +589,14 @@ TEST_F(BandedRealCert, LimitsAreDerivedFromTheCodecConstantsAndNotTranscribed)
     EXPECT_TRUE(NL::has_infinity);
     EXPECT_TRUE(NL::has_quiet_NaN);
     EXPECT_FALSE(NL::has_signaling_NaN);
-    EXPECT_EQ(NL::has_denorm, std::denorm_absent);
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    EXPECT_EQ(NL::has_denorm, std::denorm_absent); // deprecated in C++23, still declared
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic pop
+#endif
 }
 
 TEST_F(BandedRealCert, LimitsMaxIsTheMarginRespectingAdmissibleTopAndTheCodecTopIsNot)
@@ -949,6 +959,89 @@ TEST_F(BandedRealCert, ExpressionAlgebraOverBandedRealLeavesComputesInBandAndPac
     static_assert(sizeof(decltype(errBuf)::value_type) == 8);
     EXPECT_NE(errBuf[0].toBits(), 0ull);
     (void)des;
+}
+
+// The labelled-guard store: a leading limb outside [2^-94, 2^126) stores the labelled outcome (overflow: signed
+// infinity, underflow: signed zero); in-window values, zeros and specials store exactly what the bare codec stores.
+TEST_F(BandedRealCert, StoreGuardLabelsTheOutOfWindowOutcomesAndPassesTheRest)
+{
+    struct Row {
+        float x;
+        std::uint64_t want;
+        bool labelled = true; // false: the guard passes the value, and the bare codec's word is the expectation
+    };
+    const Row rows[] = {
+        { 0x1p126f, bd::kBandCell8PosInfWord },
+        { -0x1p126f, bd::kBandCell8NegInfWord },
+        { 0x1.fffffep127f, bd::kBandCell8PosInfWord },
+        { 0x1p-95f, BandedReal(Band{ 0.0f, 0.0f, 0.0f }).toBits() },
+        { -0x1p-95f, BandedReal(Band{ -0.0f, 0.0f, 0.0f }).toBits() },
+        { 0x1p-94f, 0, false },
+        { 0x1p125f, 0, false },
+        { 0.0f, 0, false },
+        { -0.0f, 0, false },
+        { std::numeric_limits<float>::infinity(), 0, false },
+        { std::numeric_limits<float>::quiet_NaN(), 0, false },
+    };
+    for (const Row& r : rows) {
+        const Band b{ r.x, 0.0f, 0.0f };
+        const std::uint64_t got = BandedReal(b).toBits();
+        // a value past the window cannot be asked of the bare codec in a debug build (its own assertion), so the
+        // bare comparison is made only where the store passes the value through
+        if (r.labelled)
+            EXPECT_EQ(got, r.want) << r.x;
+        else
+            EXPECT_EQ(got, bd::cell8FromBand(b).w) << r.x;
+    }
+}
+
+// The element-wise product of two same-shaped Items (`Product<L, R>`): the operand reads lift to the carrier once,
+// the product and the sum stay in it, and the one encode is the assignment. 0.56 ULP53 is the measured worst case
+// of `a*b + c` over [1, 2) (the encode's rounding); the bound here has a little room over it.
+TEST_F(BandedRealCert, ElementwiseItemProductStaysInTheCarrier)
+{
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
+    constexpr std::size_t n = 4096;
+    std::mt19937_64 g(0x9120);
+    std::uniform_real_distribution<double> U(1.0, 2.0);
+    std::vector<double> da(n), db(n), dc(n);
+    std::vector<BandedReal> ba(n), bb(n), bc(n), bo(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        da[i] = U(g);
+        db[i] = U(g);
+        dc[i] = U(g);
+        ba[i] = BandedReal::fromDouble(da[i]);
+        bb[i] = BandedReal::fromDouble(db[i]);
+        bc[i] = BandedReal::fromDouble(dc[i]);
+    }
+    const aether::Device dev(kDLCPU);
+    auto a = aether::make_view<BandedReal, aether::dyn>(ba.data(), dev, n);
+    auto b = aether::make_view<BandedReal, aether::dyn>(bb.data(), dev, n);
+    auto c = aether::make_view<BandedReal, aether::dyn>(bc.data(), dev, n);
+    auto o = aether::make_view<BandedReal, aether::dyn>(bo.data(), dev, n);
+
+    static_assert(std::is_same_v<std::remove_cvref_t<decltype(a[aether::SampleIndex::make(0)].get() * b[aether::SampleIndex::make(0)].get())>::working_type, Band>);
+    double worst = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const aether::SampleIndex s = aether::SampleIndex::make(i);
+        o[s] = a[s].get() * b[s].get() + c[s].get();
+        // the same value by hand: decode both, one carrier product, one carrier sum, one encode
+        const BandedReal hand = BandedReal(static_cast<Band>(ba[i]) * static_cast<Band>(bb[i]) + static_cast<Band>(bc[i]));
+        EXPECT_EQ(bo[i].toBits(), hand.toBits());
+#if defined(__aarch64__)
+        // aarch64 has no __float128; long double is the same 113-bit format on Linux
+        using Q = long double;
+#else
+        using Q = __float128;
+#endif
+        const Q ref = static_cast<Q>(ba[i].toDouble()) * bb[i].toDouble() + bc[i].toDouble();
+        int e = 0;
+        std::frexp(static_cast<double>(ref), &e);
+        const double err = static_cast<double>(static_cast<Q>(bo[i].toDouble()) - ref) / std::ldexp(1.0, e - 53);
+        worst = std::max(worst, err < 0 ? -err : err);
+    }
+    std::fprintf(stderr, "BandedReal element-wise Item product a*b+c: max %.3f ULP53\n", worst);
+    EXPECT_LE(worst, 0.6);
 }
 
 } // namespace BandedRealTest

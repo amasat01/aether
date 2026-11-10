@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Full-corpus faithful-rounding gate for the CPU packet math: scores every
-// function at every width (1, 2, 4, 8 — width 8 only on CPUs with AVX-512F)
+// function at every width (1, 2, 4, 8 — width 8 only on CPUs with AVX-512F; on
+// aarch64, pow alone at widths 1 and 2, see pm_kernels_arm.cpp and --only)
 // over the golden files written by tools/packet_math_ref/gen_golden.py and
 // exits non-zero unless every result is within 1 ULP of the exact value
 // (faithfully rounded) and every file was present.
@@ -77,7 +78,7 @@ int main(int argc, char** argv)
         bool fnCaught = true;
         for (const Kernels* k : widths) {
             if (!k->available()) {
-                std::printf("[faithful] W=%zu unavailable on this CPU (needs AVX-512F)\n", k->width);
+                std::printf("[faithful] W=%zu unavailable on this target\n", k->width);
                 continue;
             }
             if (plant) {

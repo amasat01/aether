@@ -195,6 +195,19 @@ def build_trig_spec() -> str:
         T = i * 0.01
         add_triplet((m2_const + m2_rate * T) * deg2rad)
 
+    # --- near large multiples of pi/2: x = m*(pi/2) + 2^-j, both signs, for a
+    # sample of m <= 2^15 (powers of two, their neighbours, odd/prime and
+    # mid-binade values) and j <= 40. The reduced argument then sits a tiny
+    # distance from zero while k is large, which is where the reduction's
+    # absolute error (not just its relative error) decides the result.
+    near_m = sorted({1, 2, 3, 5, 7, 11, 31, 101, 257, 1000, 4097, 12345, 32767, 32768}
+                    | {2 ** e + d for e in range(4, 15) for d in (-1, 0, 1)})
+    near_j = (0, 2, 5, 8, 12, 16, 20, 24, 28, 32, 36, 40)
+    for m in near_m:
+        for j in near_j:
+            for sgn in (1.0, -1.0):
+                pts.append(sgn * (m * PI_HALF + 2.0 ** -j))
+
     lines.append("points " + " ".join(repr(v) for v in pts))
 
     # --- bulk supplementary coverage (SAMPLE, not enumerated -- same

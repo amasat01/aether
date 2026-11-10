@@ -19,7 +19,8 @@
  * "lane carrier" `D` that is `double` (width 1) or one of the GCC/Clang
  * native vector types the `aether::simd::Packet` specializations already
  * wrap (`__m128d` SSE2 width 2, `__m256d` AVX2 width 4, `__m512d` AVX-512
- * width 8). The arithmetic operators are the compiler's own vector
+ * width 8), or `float64x2_t` (width 2) under GCC on aarch64, where the
+ * host-vector hook is the only user. The arithmetic operators are the compiler's own vector
  * extensions; the few operations that need a named instruction (fused
  * multiply-add, square root, mask test) are the overloads below. Because
  * the source is the same and the per-lane operation sequence is the same,
@@ -49,6 +50,13 @@
 
 #if defined(__AVX512F__) || defined(__AVX__) || defined(__SSE2__)
 #include <immintrin.h>
+#endif
+
+// The aarch64 lane carrier, for the GCC host-vector hook only (clang keeps
+// the scalar width and libm, see HostVectorMath.h).
+#if defined(__aarch64__) && defined(__GNUC__) && !defined(__clang__)
+#include <arm_neon.h>
+#define AETHER_PM_NEON 1
 #endif
 
 #if !defined(__GNUC__)
@@ -104,6 +112,14 @@ struct Lanes<__m512d> {
     static constexpr std::size_t width = 8;
     using L = decltype(__m512d{} < __m512d{});
     typedef std::uint64_t U __attribute__((vector_size(64)));
+};
+#endif
+#if defined(AETHER_PM_NEON)
+template<>
+struct Lanes<float64x2_t> {
+    static constexpr std::size_t width = 2;
+    using L = decltype(float64x2_t{} < float64x2_t{});
+    typedef std::uint64_t U __attribute__((vector_size(16)));
 };
 #endif
 
@@ -220,6 +236,11 @@ AETHER_PM_INLINE bool any(LaneMask<D> m)
         return _mm512_test_epi64_mask((__m512i)m, (__m512i)m) != 0;
     }
 #endif
+#if defined(AETHER_PM_NEON)
+    else if constexpr (std::is_same_v<D, float64x2_t>) {
+        return (m[0] | m[1]) != 0;
+    }
+#endif
     else {
         static_assert(sizeof(D) == 0, "unsupported lane carrier");
     }
@@ -281,7 +302,7 @@ AETHER_PM_INLINE LaneMask<D> isinf(D x)
 template<class D>
 AETHER_PM_INLINE D fma(D a, D b, D c)
 {
-#if defined(__FMA__) || defined(__AVX512F__)
+#if defined(__FMA__) || defined(__AVX512F__) || defined(AETHER_PM_NEON)
     if constexpr (kScalar<D>) {
         return __builtin_fma(a, b, c);
     }
@@ -298,6 +319,11 @@ AETHER_PM_INLINE D fma(D a, D b, D c)
 #if defined(__AVX512F__)
     else if constexpr (std::is_same_v<D, __m512d>) {
         return _mm512_fmadd_pd(a, b, c);
+    }
+#endif
+#if defined(AETHER_PM_NEON)
+    else if constexpr (std::is_same_v<D, float64x2_t>) {
+        return vfmaq_f64(c, a, b);
     }
 #endif
     else {
@@ -329,6 +355,11 @@ AETHER_PM_INLINE D sqrt(D x)
         return _mm512_sqrt_pd(x);
     }
 #endif
+#if defined(AETHER_PM_NEON)
+    else if constexpr (std::is_same_v<D, float64x2_t>) {
+        return vsqrtq_f64(x);
+    }
+#endif
     else {
         static_assert(sizeof(D) == 0, "unsupported lane carrier");
     }
@@ -354,7 +385,7 @@ template<class D>
 AETHER_PM_INLINE void twoProd(D a, D b, D& p, D& e)
 {
     p = a * b;
-#if defined(__FMA__) || defined(__AVX512F__)
+#if defined(__FMA__) || defined(__AVX512F__) || defined(AETHER_PM_NEON)
     e = fma(a, b, -p);
 #else
     const D c = bc<D>(134217729.0); // 2^27 + 1
@@ -391,7 +422,7 @@ AETHER_PM_INLINE void fastTwoSum(D a, D b, D& s, D& e)
 template<class D>
 AETHER_PM_INLINE D residual(D a, D b, D c)
 {
-#if defined(__FMA__) || defined(__AVX512F__)
+#if defined(__FMA__) || defined(__AVX512F__) || defined(AETHER_PM_NEON)
     return fma(-a, b, c);
 #else
     D p, e;

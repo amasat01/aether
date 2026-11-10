@@ -26,6 +26,11 @@
 // semantics), and the hook's vectorised loops are bit-identical to the
 // per-element scalar symbol.
 
+// The suite runs on x86-64 only: its kernels are the x86 packet widths. Elsewhere every test keeps
+// its name and reports SKIPPED (aarch64 routes pow alone: tests/packetmath/check_hvm_arm.sh and
+// `make faithful-gate` check it there).
+#if defined(__x86_64__) || defined(_M_X64)
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -575,3 +580,38 @@ TEST(PacketMathHostVectorHook, DefaultFacadeStaysStd)
         ASSERT_EQ(0, std::memcmp(&c, &d, sizeof(double)));
     }
 }
+
+#else
+
+#include <gtest/gtest.h>
+
+#define AETHER_PM_X86_ONLY(SUITE, NAME) \
+    TEST(SUITE, NAME) { GTEST_SKIP() << "x86-64 packet widths only"; }
+
+AETHER_PM_X86_ONLY(PacketMathFaithful, HardSetWidth1)
+AETHER_PM_X86_ONLY(PacketMathFaithful, HardSetWidth2Sse2)
+AETHER_PM_X86_ONLY(PacketMathFaithful, HardSetWidth4Avx2)
+AETHER_PM_X86_ONLY(PacketMathFaithful, HardSetWidth8Avx512)
+AETHER_PM_X86_ONLY(PacketMathFaithful, PlantedTwoUlpErrorIsCaught)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, UnaryWidth1)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, UnaryWidth2Sse2)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, UnaryWidth4Avx2)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, UnaryWidth8Avx512)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, BinaryWidth1)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, BinaryWidth2Sse2)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, BinaryWidth4Avx2)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, BinaryWidth8Avx512)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, Width4LanesBitIdenticalToWidth1)
+AETHER_PM_X86_ONLY(PacketMathAccuracy, Width8LanesBitIdenticalToWidth1)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, HookUnderContractionMatchesKernels)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, PowLoopBitIdenticalToScalarSymbol)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, ConditionalPowLoopUsesMaskedVariantCorrectly)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, SinExpLoopBitIdenticalToScalarSymbols)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, RootFloorAbsLoopMatchesScalarSymbolsAndStd)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, ParityLoopsMatchScalarSymbolsAndStd)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, FmaxFminMatchStdBitForBit)
+AETHER_PM_X86_ONLY(PacketMathHostVectorHook, DefaultFacadeStaysStd)
+
+#undef AETHER_PM_X86_ONLY
+
+#endif

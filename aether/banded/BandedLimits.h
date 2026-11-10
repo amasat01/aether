@@ -38,7 +38,9 @@
  */
 
 #include <cstdint>
+#ifndef __CUDACC_RTC__
 #include <limits>
+#endif
 
 #include "aether/banded/BandCell8.h"
 #include "aether/banded/BandedReal.h"
@@ -150,6 +152,7 @@ inline constexpr int kBandedRealLog10Den = 2136;
 } // namespace banded
 } // namespace aether
 
+#ifndef __CUDACC_RTC__ // std::numeric_limits needs <limits>
 /// \cond AETHER_DOXYGEN_STD_SPECIALIZATION_SCOPE_WORKAROUND
 template<>
 struct std::numeric_limits<aether::banded::BandedReal> {
@@ -185,7 +188,15 @@ public:
      * sign-destroying: a negative subnormal comes back `+0`, not `-0`.
      * Checked by
      * `BandedRealCert.SubnormalDoublesFlushToCanonicalZeroSignDestroying`. */
+    // C++23 deprecates the denorm style, but numeric_limits still declares the member
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     static constexpr std::float_denorm_style has_denorm = std::denorm_absent;
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic pop
+#endif
     static constexpr bool has_denorm_loss                = false;
 
     /* Representation is well defined but the arithmetic is not IEC 559:
@@ -270,3 +281,4 @@ public:
     }
 };
 /// \endcond
+#endif // __CUDACC_RTC__
