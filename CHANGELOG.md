@@ -21,6 +21,7 @@ This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ ver
 
 ### Fixed
 
+- Banded headers build without warnings under C++23 with libc++ (Apple clang): the deprecated denorm style in the banded `numeric_limits` no longer warns.
 - Device allocation works on GPUs without memory pools (`cudaDevAttrMemoryPoolsSupported == 0`, common on virtualised GPUs): a stream-ordered `Chunk::allocate` falls back to plain `cudaMalloc` there, the chunk reports `streamOrdered() == false`, and allocating during a stream capture throws an error that names the missing pools.
 - `Assign` with a long unrolled fold builds under clang: the fold is chunked so clang's 256-operand limit is not hit.
 

@@ -71,6 +71,8 @@
 
 #include <gtest/gtest.h>
 
+#include "tests/WideReference.h"
+
 #include <aether/aether.h>
 #include <aether/backend/cuda/Launch.h>
 
@@ -587,7 +589,14 @@ TEST_F(BandedRealCert, LimitsAreDerivedFromTheCodecConstantsAndNotTranscribed)
     EXPECT_TRUE(NL::has_infinity);
     EXPECT_TRUE(NL::has_quiet_NaN);
     EXPECT_FALSE(NL::has_signaling_NaN);
-    EXPECT_EQ(NL::has_denorm, std::denorm_absent);
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    EXPECT_EQ(NL::has_denorm, std::denorm_absent); // deprecated in C++23, still declared
+#if !defined(__CUDACC__) && (defined(__clang__) || defined(__GNUC__))
+#pragma GCC diagnostic pop
+#endif
 }
 
 TEST_F(BandedRealCert, LimitsMaxIsTheMarginRespectingAdmissibleTopAndTheCodecTopIsNot)
@@ -991,6 +1000,7 @@ TEST_F(BandedRealCert, StoreGuardLabelsTheOutOfWindowOutcomesAndPassesTheRest)
 // of `a*b + c` over [1, 2) (the encode's rounding); the bound here has a little room over it.
 TEST_F(BandedRealCert, ElementwiseItemProductStaysInTheCarrier)
 {
+    AETHER_SKIP_WITHOUT_WIDE_REFERENCE();
     constexpr std::size_t n = 4096;
     std::mt19937_64 g(0x9120);
     std::uniform_real_distribution<double> U(1.0, 2.0);
