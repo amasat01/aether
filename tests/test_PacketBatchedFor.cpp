@@ -129,8 +129,9 @@ TEST_F(PacketBatchedForTest, KnownAnswerScheduleThreeSizes)
         for (std::size_t k = 0; k + 1 < expected.size(); ++k)
             if (expected[k].width < W)
                 sawInteriorTail = true;
-        if (W > 1)
+        if (W > 1) {
             EXPECT_TRUE(sawInteriorTail) << "Size3 must exercise a mid-stream tile-restart tail packet";
+        }
     }
 }
 
