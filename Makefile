@@ -130,14 +130,17 @@ sanitize-gate: configure
 # it must be GREEN as is, and must catch a planted 2-ULP error in every
 # function (non-vacuity).
 golden_dir ?= $(builddir)/faithful_golden
-# aarch64 routes pow alone: the checker has no other function there
+# aarch64 routes pow alone: the checker scores, and the corpus is generated and checked for, pow only
+# (the other references come from the host libm and are pinned for x86-64 glibc)
 faithful_only := $(if $(filter aarch64 arm64,$(shell uname -m)),--only pow)
+faithful_md5 := $(CURDIR)/tests/packetmath/faithful_golden.md5
+faithful_sums = $(if $(faithful_only),grep ' pow.bin$$' $(faithful_md5),cat $(faithful_md5)) | md5sum --quiet --strict -c -
 .PHONY: faithful-gate
 faithful-gate: configure
 	$(mkcmd) aether_faithful_check
-	if ! ( cd $(golden_dir) 2>/dev/null && md5sum --quiet --strict -c $(CURDIR)/tests/packetmath/faithful_golden.md5 ); then
-		python3 tools/packet_math_ref/gen_golden.py --out $(golden_dir) --jobs $(j)
-		( cd $(golden_dir) && md5sum --quiet --strict -c $(CURDIR)/tests/packetmath/faithful_golden.md5 )
+	if ! ( cd $(golden_dir) 2>/dev/null && $(faithful_sums) ); then
+		python3 tools/packet_math_ref/gen_golden.py --out $(golden_dir) --jobs $(j) $(faithful_only)
+		( cd $(golden_dir) && $(faithful_sums) )
 	fi
 	$(builddir)/tests/aether_faithful_check $(golden_dir) $(faithful_only)
 	$(builddir)/tests/aether_faithful_check $(golden_dir) $(faithful_only) --plant
