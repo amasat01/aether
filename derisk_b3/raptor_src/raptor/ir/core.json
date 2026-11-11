@@ -1,0 +1,2023 @@
+{
+ "name": "raptor",
+ "version": "0",
+ "contract": "1",
+ "key_text": [
+  "RawBlock"
+ ],
+ "dialect": "core",
+ "consts": {
+  "LEAF_KINDS": [
+   "vocab_read",
+   "uniform",
+   "table_read",
+   "terminated",
+   "nsamples",
+   "prior_read"
+  ],
+  "LEAF_ROLES": [
+   "vec_in",
+   "mat_in",
+   "wide_in",
+   "per_sample",
+   "lookup",
+   "terminated",
+   "uniform",
+   "nsamples",
+   "mutable"
+  ],
+  "SINK_ROLES": [
+   "mutable",
+   "out",
+   "wide_out",
+   "accum_out"
+  ],
+  "QUAT_OPS": [
+   "quat_mul",
+   "quat_conj",
+   "quat_recip",
+   "quat_rotate",
+   "as_pure",
+   "as_vec3"
+  ],
+  "AT_ROLES": [
+   "lookup",
+   "wide_in",
+   "per_sample",
+   "vec_in",
+   "mat_in"
+  ],
+  "FACTOR_TAGS": [
+   "lu_factor",
+   "chol_factor",
+   "eigh_factor",
+   "qr_factor"
+  ],
+  "DISPATCH_POLICIES": [
+   "predicated",
+   "switch",
+   "segmented",
+   "auto"
+  ],
+  "POLICIES": [
+   "auto",
+   "compensated",
+   "ordered"
+  ],
+  "SCATTER_POLICIES": [
+   "auto",
+   "compensated",
+   "ordered",
+   "plain",
+   "or"
+  ],
+  "CELL_OPS": [
+   "sum",
+   "max",
+   "min"
+  ],
+  "KEYED_AUTO": "keyed_auto",
+  "PRIMITIVE_KIND": "primitive",
+  "REDUCE_KIND": "reduce",
+  "SAMPLE_INDEX_KIND": "sample_index",
+  "LANE_POSITION_KIND": "lane_position",
+  "PLANE_EXTENT_KIND": "plane_extent",
+  "DISPATCH_KIND": "dispatch",
+  "NAMESPACE_SEP": "__",
+  "FUSED_STEPS_PLANE": "fused_steps",
+  "PARAM_CELL": "param_cell",
+  "ROLE_ORDER": [
+   "mutable",
+   "out",
+   "wide_out",
+   "accum_out",
+   "vec_in",
+   "mat_in",
+   "wide_in",
+   "per_sample",
+   "lookup",
+   "terminated",
+   "uniform",
+   "nsamples"
+  ],
+  "FINISHED_PLANE": "finished_count"
+ },
+ "records": [
+  {
+   "name": "TensorType",
+   "fields": [
+    "shape",
+    "dtype",
+    "tag=None"
+   ]
+  },
+  {
+   "name": "Wire",
+   "fields": [
+    "name",
+    "role",
+    "shape=()",
+    "dtype='f64'",
+    "tag=None"
+   ]
+  },
+  {
+   "name": "Slot",
+   "fields": [
+    "role",
+    "name",
+    "ttype"
+   ]
+  },
+  {
+   "name": "LaneMeta",
+   "fields": [
+    "name",
+    "slots",
+    "digest"
+   ]
+  },
+  {
+   "name": "Access",
+   "home": "access",
+   "kind": "namedtuple",
+   "fields": [
+    "cls",
+    "op=None"
+   ]
+  },
+  {
+   "name": "DispatchInfo",
+   "home": "walk",
+   "fields": [
+    "name",
+    "K",
+    "policy",
+    "units=()",
+    "selector_reads=()",
+    "static_selector=False"
+   ]
+  },
+  {
+   "name": "PlaneDecl",
+   "home": "unit",
+   "fields": [
+    "name",
+    "form",
+    "ttype",
+    "dims=()",
+    "staged=False",
+    "grid=()",
+    "sorted=False",
+    "shared=()",
+    "meta=()"
+   ]
+  },
+  {
+   "name": "LoweredUnit",
+   "home": "unit",
+   "eq": false,
+   "fields": [
+    "ir_version",
+    "name",
+    "walk_digest",
+    "source_digest",
+    "declaration_digest",
+    "sinks",
+    "walk",
+    "planes",
+    "returns",
+    "mode",
+    "kind",
+    "form",
+    "policy",
+    "cost",
+    "_memo={}"
+   ]
+  },
+  {
+   "name": "SegmentInfo",
+   "home": "segment",
+   "kind": "namedtuple",
+   "fields": [
+    "j",
+    "K",
+    "offsets",
+    "dispatch_name",
+    "units",
+    "static_selector=False",
+    "selector_reads=()"
+   ]
+  },
+  {
+   "name": "ClassifyUnit",
+   "home": "segment",
+   "fields": [
+    "name",
+    "sinks",
+    "walk"
+   ]
+  },
+  {
+   "name": "SegmentUnit",
+   "home": "segment",
+   "fields": [
+    "name",
+    "sinks",
+    "walk",
+    "segment"
+   ]
+  }
+ ],
+ "checks": {
+  "node_base": {
+   "params": [
+    "cls",
+    "ttype",
+    "operands"
+   ],
+   "steps": [
+    [
+     "check",
+     "not isinstance(ttype, TensorType)",
+     "{name_of(cls)}: ttype must be a TensorType, got {ttype!r}"
+    ],
+    [
+     "let",
+     "bad",
+     "first_not_node(operands)"
+    ],
+    [
+     "check",
+     "bad is not None",
+     "{name_of(cls)}: operand {bad!r} is not a Node"
+    ],
+    [
+     "check",
+     "cut_in_loop(operands)",
+     "a cut inside a `for` is not in this release (it would be one launch per iteration); hoist hawk.sum(x) out of the loop"
+    ]
+   ]
+  },
+  "refuse_factor_arms": {
+   "params": [
+    "what",
+    "ttype"
+   ],
+   "steps": [
+    [
+     "check",
+     "ttype.tag in FACTOR_TAGS",
+     "{what}: the arms are {head(ttype.tag)} factorisations, which are read through lu_solve/cho_solve and the field reads, never selected between; select between the results (the solves, the determinant, the eigenvalues) instead"
+    ]
+   ]
+  },
+  "node_sink": {
+   "params": [
+    "kind",
+    "role",
+    "name",
+    "value",
+    "index",
+    "ttype"
+   ],
+   "steps": [
+    [
+     "let",
+     "tt",
+     "coalesce(ttype, value.ttype)"
+    ],
+    [
+     "let",
+     "ops",
+     "cat((value,), opt(index))"
+    ],
+    [
+     "node",
+     "tt",
+     "ops"
+    ],
+    [
+     "check",
+     "role not in SINK_ROLES",
+     "sink {name!r}: unknown sink role {role!r}, expected one of {SINK_ROLES}"
+    ]
+   ]
+  }
+ },
+ "kinds": [
+  {
+   "name": "node",
+   "class": "Node",
+   "family": "expr",
+   "refines": null,
+   "operands": {
+    "min": 0,
+    "max": "many"
+   },
+   "refinable": true,
+   "slots": [
+    "ttype",
+    "operands"
+   ],
+   "wire_attr": "node",
+   "params": "ttype: TensorType, operands: Sequence[Node] = ()",
+   "assigns": [],
+   "binding": "none",
+   "dedup": [
+    "py"
+   ],
+   "from": [
+    "ttype",
+    "operands"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "ttype",
+      "operands"
+     ]
+    ],
+    "out": []
+   }
+  },
+  {
+   "name": "leaf",
+   "class": "Leaf",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "slots": [
+    "kind",
+    "role",
+    "name",
+    "quantity",
+    "wire_index",
+    "sorted"
+   ],
+   "params": "kind: str, role: str, name: str, ttype: TensorType, *, quantity: 'Quantity | None' = None, wire_index: int = 0, sorted: bool = False",
+   "assigns": [
+    "kind",
+    "role",
+    "name",
+    "quantity",
+    "wire_index",
+    "sorted"
+   ],
+   "binding": "slot",
+   "dedup": [
+    "py"
+   ],
+   "state": [
+    "kind",
+    "role",
+    "name",
+    "wire_index",
+    "sorted",
+    "quantity"
+   ],
+   "from": [
+    "@kind",
+    "@role",
+    "@name",
+    "ttype",
+    "quantity=@quantity",
+    "wire_index=@wire_index",
+    "sorted=@sorted"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "ttype",
+      "()"
+     ],
+     [
+      "check",
+      "kind not in LEAF_KINDS",
+      "leaf {name!r}: unknown leaf kind {kind!r}, expected one of {LEAF_KINDS}"
+     ],
+     [
+      "check",
+      "role not in LEAF_ROLES",
+      "leaf {name!r}: unknown leaf role {role!r}, expected one of {LEAF_ROLES}"
+     ]
+    ],
+    "out": [
+     "kind",
+     "role",
+     "name",
+     "quantity",
+     "wire_index",
+     "sorted"
+    ]
+   }
+  },
+  {
+   "name": "const",
+   "class": "Const",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "slots": [
+    "literal"
+   ],
+   "wire_attr": "constant",
+   "params": "literal: Plain, ttype: TensorType",
+   "assigns": [
+    "literal"
+   ],
+   "dedup": [
+    "one",
+    "r:literal"
+   ],
+   "state": [
+    "literal:plain"
+   ],
+   "from": [
+    "@literal:plain",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "ttype",
+      "()"
+     ]
+    ],
+    "out": [
+     "literal"
+    ]
+   }
+  },
+  {
+   "name": "role_const",
+   "class": "RoleConst",
+   "family": "expr",
+   "refines": "const",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "slots": [
+    "label"
+   ],
+   "params": "value: int, label: str, ttype: TensorType | None = None",
+   "assigns": [
+    "literal",
+    "label"
+   ],
+   "dedup": [
+    "tup",
+    "r:literal",
+    "f:label"
+   ],
+   "state": [
+    "literal",
+    "label"
+   ],
+   "from": [
+    "@literal",
+    "@label",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "v",
+      "int(value)"
+     ],
+     [
+      "let",
+      "tt",
+      "orelse(ttype, tt('i32'))"
+     ],
+     [
+      "node",
+      "tt",
+      "()"
+     ]
+    ],
+    "out": [
+     "v",
+     "label"
+    ]
+   }
+  },
+  {
+   "name": "sample_index",
+   "class": "SampleIndex",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "wire_attr": "sample_index",
+   "params": "ttype: TensorType | None = None",
+   "assigns": [],
+   "dedup": [
+    "none"
+   ],
+   "from": [
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "tt",
+      "orelse(ttype, tt('i32'))"
+     ],
+     [
+      "node",
+      "tt",
+      "()"
+     ]
+    ],
+    "out": []
+   }
+  },
+  {
+   "name": "plane_extent",
+   "class": "PlaneExtent",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "wire_attr": "plane_extent",
+   "params": "plane: Leaf, ttype: TensorType | None = None",
+   "assigns": [],
+   "dedup": [
+    "none"
+   ],
+   "from": [
+    "op:0",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "tt",
+      "orelse(ttype, tt('i32'))"
+     ],
+     [
+      "node",
+      "tt",
+      "(plane,)"
+     ]
+    ],
+    "out": []
+   },
+   "props": [
+    [
+     "role",
+     "opattr",
+     "0",
+     "role"
+    ],
+    [
+     "name",
+     "opattr",
+     "0",
+     "name"
+    ]
+   ]
+  },
+  {
+   "name": "lane_position",
+   "class": "LanePosition",
+   "family": "expr",
+   "refines": "sample_index",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "wire_attr": "lane_position"
+  },
+  {
+   "name": "op",
+   "class": "Op",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": "many"
+   },
+   "slots": [
+    "kind",
+    "literal"
+   ],
+   "params": "kind: str, operands: Sequence[Node], ttype: TensorType, literal: Plain = None",
+   "assigns": [
+    "kind",
+    "literal"
+   ],
+   "dedup": [
+    "one",
+    "r:literal"
+   ],
+   "state": [
+    "kind",
+    "literal:plain"
+   ],
+   "from": [
+    "@kind",
+    "operands",
+    "ttype",
+    "@literal:plain"
+   ],
+   "watch": "raw",
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "ttype",
+      "operands"
+     ],
+     [
+      "check",
+      "kind in QUAT_OPS and _t.shape == (4,) and _t.tag != 'quaternion'",
+      "op {kind!r} returns a 4-wide value typed {_t!r}: a quaternion-producing op must carry tag='quaternion', because the tag participates in type identity and therefore in the walk's merge check"
+     ]
+    ],
+    "out": [
+     "kind",
+     "literal"
+    ]
+   }
+  },
+  {
+   "name": "at",
+   "class": "At",
+   "family": "expr",
+   "refines": "op",
+   "operands": {
+    "min": 2,
+    "max": 2
+   },
+   "refinable": true,
+   "params": "plane: Leaf, index: Node, ttype: TensorType",
+   "assigns": [
+    "kind",
+    "literal"
+   ],
+   "from": [
+    "op:0",
+    "op:1",
+    "ttype"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "check",
+      "not (isinstance(plane, Leaf) and plane.role in AT_ROLES)",
+      "at(): the indexed plane must be a leaf in one of the roles {AT_ROLES}, got {plane!r}"
+     ],
+     [
+      "node",
+      "ttype",
+      "(plane, index)"
+     ]
+    ],
+    "out": [
+     "'at'",
+     "None"
+    ]
+   },
+   "props": [
+    [
+     "plane",
+     "op",
+     "0"
+    ],
+    [
+     "index",
+     "op",
+     "1"
+    ]
+   ],
+   "wire": "at"
+  },
+  {
+   "name": "primitive",
+   "class": "Primitive",
+   "family": "expr",
+   "refines": "op",
+   "operands": {
+    "min": 1,
+    "max": "many"
+   },
+   "slots": [
+    "name",
+    "input_count"
+   ],
+   "params": "name: str, value: Node, inputs: Sequence[Node] = (), ttype: TensorType | None = None",
+   "assigns": [
+    "kind",
+    "literal",
+    "name",
+    "input_count"
+   ],
+   "dedup": [
+    "tup",
+    "s:primitive",
+    "f:name"
+   ],
+   "state": [
+    "name"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "ops:1:",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "inputs",
+      "tuple(inputs)"
+     ],
+     [
+      "let",
+      "tt",
+      "coalesce(ttype, value.ttype)"
+     ],
+     [
+      "node",
+      "tt",
+      "cat((value,), inputs)"
+     ]
+    ],
+    "out": [
+     "'primitive'",
+     "None",
+     "name",
+     "len(inputs)"
+    ]
+   },
+   "props": [
+    [
+     "forward",
+     "op",
+     "0"
+    ],
+    [
+     "inputs",
+     "ops",
+     "1:"
+    ]
+   ]
+  },
+  {
+   "name": "select",
+   "class": "Select",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 3,
+    "max": 3
+   },
+   "result": [
+    "same_as",
+    1
+   ],
+   "wire_attr": "select",
+   "params": "cond: Node, on_true: Node, on_false: Node, ttype: TensorType",
+   "assigns": [],
+   "dedup": [
+    "none"
+   ],
+   "from": [
+    "*operands",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "refuse_factor_arms",
+      "'select'",
+      "ttype"
+     ],
+     [
+      "node",
+      "ttype",
+      "(cond, on_true, on_false)"
+     ]
+    ],
+    "out": []
+   }
+  },
+  {
+   "name": "dispatch",
+   "class": "Dispatch",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 3,
+    "max": "many"
+   },
+   "result": [
+    "same_as",
+    1
+   ],
+   "slots": [
+    "policy"
+   ],
+   "wire_attr": "dispatch",
+   "params": "selector: Node, branches: Sequence[Node], policy: str, ttype: TensorType",
+   "assigns": [
+    "policy"
+   ],
+   "dedup": [
+    "tup",
+    "k",
+    "f:policy"
+   ],
+   "state": [
+    "policy"
+   ],
+   "from": [
+    "op:0",
+    "ops:1:",
+    "@policy",
+    "ttype"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "br",
+      "tuple(branches)"
+     ],
+     [
+      "check",
+      "len(br) < 2",
+      "dispatch: at least 2 branches are required, got {len(br)}"
+     ],
+     [
+      "check",
+      "policy not in DISPATCH_POLICIES",
+      "dispatch: unknown policy {policy!r}; declared are {DISPATCH_POLICIES}"
+     ],
+     [
+      "check",
+      "selector.ttype.shape != () or selector.ttype.dtype != 'i32'",
+      "dispatch: kind must be a rank-0 i32 value, got {selector.ttype!r} — a compile-time constant is not a traced VALUE and a policy is an authoring decision, not something the node infers"
+     ],
+     [
+      "let",
+      "bad",
+      "first_ne_ttype(br)"
+     ],
+     [
+      "check",
+      "bad is not None",
+      "dispatch: the branches disagree — {br[0].ttype!r} vs {bad.ttype!r} (every branch shares ONE TensorType)"
+     ],
+     [
+      "call",
+      "refuse_factor_arms",
+      "'dispatch'",
+      "ttype"
+     ],
+     [
+      "node",
+      "ttype",
+      "cat((selector,), br)"
+     ]
+    ],
+    "out": [
+     "policy"
+    ]
+   },
+   "props": [
+    [
+     "selector",
+     "op",
+     "0"
+    ],
+    [
+     "branches",
+     "ops",
+     "1:"
+    ],
+    [
+     "K",
+     "nops-1"
+    ]
+   ]
+  },
+  {
+   "name": "sink",
+   "class": "Sink",
+   "family": "sink",
+   "refines": "node",
+   "operands": {
+    "min": 1,
+    "max": 2
+   },
+   "refinable": true,
+   "slots": [
+    "kind",
+    "role",
+    "name"
+   ],
+   "params": "kind: str, role: str, name: str, value: Node, index: Node | None = None, ttype: TensorType | None = None",
+   "assigns": [
+    "kind",
+    "role",
+    "name"
+   ],
+   "binding": "slot",
+   "dedup": [
+    "tup",
+    "f:role",
+    "f:name"
+   ],
+   "state": [
+    "kind",
+    "role",
+    "name"
+   ],
+   "from": [
+    "@kind",
+    "@role",
+    "@name",
+    "op:0",
+    "opq:1",
+    "ttype"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "node_sink",
+      "kind",
+      "role",
+      "name",
+      "value",
+      "index",
+      "ttype"
+     ]
+    ],
+    "out": [
+     "kind",
+     "role",
+     "name"
+    ]
+   },
+   "props": [
+    [
+     "value",
+     "op",
+     "0"
+    ],
+    [
+     "index",
+     "opq",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "assign",
+   "class": "Assign",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "refinable": true,
+   "params": "name: str, value: Node, ttype: TensorType | None = None",
+   "assigns": [
+    "kind",
+    "role",
+    "name"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "node_sink",
+      "'assign'",
+      "'mutable'",
+      "name",
+      "value",
+      "None",
+      "ttype"
+     ]
+    ],
+    "out": [
+     "'assign'",
+     "'mutable'",
+     "name"
+    ]
+   },
+   "role": "mutable",
+   "wire": "assign"
+  },
+  {
+   "name": "wide_write",
+   "class": "WideWrite",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 1,
+    "max": 2
+   },
+   "refinable": true,
+   "params": "name: str, value: Node, index: Node | None = None, ttype: TensorType | None = None",
+   "assigns": [
+    "kind",
+    "role",
+    "name"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "opq:1",
+    "ttype"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "node_sink",
+      "'wide_write'",
+      "'wide_out'",
+      "name",
+      "value",
+      "index",
+      "ttype"
+     ]
+    ],
+    "out": [
+     "'wide_write'",
+     "'wide_out'",
+     "name"
+    ]
+   },
+   "role": "wide_out",
+   "wire": "wide_write"
+  },
+  {
+   "name": "accum_write",
+   "class": "AccumWrite",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 1,
+    "max": 2
+   },
+   "slots": [
+    "policy",
+    "reduced"
+   ],
+   "params": "name: str, value: Node, index: Node | None = None, ttype: TensorType | None = None, policy: str = \"auto\", reduced: Node | None = None",
+   "assigns": [
+    "kind",
+    "role",
+    "name",
+    "policy",
+    "reduced"
+   ],
+   "dedup": [
+    "tup",
+    "f:role",
+    "f:name",
+    "fx:policy:auto,plain"
+   ],
+   "state": [
+    "+Sink",
+    "policy"
+   ],
+   "edges": [
+    "reduced?"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "opq:1",
+    "ttype",
+    "@policy",
+    "edge:reduced"
+   ],
+   "from_edges": true,
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "node_sink",
+      "'accum_write'",
+      "'accum_out'",
+      "name",
+      "value",
+      "index",
+      "ttype"
+     ],
+     [
+      "check",
+      "not (policy in SCATTER_POLICIES or policy == 'keyed_auto')",
+      "accum_write {name!r}: policy {policy!r} is not one of {SCATTER_POLICIES}"
+     ]
+    ],
+    "out": [
+     "'accum_write'",
+     "'accum_out'",
+     "name",
+     "policy",
+     "reduced"
+    ]
+   }
+  },
+  {
+   "name": "reduce_samples",
+   "class": "ReduceSamples",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "result": [
+    "same_as",
+    0
+   ],
+   "slots": [
+    "op",
+    "key",
+    "count",
+    "policy",
+    "kept"
+   ],
+   "wire_attr": "reduce",
+   "params": "op: str, value: Node, *, key: Node | None = None, count: Node | None = None, policy: str = \"auto\", kept: tuple = ()",
+   "assigns": [
+    "op",
+    "key",
+    "count",
+    "policy",
+    "kept"
+   ],
+   "dedup": [
+    "one",
+    "f:op"
+   ],
+   "state": [
+    "op",
+    "policy",
+    "kept:plain"
+   ],
+   "edges": [
+    "key?",
+    "count?"
+   ],
+   "from": [
+    "@op",
+    "op:0",
+    "key=edge:key",
+    "count=edge:count",
+    "policy=@policy",
+    "kept=@kept:plain"
+   ],
+   "from_edges": true,
+   "ctor": {
+    "steps": [
+     [
+      "check",
+      "op not in CELL_OPS",
+      "reduce over samples: op {op!r} is not one of {CELL_OPS}"
+     ],
+     [
+      "check",
+      "value.ttype.dtype not in ('f64', 'f32') or len(value.ttype.shape) > 2",
+      "reduce over samples: an f64/f32 scalar, vector or matrix is reduced, got {value.ttype!r}"
+     ],
+     [
+      "check",
+      "key is not None and op != 'sum'",
+      "reduce over some lane axes: op {op!r} is not built, only sum"
+     ],
+     [
+      "check",
+      "policy not in POLICIES",
+      "reduce over samples: policy {policy!r} is not one of {POLICIES}"
+     ],
+     [
+      "node",
+      "value.ttype",
+      "(value,)"
+     ]
+    ],
+    "out": [
+     "op",
+     "key",
+     "count",
+     "policy",
+     "kept"
+    ]
+   }
+  },
+  {
+   "name": "sample_sum",
+   "class": "SampleSum",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "slots": [
+    "op",
+    "cell",
+    "columns"
+   ],
+   "params": "name: str, value: Node, ttype: TensorType | None = None, op: str = \"sum\", cell: str | None = None, columns: int = 1",
+   "assigns": [
+    "kind",
+    "role",
+    "name",
+    "cell",
+    "columns",
+    "op"
+   ],
+   "dedup": [
+    "tup",
+    "f:role",
+    "f:name",
+    "f:op",
+    "f:cell",
+    "f:columns"
+   ],
+   "state": [
+    "+Sink",
+    "op",
+    "cell",
+    "columns"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "ttype",
+    "@op",
+    "@cell",
+    "@columns"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "call",
+      "node_sink",
+      "'sample_sum'",
+      "'accum_out'",
+      "name",
+      "value",
+      "None",
+      "ttype"
+     ],
+     [
+      "let",
+      "cell_",
+      "orelse(cell, name)"
+     ],
+     [
+      "check",
+      "op not in CELL_OPS",
+      "sample_sum {name!r}: op {op!r} is not one of {CELL_OPS}"
+     ],
+     [
+      "check",
+      "_t.shape or _t.dtype not in ('f64', 'f32')",
+      "sample_sum {name!r}: sums a rank-0 f64/f32 value, got {_t!r}"
+     ]
+    ],
+    "out": [
+     "'sample_sum'",
+     "'accum_out'",
+     "name",
+     "cell_",
+     "columns",
+     "op"
+    ]
+   }
+  },
+  {
+   "name": "tape_write",
+   "class": "TapeWrite",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 3,
+    "max": "many"
+   },
+   "slots": [
+    "width"
+   ],
+   "params": "name: str, row: Node, on: Node, values: Sequence[Node], ttype: TensorType",
+   "assigns": [
+    "kind",
+    "role",
+    "name",
+    "width"
+   ],
+   "dedup": [
+    "tup",
+    "f:role",
+    "f:name",
+    "f:width"
+   ],
+   "state": [
+    "name"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "op:1",
+    "ops:2:",
+    "ttype"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "vs",
+      "tuple(values)"
+     ],
+     [
+      "node",
+      "ttype",
+      "cat((row, on), vs)"
+     ],
+     [
+      "let",
+      "w",
+      "width_of(vs)"
+     ],
+     [
+      "check",
+      "len(_t.shape) != 1 or not vs or rem(_t.shape[0], w) != 0 or row.ttype != tt('i32')",
+      "tape_write {name!r}: a {_t!r} plane takes whole rows of the {w} stored components at an i32 row"
+     ]
+    ],
+    "out": [
+     "'tape_write'",
+     "'out'",
+     "name",
+     "w"
+    ]
+   },
+   "props": [
+    [
+     "value",
+     "op",
+     "2"
+    ],
+    [
+     "index",
+     "none"
+    ],
+    [
+     "row",
+     "op",
+     "0"
+    ],
+    [
+     "on",
+     "op",
+     "1"
+    ],
+    [
+     "values",
+     "ops",
+     "2:"
+    ]
+   ]
+  },
+  {
+   "name": "finish",
+   "class": "Finish",
+   "family": "sink",
+   "refines": "sink",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "result": [
+    "fixed",
+    "bool",
+    []
+   ],
+   "slots": [
+    "steps"
+   ],
+   "params": "name: str, value: Node, steps: int = 1",
+   "assigns": [
+    "kind",
+    "role",
+    "name",
+    "steps"
+   ],
+   "dedup": [
+    "tup",
+    "f:role",
+    "f:name",
+    "f:steps"
+   ],
+   "state": [
+    "name",
+    "steps"
+   ],
+   "from": [
+    "@name",
+    "op:0",
+    "@steps"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "tt('bool')",
+      "(value,)"
+     ],
+     [
+      "check",
+      "value.ttype != _t",
+      "finish {name!r}: the condition is typed {value.ttype!r}; a sample finishes on a traced rank-0 bool"
+     ]
+    ],
+    "out": [
+     "'finish'",
+     "'terminated'",
+     "name",
+     "auto_or_int(steps)"
+    ]
+   }
+  },
+  {
+   "name": "loop_index",
+   "class": "LoopIndex",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "slots": [
+    "depth",
+    "name",
+    "bounds"
+   ],
+   "wire_attr": "loop_index",
+   "params": "depth: int, name: str, ttype: TensorType | None = None, bounds: tuple | None = None",
+   "assigns": [
+    "depth",
+    "name",
+    "bounds"
+   ],
+   "dedup": [
+    "tup",
+    "s:loop_index",
+    "f:depth",
+    "f:name"
+   ],
+   "state": [
+    "depth",
+    "name",
+    "bounds:plain"
+   ],
+   "from": [
+    "@depth",
+    "@name",
+    "ttype",
+    "@bounds:plain"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "tt",
+      "orelse(ttype, tt('i32'))"
+     ],
+     [
+      "node",
+      "tt",
+      "()"
+     ]
+    ],
+    "out": [
+     "int(depth)",
+     "name",
+     "bounds"
+    ]
+   }
+  },
+  {
+   "name": "loop_carry",
+   "class": "LoopCarry",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 0,
+    "max": 0
+   },
+   "slots": [
+    "depth",
+    "slot",
+    "name"
+   ],
+   "wire_attr": "loop_carry",
+   "params": "depth: int, slot: int, name: str, ttype: TensorType",
+   "assigns": [
+    "depth",
+    "slot",
+    "name"
+   ],
+   "dedup": [
+    "tup",
+    "s:loop_carry",
+    "f:depth",
+    "f:slot",
+    "f:name"
+   ],
+   "state": [
+    "depth",
+    "slot",
+    "name"
+   ],
+   "from": [
+    "@depth",
+    "@slot",
+    "@name",
+    "ttype"
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "node",
+      "ttype",
+      "()"
+     ]
+    ],
+    "out": [
+     "int(depth)",
+     "int(slot)",
+     "name"
+    ]
+   }
+  },
+  {
+   "name": "loop",
+   "class": "Loop",
+   "family": "expr",
+   "refines": "node",
+   "operands": {
+    "min": 1,
+    "max": "many"
+   },
+   "slots": [
+    "index",
+    "carries",
+    "nexts",
+    "start",
+    "stop",
+    "step",
+    "trip",
+    "carry_count",
+    "body_sinks",
+    "_body_key",
+    "exit_cond",
+    "exit_values",
+    "count",
+    "count_tail",
+    "dynamic",
+    "_free_end"
+   ],
+   "wire_attr": "loop",
+   "params": "index: LoopIndex, carries: Sequence[LoopCarry], inits: Sequence[Node], nexts: Sequence[Node], *, start: int, stop: int, step: int, free: Sequence[Node] = (), body_sinks: Sequence[Sink] = (), exit_cond: Node | None = None, exit_values: Sequence[Node] = (), count: Node | None = None, count_tail: bool = False, dynamic: str | None = None",
+   "assigns": [
+    "index",
+    "carries",
+    "nexts",
+    "start",
+    "stop",
+    "step",
+    "trip",
+    "carry_count",
+    "body_sinks",
+    "_body_key",
+    "exit_cond",
+    "exit_values",
+    "count",
+    "count_tail",
+    "dynamic",
+    "_free_end"
+   ],
+   "dedup": [
+    "tup",
+    "s:loop",
+    "f:start",
+    "f:stop",
+    "f:step",
+    "names:carries",
+    "skeys:body_sinks",
+    "body",
+    "litif:exit:exit_cond",
+    "litif:count:count",
+    "fieldif:count_tail:count",
+    "litif:dynamic:dynamic",
+    "fieldif:dynamic:dynamic"
+   ],
+   "state": [
+    "start",
+    "stop",
+    "step",
+    "count_tail",
+    "dynamic",
+    "n_free=len(self.free)",
+    "has_count=self.count is not None"
+   ],
+   "edges": [
+    "index",
+    "carries",
+    "nexts",
+    "body_sinks",
+    "exit_cond?",
+    "exit_values"
+   ],
+   "from_edges": true,
+   "from": [
+    "edge:index",
+    "edge:carries",
+    "carry_inits",
+    "edge:nexts",
+    "start=@start",
+    "stop=@stop",
+    "step=@step",
+    "free=free_ops",
+    "body_sinks=edge:body_sinks",
+    "exit_cond=edge:exit_cond",
+    "exit_values=edge:exit_values",
+    "count=count_op",
+    "count_tail=@count_tail",
+    "dynamic=@dynamic"
+   ],
+   "props": [
+    [
+     "inits",
+     "slice",
+     "0",
+     "self.carry_count"
+    ],
+    [
+     "free",
+     "slice",
+     "self.carry_count",
+     "self._free_end"
+    ],
+    [
+     "exit_form",
+     "core",
+     "exit_form"
+    ]
+   ],
+   "methods": [
+    [
+     "body_roots",
+     "tuple(_core.body_roots(self))"
+    ],
+    [
+     "body_nodes",
+     "tuple(_core.body_nodes(self))"
+    ]
+   ],
+   "watch": "all",
+   "ctor": {
+    "steps": [
+     [
+      "let",
+      "carries",
+      "tuple(carries)"
+     ],
+     [
+      "let",
+      "inits",
+      "tuple(inits)"
+     ],
+     [
+      "let",
+      "nexts",
+      "tuple(nexts)"
+     ],
+     [
+      "let",
+      "body_sinks",
+      "tuple(body_sinks)"
+     ],
+     [
+      "let",
+      "exit_values",
+      "tuple(exit_values)"
+     ],
+     [
+      "check",
+      "exit_cond is None and len(exit_values) > 0",
+      "Loop: exit values without an exit condition"
+     ],
+     [
+      "check",
+      "exit_cond is not None and (exit_cond.ttype.shape != () or exit_cond.ttype.dtype != 'bool')",
+      "Loop: a `break` condition must be a rank-0 bool, got {exit_cond.ttype!r}"
+     ],
+     [
+      "check",
+      "exit_cond is not None and len(exit_values) != len(carries)",
+      "Loop: {len(carries)} carried slot(s) but {len(exit_values)} value(s) at the `break`"
+     ],
+     [
+      "let",
+      "xj",
+      "first_mismatch(carries, exit_values)"
+     ],
+     [
+      "check",
+      "exit_cond is not None and not xj < 0",
+      "Loop: carried slot {xj} ({carries[xj].name!r}) is typed {carries[xj].ttype!r} but its value at the `break` is typed {exit_values[xj].ttype!r}"
+     ],
+     [
+      "check",
+      "dynamic is not None and dynamic != 'max' and dynamic != 'open'",
+      "Loop: dynamic is None, 'max' or 'open', got {dynamic!r}"
+     ],
+     [
+      "check",
+      "dynamic is not None and count is None",
+      "Loop: a run-time trip count is carried as `count`"
+     ],
+     [
+      "check",
+      "count is not None and (count.ttype.shape != () or count.ttype.dtype != 'i32')",
+      "Loop: a runtime iteration count is a rank-0 i32, got {count.ttype!r}"
+     ],
+     [
+      "let",
+      "sj",
+      "first_not_instance(body_sinks, Sink)"
+     ],
+     [
+      "check",
+      "not sj < 0",
+      "Loop: {body_sinks[sj]!r} is not a sink"
+     ],
+     [
+      "check",
+      "len(carries) == 0",
+      "Loop: a lowered `for` must carry at least one value — a body that assigns nothing the loop's consumers read computes nothing, and an empty loop is not a HAWK form"
+     ],
+     [
+      "check",
+      "len(carries) != len(inits) or len(inits) != len(nexts)",
+      "Loop: {len(carries)} carried slot(s) but {len(inits)} initial value(s) and {len(nexts)} body result(s) — the three are one tuple read three ways"
+     ],
+     [
+      "check",
+      "int(step) == 0",
+      "Loop: a `for` step of zero never terminates"
+     ],
+     [
+      "let",
+      "fault",
+      "carry_fault(carries, inits, nexts)"
+     ],
+     [
+      "check",
+      "fault is not None and fault[1] == 0",
+      "Loop: carried slot {fault[0]} ({carries[fault[0]].name!r}) is typed {carries[fault[0]].ttype!r} but its initial value is typed {inits[fault[0]].ttype!r}. A carried value has ONE type for the whole loop — it is a single C++ local the body reassigns, so a type that changed between iterations could not be declared at all"
+     ],
+     [
+      "check",
+      "fault is not None and fault[1] == 1",
+      "Loop: carried slot {fault[0]} ({carries[fault[0]].name!r}) is typed {carries[fault[0]].ttype!r} but its body result is typed {nexts[fault[0]].ttype!r}. A carried value has ONE type for the whole loop — it is a single C++ local the body reassigns, so a type that changed between iterations could not be declared at all"
+     ],
+     [
+      "check",
+      "fault is not None and fault[1] == 2",
+      "Loop: carried slot {fault[0]} ({carries[fault[0]].name!r}) is typed {carries[fault[0]].ttype!r}; a carried slot is one language value with static extents and HAWK declares none above rank 2"
+     ],
+     [
+      "let",
+      "free",
+      "tuple(free)"
+     ],
+     [
+      "node",
+      "carries[0].ttype",
+      "cat(inits, free, opt(count))"
+     ]
+    ],
+    "out": [
+     "index",
+     "carries",
+     "nexts",
+     "int(start)",
+     "int(stop)",
+     "int(step)",
+     "trip(int(start), int(stop), int(step))",
+     "len(carries)",
+     "body_sinks",
+     "None",
+     "exit_cond",
+     "exit_values",
+     "count",
+     "bool(count_tail)",
+     "dynamic",
+     "len(cat(inits, free))"
+    ]
+   }
+  },
+  {
+   "name": "loop_value",
+   "class": "LoopValue",
+   "family": "expr",
+   "refines": "op",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "params": "loop: Loop, slot: int",
+   "assigns": [
+    "kind",
+    "literal"
+   ],
+   "from": [
+    "op:0",
+    "@literal"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "check",
+      "not isinstance(loop, Loop)",
+      "LoopValue: {loop!r} is not a Loop"
+     ],
+     [
+      "check",
+      "slot < 0 or not slot < loop.carry_count",
+      "LoopValue: slot {slot} is outside the loop's {loop.carry_count} carried slot(s)"
+     ],
+     [
+      "node",
+      "loop.carries[slot].ttype",
+      "(loop,)"
+     ]
+    ],
+    "out": [
+     "'loop_value'",
+     "slot"
+    ]
+   },
+   "props": [
+    [
+     "loop",
+     "op",
+     "0"
+    ],
+    [
+     "slot",
+     "intlit"
+    ]
+   ]
+  },
+  {
+   "name": "loop_count",
+   "class": "LoopCount",
+   "family": "expr",
+   "refines": "op",
+   "operands": {
+    "min": 1,
+    "max": 1
+   },
+   "params": "loop: Loop",
+   "assigns": [
+    "kind",
+    "literal"
+   ],
+   "from": [
+    "op:0"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "check",
+      "not isinstance(loop, Loop) or loop.exit_cond is None",
+      "LoopCount: {loop!r} is not a loop with a `break`"
+     ],
+     [
+      "node",
+      "tt('i32')",
+      "(loop,)"
+     ]
+    ],
+    "out": [
+     "'loop_count'",
+     "None"
+    ]
+   },
+   "props": [
+    [
+     "loop",
+     "op",
+     "0"
+    ]
+   ]
+  },
+  {
+   "name": "tape_read",
+   "class": "TapeRead",
+   "family": "expr",
+   "refines": "op",
+   "operands": {
+    "min": 1,
+    "max": 2
+   },
+   "params": "loop: Loop, slot: int, index: Node",
+   "assigns": [
+    "kind",
+    "literal",
+    "slot"
+   ],
+   "from": [
+    "op:0",
+    "@literal",
+    "op:1"
+   ],
+   "ctor": {
+    "steps": [
+     [
+      "check",
+      "not isinstance(loop, Loop)",
+      "TapeRead: {loop!r} is not a Loop"
+     ],
+     [
+      "check",
+      "slot < 0 or not slot < loop.carry_count",
+      "TapeRead: slot {slot} is outside the loop's {loop.carry_count} carried slot(s)"
+     ],
+     [
+      "node",
+      "loop.carries[slot].ttype",
+      "(loop, index)"
+     ]
+    ],
+    "out": [
+     "'tape_read'",
+     "slot",
+     "int(slot)"
+    ]
+   },
+   "props": [
+    [
+     "loop",
+     "op",
+     "0"
+    ],
+    [
+     "index",
+     "op",
+     "1"
+    ]
+   ],
+   "slots": [
+    "slot"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.5"]
+build-backend = "maturin"
+
+[project]
+name = "raptor"
+version = "0.0.1"
+description = "raptor: the IR, its rules and its checks; the core is Rust (rs/core, no dependencies) behind a pyo3 binding (rs/binding)"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+[tool.maturin]
+manifest-path = "rs/binding/Cargo.toml"
+module-name = "raptor._core"
+python-source = "."
+include = ["raptor/**/*.py"]

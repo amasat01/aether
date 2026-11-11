@@ -1,0 +1,13 @@
+[package]
+name = "raptor_core_py"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+rcore = { path = "../core" }
+pyo3 = { version = "0.28", features = ["abi3-py310", "extension-module"] }
