@@ -16,6 +16,10 @@ nvcc ?= $(shell which nvcc)
 # Passed to the CMake variable AETHER_DEBUG_MODE
 debug ?= ON
 
+# Passed to CMake variable AETHER_VARIANT_DIR: the directory holding the variant's generated raptor_variant.h (required),
+# e.g. make test variant_dir=<raptor>/variants/x86
+variant_dir ?=
+
 # Passed to CMake variable AETHER_BUILD_TESTS
 test ?= ON
 
@@ -54,19 +58,19 @@ build: configure
 ifeq ($(cpp),ON)
 CONFIGURE_CMD = cmake -B $(builddir) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 else
 ifneq ($(strip $(nvcc)),)
 CONFIGURE_CMD = cmake -B $(builddir) -DCMAKE_CUDA_COMPILER=$(nvcc) $(if $(cuda_host),-DCMAKE_CUDA_HOST_COMPILER=$(cuda_host)) $(ARCH_FLAG) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 else
 # Fallback gracefully to CPU-only if nvcc is not available
 CONFIGURE_CMD = cmake -B $(builddir) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=ON \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=ON \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 endif
 endif

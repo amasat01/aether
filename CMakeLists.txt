@@ -200,10 +200,22 @@ if (NOT AETHER_CPP_MODE)
   list(APPEND AETHER_DEFINES AETHER_HAS_CUDA=1)
 endif()
 
+# The variant's generated header (raptor_variant.h: RAPTOR_LINALG_MAX_DIM, ...) is a named input of this build: the directory that
+# holds it, e.g. <raptor>/variants/x86. Every aether translation unit of this build (the tests too) takes it as a forced include,
+# so aether holds no copy of the number.
+set(AETHER_VARIANT_DIR "" CACHE PATH "Directory holding the variant's generated raptor_variant.h")
+if (NOT EXISTS "${AETHER_VARIANT_DIR}/raptor_variant.h")
+  message(FATAL_ERROR "set AETHER_VARIANT_DIR to the directory holding the variant's generated raptor_variant.h (got '${AETHER_VARIANT_DIR}')")
+endif()
+
 # Header only library
 set(AETHER_LIB aether)
 add_library(${AETHER_LIB} INTERFACE)
 add_library(${AETHER_LIB}::${AETHER_LIB} ALIAS ${AETHER_LIB})
+target_include_directories(${AETHER_LIB} INTERFACE $<BUILD_INTERFACE:${AETHER_VARIANT_DIR}>)
+target_compile_options(${AETHER_LIB} INTERFACE
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include raptor_variant.h>"
+  "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:--pre-include raptor_variant.h>")
 target_include_directories(${AETHER_LIB} INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
