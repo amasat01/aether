@@ -12,6 +12,12 @@
 // TableHandle tex1Dfetch body, moved verbatim:
 //   AETHER_TABLE_READ_BODY(T, tex, ptr, idx, off) -> see table_read_device_arm.h
 #include "table_read_device_arm.h"
+// moved from expr/Assign.h: forced inline on the GCC host pass only; empty on the device pass (device codegen untouched)
+#if defined(__GNUC__) && !defined(__CUDA_ARCH__)
+#define AETHER_DETAIL_UNROLL_INLINE __attribute__((always_inline))
+#else
+#define AETHER_DETAIL_UNROLL_INLINE
+#endif
 #define AETHER_MATH_IMPL_FMA(T, a, b, c) \
     if constexpr (std::is_same_v<T, float>) { \
         return fmaf(a, b, c); \

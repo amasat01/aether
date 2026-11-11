@@ -165,9 +165,9 @@ e990409db5a7515156a94d47f441fd8c ./cut/variants/cuda/aether/banded/detail/Fp32Ar
 984c2b36e55c043ddcd776c65a3ef72c ./cut/variants/cuda/aether/variant/MathScaffoldBinary.h
 8ab168a725a9e1f7c03a08c8e55a9348 ./cut/variants/cuda/aether/variant/MathScaffoldUnary.h
 53592c2974bb86e400fb36848e62e66e ./cut/variants/cuda/aether_device_arms.h
-db28cc72f921161aae92f57adacabac7 ./cut/variants/cuda/aether_variant.h
+5be239a86b3d096c7355c3df2059a078 ./cut/variants/cuda/aether_variant.h
 5a4988141b93443bb11d67f254fcc4c7 ./cut/variants/cuda/macros_device_arm.h
-4589f3b79ce2157c4e8cb41069bcbfed ./cut/variants/cuda/table_read_device_arm.h
+fa5e8931d2db05f101dd9c40975cd9b4 ./cut/variants/cuda/table_read_device_arm.h
 4a6c330d692653ce839cb570776b94ed ./cut/variants/host/aether/accum/RunArm.h
 64a5ecd7619d21bec00326f28b76066f ./cut/variants/host/aether/accum/TwoSumArm.h
 f915b948e61f08e48296f124c07df036 ./cut/variants/host/aether/banded/detail/Fp32Arm.h
@@ -189,6 +189,7 @@ e955b1f5f2cf1bcfa8541779f353a3ca ./cut/variants/host_vecmath/aether/variant/Math
 92a1e776d48693109c2759fb7da7720e ./cut/variants/host_vecmath/aether/variant/MathScaffoldUnary.h
 e0c1e23671ddfe53a9b41a54a7f4e058 ./cut/variants/host_vecmath/aether_variant.h
 e0e4970b05ea7f015fa8ceff1f3be239 ./hvm_tu.cpp
+05a50119ef8084b389e52ca473c76177 ./macro_closure.py
 4f7cdcf00ce0065ec3a64d3e0e8a4a8e ./raptor_src/.gitignore
 9070a5c22f2a4e00ac095b3686e0370b ./raptor_src/Cargo.lock
 ce6bf325e2cd1fd6ae9a9e21328b9792 ./raptor_src/Cargo.toml
