@@ -23,8 +23,13 @@
 namespace aether {
 namespace linalg {
 
-/** @brief Largest supported dimension; `eigh`'s sweep table ends here. */
-inline constexpr std::size_t max_dim = 32;
+#ifndef RAPTOR_LINALG_MAX_DIM
+#error "aether/linalg: include the variant's generated header (raptor_variant.h) before any aether linalg or geometry header"
+#endif
+
+/** @brief Largest supported dimension; `eigh`'s sweep table ends here. Its one home is the variant (RAPTOR_LINALG_MAX_DIM, from the
+ *  variant's generated header). */
+inline constexpr std::size_t max_dim = RAPTOR_LINALG_MAX_DIM;
 
 namespace detail {
 
