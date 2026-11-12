@@ -94,7 +94,7 @@ AETHER_DEVICEHOST() void reflect(const Team& tm, const T* qr, T tau, std::size_t
 template<std::size_t N, class T>
 AETHER_DEVICEHOST() void qr(const Team& tm, const TeamQr<T, N>& f, const T* a_in, std::size_t m)
 {
-    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= 4096");
+    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= team::max_dim");
     const std::size_t rank = static_cast<std::size_t>(tm.rank);
     const std::size_t size = static_cast<std::size_t>(tm.size);
     const std::size_t nt = (m + qrTile - 1) / qrTile;

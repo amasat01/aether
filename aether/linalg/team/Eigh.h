@@ -41,7 +41,7 @@ struct TeamEigh {
 template<std::size_t N, class T>
 AETHER_DEVICEHOST() void eigh(const Team& tm, const TeamEigh<T, N>& r, const T* a_in)
 {
-    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= 4096");
+    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= team::max_dim");
     const std::size_t rank = static_cast<std::size_t>(tm.rank);
     const std::size_t size = static_cast<std::size_t>(tm.size);
     T* v = r.v;

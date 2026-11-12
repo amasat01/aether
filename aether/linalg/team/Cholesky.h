@@ -60,7 +60,7 @@ AETHER_DEVICEHOST() void cleanFactor(const Team& tm, const TeamCholesky<T, N>& f
 template<std::size_t N, class T>
 AETHER_DEVICEHOST() void cholesky(const Team& tm, const TeamCholesky<T, N>& f, const T* a_in)
 {
-    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= 4096");
+    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= team::max_dim");
     const std::size_t rank = static_cast<std::size_t>(tm.rank);
     const std::size_t size = static_cast<std::size_t>(tm.size);
     T* l = f.l;
@@ -105,7 +105,7 @@ AETHER_DEVICEHOST() void cholesky(const Team& tm, const TeamCholesky<T, N>& f, c
 template<std::size_t N, class T>
 AETHER_DEVICEHOST() void choleskyFrom(const Team& tm, const TeamCholesky<T, N>& f, const T* l_in)
 {
-    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= 4096");
+    static_assert(detail::supported_v<T, N>, "aether::linalg::team: T must be float or double and 1 <= N <= team::max_dim");
     if (tm.rank == 0) {
         *f.info = 0;
         for (std::size_t j = 0; j < N; ++j) {

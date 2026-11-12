@@ -45,7 +45,7 @@ AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, 
                                   std::size_t strideGI = 0, std::size_t strideGJ = 0, std::size_t rowsPer = 1)
 {
     static_assert(detail::supported_v<T, P> && detail::supported_v<T, Q>,
-                  "aether::linalg::team: T must be float or double and 1 <= P, Q <= 4096");
+                  "aether::linalg::team: T must be float or double and 1 <= P, Q <= team::max_dim");
     for (std::size_t e = static_cast<std::size_t>(tm.rank); e < P * Q; e += static_cast<std::size_t>(tm.size)) {
         const std::size_t i = e / Q;
         const std::size_t j = e % Q;
