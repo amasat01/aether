@@ -184,6 +184,14 @@ gate_env     = export CMAKE_BUILD_PARALLEL_LEVEL=$(GATE_JOBS) PATH="$(CURDIR)/$(
 gate_wheel_tests = test_arrays.py test_ft_payload.py test_fft.py test_openmp.py
 gate_sub     = $(MAKE) j=$(GATE_JOBS) install_path=$(GATE_DIR)/prefix warn=ON
 
+# Layering guard for a header tree cut into root/, components/ and variants/<name>/: every AETHER_* macro the shared
+# layers use is defined by each variant, and a planted violation is rejected. Usage: make check-layers layers_tree=<dir>
+layers_tree ?=
+.PHONY: check-layers
+check-layers:
+	@test -n "$(layers_tree)" || { echo "set layers_tree=<layered header tree>"; exit 2; }
+	tests/layers/check_layers.sh "$(layers_tree)"
+
 .PHONY: gate gate-gpu gate-gpu-build gate-all gate-venv gate-need-cxx gate-need-cuda
 .PHONY: gate-names gate-lint gate-cpp gate-sanitize gate-hostgcc gate-clang gate-wheel gate-docs
 gate: gate-lint gate-names gate-cpp gate-sanitize gate-hostgcc gate-clang gate-wheel gate-docs
