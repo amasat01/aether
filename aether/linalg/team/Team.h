@@ -32,11 +32,11 @@ namespace linalg {
 namespace team {
 
 #ifndef RAPTOR_LINALG_TEAM_MAX_DIM
-#error "aether/linalg/team: include the variant's generated header (raptor_variant.h) before any aether team linalg header"
+#error "aether/linalg/team: include the raptor wing's generated header (raptor_facts.h) before any aether team linalg header"
 #endif
 
-/** @brief Largest supported dimension of the team family (memory is the real bound). Its one home is the variant
- *  (RAPTOR_LINALG_TEAM_MAX_DIM, from the variant's generated header). */
+/** @brief Largest supported dimension of the team family (memory is the real bound). Its one home is the raptor wing
+ *  (RAPTOR_LINALG_TEAM_MAX_DIM, from the wing's generated header). */
 inline constexpr std::size_t max_dim = RAPTOR_LINALG_TEAM_MAX_DIM;
 
 /** @brief Rows per tile of the QR reductions: fixed, so a sum never depends on the team size. */

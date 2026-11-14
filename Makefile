@@ -16,9 +16,9 @@ nvcc ?= $(shell which nvcc)
 # Passed to the CMake variable AETHER_DEBUG_MODE
 debug ?= ON
 
-# Passed to CMake variable AETHER_VARIANT_DIR: the directory holding the variant's generated raptor_variant.h (required),
-# e.g. make test variant_dir=<raptor>/variants/x86
-variant_dir ?=
+# Passed to CMake variable AETHER_FACTS_DIR: the directory holding the raptor wing's generated raptor_facts.h (required),
+# e.g. make test facts_dir=<raptor>/wings/x86
+facts_dir ?=
 
 # Passed to CMake variable AETHER_BUILD_TESTS
 test ?= ON
@@ -58,19 +58,19 @@ build: configure
 ifeq ($(cpp),ON)
 CONFIGURE_CMD = cmake -B $(builddir) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_FACTS_DIR=$(facts_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 else
 ifneq ($(strip $(nvcc)),)
 CONFIGURE_CMD = cmake -B $(builddir) -DCMAKE_CUDA_COMPILER=$(nvcc) $(if $(cuda_host),-DCMAKE_CUDA_HOST_COMPILER=$(cuda_host)) $(ARCH_FLAG) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_FACTS_DIR=$(facts_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=$(cpp) \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 else
 # Fallback gracefully to CPU-only if nvcc is not available
 CONFIGURE_CMD = cmake -B $(builddir) \
 		-DFETCHCONTENT_QUIET=ON \
-		-DAETHER_BUILD_TESTS=$(test) -DAETHER_VARIANT_DIR=$(variant_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=ON \
+		-DAETHER_BUILD_TESTS=$(test) -DAETHER_FACTS_DIR=$(facts_dir) -DAETHER_WARN_AS_ERR=$(warn) $(if $(sanitizers),-DAETHER_SANITIZERS=$(sanitizers)) -DAETHER_DEBUG_MODE=$(debug) -DAETHER_CPP_MODE=ON \
 		-DCMAKE_INSTALL_PREFIX=$(install_path) .
 endif
 endif
@@ -184,8 +184,8 @@ gate_env     = export CMAKE_BUILD_PARALLEL_LEVEL=$(GATE_JOBS) PATH="$(CURDIR)/$(
 gate_wheel_tests = test_arrays.py test_ft_payload.py test_fft.py test_openmp.py
 gate_sub     = $(MAKE) j=$(GATE_JOBS) install_path=$(GATE_DIR)/prefix warn=ON
 
-# Layering guard for a header tree cut into root/, components/ and variants/<name>/: every AETHER_* macro the shared
-# layers use is defined by each variant, and a planted violation is rejected. Usage: make check-layers layers_tree=<dir>
+# Layering guard for a header tree cut into root/, components/ and wings/<name>/: every AETHER_* macro the shared
+# layers use is defined by each wing, and a planted violation is rejected. Usage: make check-layers layers_tree=<dir>
 layers_tree ?=
 .PHONY: check-layers
 check-layers:

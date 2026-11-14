@@ -1,8 +1,8 @@
 # Copyright 2026 Alessandro Masat
 # SPDX-License-Identifier: Apache-2.0
 """Layer closure check: every AETHER_* macro the shared layers (root, components) USE is defined by root, by components,
-or by EACH variant (closed per variant). Usage: macro_closure.py <layered tree> (a tree holding root/, components/, variants/<name>/).
-Exit 0 when closed, 1 when a variant misses a macro the shared layers use."""
+or by EACH wing (closed per wing). Usage: macro_closure.py <layered tree> (a tree holding root/, components/, wings/<name>/).
+Exit 0 when closed, 1 when a wing misses a macro the shared layers use."""
 import pathlib, re, sys
 if len(sys.argv) != 2:
     sys.exit("usage: macro_closure.py <layered tree>")
@@ -17,7 +17,7 @@ for layer in ("root", "components"):
             shared.setdefault(m, f.relative_to(h).as_posix())
 base = defs(h / "root") | defs(h / "components")
 bad = 0
-for var in sorted(p for p in (h / "variants").iterdir() if p.is_dir()):
+for var in sorted(p for p in (h / "wings").iterdir() if p.is_dir()):
     missing = sorted(m for m in shared if m not in base and m not in defs(var))
     print(f"{var.name}: {len(missing)} missing" + "".join(f"\n  {m} (used in {shared[m]})" for m in missing))
     bad += len(missing)
