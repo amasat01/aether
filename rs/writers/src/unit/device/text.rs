@@ -190,3 +190,25 @@ template <class T>
     return v;
 }
 "####;
+/// The banded warp-sum helper: the lane's value starts an accumulator, and the partners combine in
+/// lane-rank order so every lane ends with the same sum.
+pub const BANDED_WARP_SUM: &str = r####"
+template <class T>
+@QUAL@ T warp_sum(T v)
+{
+    aether::banded::BandAccum a;
+    a.addTerm(aether::banded::Band(v));
+    unsigned lane;
+    asm("mov.u32 %0, %%laneid;" : "=r"(lane));
+    for (int m = 16; m > 0; m >>= 1) {
+        aether::banded::BandAccum o = eagle::cuda::shflXor(0xffffffffu, a, m);
+        if (lane & static_cast<unsigned>(m)) {
+            o.combine(a);
+            a = o;
+        } else {
+            a.combine(o);
+        }
+    }
+    return a.toBandedReal();
+}
+"####;

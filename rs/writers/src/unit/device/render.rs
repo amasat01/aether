@@ -33,6 +33,18 @@ const DEVICE_ARMS: Arms = Arms {
     banded_ss_helpers: BANDED_SS_HELPERS,
 };
 
+/// The device's spellings for a scalar mode: the banded mode's warp sum is an accumulator fold.
+fn arms_of(banded: bool) -> Arms {
+    if banded {
+        Arms {
+            warp_sum: BANDED_WARP_SUM,
+            ..DEVICE_ARMS
+        }
+    } else {
+        DEVICE_ARMS
+    }
+}
+
 /// Refuses the forms of the call the device arm does not write yet, by name.
 fn refuse_unwritten(unit: &Unit) -> Result<(), Refusal> {
     // a unit with a single step the entry does not write as two paths (a caller's body, a segment,
@@ -324,7 +336,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
             "// HAWK-emitted cuda translation unit (scalar mode: {}).\n{}",
             mode.id, "// Body text is the ONE renderer's; this file is the entry wrapper.\n"
         ),
-        unit::prelude(&mode, QUALIFIER, &DEVICE_ARMS, &needs),
+        unit::prelude(&mode, QUALIFIER, &arms_of(mode.cells), &needs),
         exports,
         String::new(),
         prologue::entry_signature(&w, &name, unit.build.launch_bounds)?,

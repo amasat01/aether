@@ -126,7 +126,8 @@ fn whole_value(
 }
 
 /// Refuses, in a banded unit, the operations whose banded spelling is not written: the raw
-/// forms of `exp`, `sin` and `cos`, and an add of a product (written as a fused multiply-add).
+/// forms of `exp`, `sin` and `cos`, and a float add of a product (written as a fused multiply-add);
+/// an integer add of a product is an index and has no banded form.
 fn refuse_banded_forms(f: &Frame, p: usize, kind: &str) -> Result<(), Refusal> {
     if !f.banded() {
         return Ok(());
@@ -138,7 +139,8 @@ fn refuse_banded_forms(f: &Frame, p: usize, kind: &str) -> Result<(), Refusal> {
         f.node(q).class == Class::Op
             && text_field(f.ctx(), f.node(q).h, "kind").is_ok_and(|k| k == "mul")
     };
-    if kind == "add" && f.opp(p).iter().any(product) {
+    let float = matches!(f.node(p).ty.dtype.as_str(), "f64" | "f32");
+    if kind == "add" && float && f.opp(p).iter().any(product) {
         return Err(nib("a banded multiply-add (the fused form)"));
     }
     Ok(())

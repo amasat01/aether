@@ -16,6 +16,7 @@ pub mod entry;
 pub mod fused;
 pub mod host;
 pub mod sums;
+mod team_banded;
 pub mod team_stage;
 pub mod text;
 pub mod two_path;
