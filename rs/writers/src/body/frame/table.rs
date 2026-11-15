@@ -290,6 +290,11 @@ impl Positions {
         self.pos.len()
     }
 
+    /// The number of positions of the walk itself (a position below it is outside every open scope).
+    pub fn walk_count(&self) -> usize {
+        self.table.nodes.len()
+    }
+
     /// The node at a position.
     pub fn node(&self, p: usize) -> &Node {
         let table = self.table.nodes.len();

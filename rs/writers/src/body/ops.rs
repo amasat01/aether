@@ -131,20 +131,98 @@ fn whole_value(
     Ok(None)
 }
 
-/// Refuses, in a banded unit, the operations whose banded spelling is not written: the raw
-/// forms of `exp`, `sin` and `cos`, and a float add of a product (written as a fused multiply-add);
-/// an integer add of a product is an index and has no banded form.
-fn refuse_banded_forms(f: &Frame, p: usize, kind: OpKind) -> Result<(), Refusal> {
+/// Writes, in a banded unit, the fused add of a product, and `exp`, `sin` and `cos`: the raw twin when every reader takes a raw band, the
+/// shared `sincos` of a sine and cosine of one operand at the top scope, else none (the plain math call).
+fn banded_special(f: &mut Frame, p: usize, kind: OpKind, args: &[String]) -> Option<String> {
+    if f.banded() && kind == OpKind::Add && args.len() == 2 {
+        return fused_add(f, p, args);
+    }
+    if !f.banded() || args.len() != 1 {
+        return None;
+    }
+    if matches!(kind, OpKind::Sin | OpKind::Cos) {
+        if let Some((sin, cos)) = banded_sincos(f, p, kind, &args[0]) {
+            return Some(if kind == OpKind::Sin { sin } else { cos });
+        }
+    }
+    let float = matches!(f.node(p).ty.dtype.as_str(), "f64" | "f32");
+    let users = f.users(p);
+    let twin = float
+        && !users.is_empty()
+        && users
+            .iter()
+            .all(|&(u, _)| f.node(u).kind.is_some_and(spell::raw_reader));
+    if twin {
+        spell::banded_raw_twin(kind, &args[0])
+    } else {
+        None
+    }
+}
+
+/// `a*b + c` (either order) as the fused intake `fma(a, b, c)`: a float add whose product has this add alone as
+/// reader, is not named, and has no literal factor, and whose addend is a plane read or a normalised result (a door); else none
+/// (the add is left to the raw chain, the plain operator).
+fn fused_add(f: &mut Frame, p: usize, args: &[String]) -> Option<String> {
+    if !matches!(f.node(p).ty.dtype.as_str(), "f64" | "f32") {
+        return None;
+    }
+    let float =
+        |q: usize| matches!(f.node(q).ty.dtype.as_str(), "f64" | "f32") && f.node(q).rank() == 0;
+    for j in 0..2 {
+        let (prod, addend) = (f.opp(p)[j], f.opp(p)[1 - j]);
+        let operands = f.opp(prod).clone();
+        let n = f.node(addend);
+        let door = n.class == Class::Op && n.kind.is_some_and(spell::banded_door);
+        if f.node(prod).kind != Some(OpKind::Mul)
+            || operands.len() != 2
+            || f.fanout(prod) != 1
+            || f.is_declared(f.peek(prod))
+            || operands.iter().any(|&o| f.node(o).class == Class::Const)
+            || !(matches!(n.class, Class::Leaf | Class::At) || door)
+            || !float(addend)
+        {
+            continue;
+        }
+        let (a, b) = (f.text(operands[0]).clone(), f.text(operands[1]).clone());
+        return Some(spell::banded_fma(&a, &b, &args[1 - j]));
+    }
+    None
+}
+
+/// The names of the shared sine and cosine of the operand of the sine or cosine at `p`: bound the first time one of the
+/// pair is reached; none when the node is not one of a pair at the top scope.
+fn banded_sincos(f: &mut Frame, p: usize, kind: OpKind, arg: &str) -> Option<(String, String)> {
+    let top = f.walk_count();
+    let operand = f.opp(p)[0];
+    let partner = if kind == OpKind::Sin {
+        OpKind::Cos
+    } else {
+        OpKind::Sin
+    };
+    let paired = (0..top)
+        .any(|q| f.node(q).kind == Some(partner) && f.opp(q)[0] == operand && f.is_outside(q));
+    if p >= top || !f.is_outside(p) || !paired {
+        return None;
+    }
+    if let Some((_, s, c)) = f.sincos.iter().find(|e| e.0 == operand) {
+        return Some((s.clone(), c.clone()));
+    }
+    let k = f.sincos.len();
+    let (sin, cos) = (format!("hawk_sin{k}"), format!("hawk_cos{k}"));
+    let [bind, call] = spell::banded_sincos(&sin, &cos, arg);
+    f.emit_bare(bind);
+    f.emit(call);
+    f.sincos.push((operand, sin.clone(), cos.clone()));
+    Some((sin, cos))
+}
+
+/// Refuses, in a banded unit, the operations whose banded spelling is not written: an explicit fma.
+fn refuse_banded_forms(f: &Frame, kind: OpKind) -> Result<(), Refusal> {
     if !f.banded() {
         return Ok(());
     }
-    if matches!(kind, OpKind::Fma | OpKind::Exp | OpKind::Sin | OpKind::Cos) {
-        return Err(nib(format!("a banded {kind} (the raw band forms)")));
-    }
-    let product = |&q: &usize| f.node(q).kind == Some(OpKind::Mul);
-    let float = matches!(f.node(p).ty.dtype.as_str(), "f64" | "f32");
-    if kind == OpKind::Add && float && f.opp(p).iter().any(product) {
-        return Err(nib("a banded multiply-add (the fused form)"));
+    if kind == OpKind::Fma {
+        return Err(nib("a banded fma (the fused form)"));
     }
     Ok(())
 }
@@ -174,7 +252,12 @@ fn scalar_text(
         f.hold_needs(p, &used);
         return Ok(Some(text));
     }
-    refuse_banded_forms(f, p, kind)?;
+    refuse_banded_forms(f, kind)?;
+    if rank == 0 && ranks.iter().all(|&r| r == 0) {
+        if let Some(text) = banded_special(f, p, kind, args) {
+            return Ok(Some(text));
+        }
+    }
     if rank == 0 && ranks.iter().all(|&r| r == 0) {
         let mut used = vec![];
         let text = spell::scalar_op(kind, args, &dtype, &mut used)?;

@@ -367,6 +367,7 @@ fn new_frame<'e>(
         slot: Default::default(),
         cut: cut.to_vec(),
         loop_emitter: emit,
+        sincos: vec![],
         compensated: None,
         placed: unit.target == crate::contract::types::Target::Device
             || (!cut.is_empty() && !one_trip),

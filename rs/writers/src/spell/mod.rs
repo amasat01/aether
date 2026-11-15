@@ -265,6 +265,48 @@ const INFIX: [(OpKind, &str); 12] = [
     (OpKind::Lor, "||"),
 ];
 
+/// The operations a banded exp, sin or cos may leave raw for: the readers that take a raw band.
+pub fn raw_reader(kind: OpKind) -> bool {
+    matches!(
+        kind,
+        OpKind::Add | OpKind::Sub | OpKind::Mul | OpKind::Neg | OpKind::Div
+    )
+}
+
+/// The raw-exit twin of a banded exp, sin or cos of `arg`; none for another operation.
+pub fn banded_raw_twin(kind: OpKind, arg: &str) -> Option<String> {
+    let twin = match kind {
+        OpKind::Exp => "expRaw",
+        OpKind::Sin => "sinRaw",
+        OpKind::Cos => "cosRaw",
+        _ => return None,
+    };
+    Some(format!(
+        "aether::banded::detail::{twin}(aether::banded::Band({arg}))"
+    ))
+}
+
+/// Whether a banded operation's result is a normalised `Band` (a facade door or a division): the math functions and `div`.
+pub fn banded_door(kind: OpKind) -> bool {
+    kind == OpKind::Div
+        || MATH_UNARY.contains(&kind)
+        || MATH_BINARY.iter().any(|m| m.0 == kind)
+        || matches!(kind, OpKind::Fma | OpKind::Clip)
+}
+
+/// The fused multiply-add of a product `a * b` and a normalised addend `c`.
+pub fn banded_fma(a: &str, b: &str, c: &str) -> String {
+    format!("aether::banded::detail::fma({a}, {b}, aether::banded::Band({c}))")
+}
+
+/// The line that binds a banded sine and cosine of one operand, and the line that computes them.
+pub fn banded_sincos(sin: &str, cos: &str, arg: &str) -> [String; 2] {
+    [
+        format!("aether::banded::Band {sin}, {cos};"),
+        format!("aether::math::sincos(aether::banded::Band({arg}), &{sin}, &{cos});"),
+    ]
+}
+
 /// A rank-0 floating-point operation over the operand texts.
 /// One element of an operation over scalar texts; the helpers its text calls are pushed on `used`.
 pub fn scalar_op(
@@ -676,6 +718,27 @@ pub fn ident(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn banded_exp_sin_cos_spell_raw_twins_and_a_shared_pair() {
+        assert_eq!(
+            banded_raw_twin(OpKind::Exp, "x").unwrap(),
+            "aether::banded::detail::expRaw(aether::banded::Band(x))"
+        );
+        assert!(banded_raw_twin(OpKind::Add, "x").is_none());
+        assert_eq!(
+            banded_fma("a", "b", "c"),
+            "aether::banded::detail::fma(a, b, aether::banded::Band(c))"
+        );
+        assert!(banded_door(OpKind::Div) && banded_door(OpKind::Sqrt) && !banded_door(OpKind::Add));
+        assert!(raw_reader(OpKind::Neg) && !raw_reader(OpKind::Exp));
+        let [bind, call] = banded_sincos("hawk_sin0", "hawk_cos0", "x");
+        assert_eq!(bind, "aether::banded::Band hawk_sin0, hawk_cos0;");
+        assert_eq!(
+            call,
+            "aether::math::sincos(aether::banded::Band(x), &hawk_sin0, &hawk_cos0);"
+        );
+    }
 
     #[test]
     fn reals_print_in_the_shortest_round_trip_form() {

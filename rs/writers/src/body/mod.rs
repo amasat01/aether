@@ -188,6 +188,8 @@ pub struct Frame<'e> {
     pub(crate) stores: stores::storeplan::Plan,
     /// The carried slots a loop without a break lets a store run write in place, by handle.
     pub mutable_carries: std::collections::HashSet<u32>,
+    /// The banded `sincos` pairs bound so far, by the position of the shared operand: the names of the sine and the cosine.
+    sincos: Vec<(usize, String, String)>,
 }
 
 /// The frame reads and writes its table directly: the table's accessors (`f.node(p)`, `f.text(p)`, `f.set_done(p)`, ...)
