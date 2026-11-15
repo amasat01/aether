@@ -1,0 +1,1 @@
+# Module edges the design does not allow (ci/gate_rs.sh modules): file:from>to:count. May only shrink; empty today.

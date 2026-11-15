@@ -194,7 +194,7 @@ check-layers:
 
 .PHONY: gate gate-gpu gate-gpu-build gate-all gate-venv gate-need-cxx gate-need-cuda
 .PHONY: gate-names gate-lint gate-cpp gate-sanitize gate-hostgcc gate-clang gate-wheel gate-docs
-gate: gate-lint gate-names gate-cpp gate-sanitize gate-hostgcc gate-clang gate-wheel gate-docs
+gate: gate-lint gate-names gate-cpp gate-sanitize gate-hostgcc gate-clang gate-wheel gate-docs gate-rs
 gate-all: gate gate-gpu
 
 # The throwaway environment: ruff (pinned in ci/constraints.txt) and pytest.
@@ -299,3 +299,9 @@ clean:
 # Fail-fast for multi-line recipes under .ONESHELL: without -e, `test:`/`remint:` ran check_gate.sh
 # against a STALE binary after a failed build and reported the gate's RC alone.
 .SHELLFLAGS := -ec
+
+# The Rust legs and the guards (fmt, empty dependencies, no global state, tests against the raptor library, clippy budget).
+# RAPTOR_IR_LIB overrides the library; `sh ci/gate_rs.sh <leg>` runs one leg.
+.PHONY: gate-rs
+gate-rs:
+	JOBS=$(GATE_JOBS) sh ci/gate_rs.sh

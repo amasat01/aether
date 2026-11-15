@@ -1,0 +1,160 @@
+//! The class of a node, built once from the door's class name. A class the writers do not name
+//! stays `Other` with its name, so it is refused exactly as an unnamed class always was.
+
+/// The node classes the writers tell apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Class {
+    /// A kernel argument: a plane or a scalar read by its role and name.
+    Leaf,
+    /// An indexed read of a plane.
+    At,
+    /// The extent of a plane along an axis.
+    PlaneExtent,
+    /// The index of the sample being computed.
+    SampleIndex,
+    /// The position of the sample within its batch.
+    SamplePosition,
+    /// A choice between two values by a condition.
+    Select,
+    /// A literal value.
+    Const,
+    /// A value fixed by the role of an argument.
+    RoleConst,
+    /// An arithmetic, comparison or reduction operation, named by its kind.
+    Op,
+    /// A counted loop with carried values.
+    Loop,
+    /// The value a loop gives back after its last trip.
+    LoopValue,
+    /// The trip counter of a loop.
+    LoopCount,
+    /// The index variable of a loop body.
+    LoopIndex,
+    /// A value carried from one trip of a loop to the next.
+    LoopCarry,
+    /// A read of a tape row recorded by a loop.
+    TapeRead,
+    /// A write of a tape row by a loop.
+    TapeWrite,
+    /// A write of a lane-wide value into a plane.
+    WideWrite,
+    /// A choice among branches by a clamped selector.
+    Dispatch,
+    /// A dispatch that evaluates every branch and chooses by a chain.
+    PredicatedDispatch,
+    /// A dispatch whose strategy is picked and counted at run time.
+    AutoDispatch,
+    /// A read of a value shared by the lanes of a team.
+    TeamRead,
+    /// A copy into a value shared by the lanes of a team.
+    TeamCopy,
+    /// A store of the lanes' results into a shared value.
+    TeamStore,
+    /// A log of scattered writes, replayed at commit.
+    ScatterLog,
+    /// A store that goes through a write log.
+    LogStore,
+    /// A store of a boxed value.
+    BoxStore,
+    /// A primitive a loop body calls for its effect.
+    Primitive,
+    /// An assignment to a plane or a mutable argument.
+    Assign,
+    /// A sum over the samples of a batch.
+    SampleSum,
+    /// An accumulating write into a plane.
+    AccumWrite,
+    /// The end of a sample: counts a finished sample.
+    Finish,
+    /// Any other class: only its name is kept.
+    Other(String),
+}
+
+impl Class {
+    /// The class of the node class name the door answers.
+    pub fn from_name(name: &str) -> Class {
+        match name {
+            "Leaf" => Class::Leaf,
+            "At" => Class::At,
+            "PlaneExtent" => Class::PlaneExtent,
+            "SampleIndex" => Class::SampleIndex,
+            "SamplePosition" => Class::SamplePosition,
+            "Select" => Class::Select,
+            "Const" => Class::Const,
+            "RoleConst" => Class::RoleConst,
+            "Op" => Class::Op,
+            "Loop" => Class::Loop,
+            "LoopValue" => Class::LoopValue,
+            "LoopCount" => Class::LoopCount,
+            "LoopIndex" => Class::LoopIndex,
+            "LoopCarry" => Class::LoopCarry,
+            "TapeRead" => Class::TapeRead,
+            "TapeWrite" => Class::TapeWrite,
+            "WideWrite" => Class::WideWrite,
+            "Dispatch" => Class::Dispatch,
+            "PredicatedDispatch" => Class::PredicatedDispatch,
+            "AutoDispatch" => Class::AutoDispatch,
+            "TeamRead" => Class::TeamRead,
+            "TeamCopy" => Class::TeamCopy,
+            "TeamStore" => Class::TeamStore,
+            "ScatterLog" => Class::ScatterLog,
+            "LogStore" => Class::LogStore,
+            "BoxStore" => Class::BoxStore,
+            "Primitive" => Class::Primitive,
+            "Assign" => Class::Assign,
+            "SampleSum" => Class::SampleSum,
+            "AccumWrite" => Class::AccumWrite,
+            "Finish" => Class::Finish,
+            other => Class::Other(other.to_string()),
+        }
+    }
+
+    /// The class of a node, by the name the door answers for it.
+    pub fn of(ctx: *mut crate::ir::door::RxCtx, node: u32) -> Result<Class, String> {
+        Ok(Class::from_name(&crate::ir::door::class_name(ctx, node)?))
+    }
+
+    /// The door's name of the class.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Class::Leaf => "Leaf",
+            Class::At => "At",
+            Class::PlaneExtent => "PlaneExtent",
+            Class::SampleIndex => "SampleIndex",
+            Class::SamplePosition => "SamplePosition",
+            Class::Select => "Select",
+            Class::Const => "Const",
+            Class::RoleConst => "RoleConst",
+            Class::Op => "Op",
+            Class::Loop => "Loop",
+            Class::LoopValue => "LoopValue",
+            Class::LoopCount => "LoopCount",
+            Class::LoopIndex => "LoopIndex",
+            Class::LoopCarry => "LoopCarry",
+            Class::TapeRead => "TapeRead",
+            Class::TapeWrite => "TapeWrite",
+            Class::WideWrite => "WideWrite",
+            Class::Dispatch => "Dispatch",
+            Class::PredicatedDispatch => "PredicatedDispatch",
+            Class::AutoDispatch => "AutoDispatch",
+            Class::TeamRead => "TeamRead",
+            Class::TeamCopy => "TeamCopy",
+            Class::TeamStore => "TeamStore",
+            Class::ScatterLog => "ScatterLog",
+            Class::LogStore => "LogStore",
+            Class::BoxStore => "BoxStore",
+            Class::Primitive => "Primitive",
+            Class::Assign => "Assign",
+            Class::SampleSum => "SampleSum",
+            Class::AccumWrite => "AccumWrite",
+            Class::Finish => "Finish",
+            Class::Other(name) => name,
+        }
+    }
+}
+
+impl std::fmt::Display for Class {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(self.as_str())
+    }
+}

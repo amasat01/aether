@@ -1,0 +1,17 @@
+[package]
+name = "aether_writers"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+
+[features]
+# reads the old shape of a request (the mirror of the earlier writers' objects) as well as the typed one
+old-contract = []
+# reports, for the replay tool, what the typed description of a request refuses
+shadow = ["old-contract"]
