@@ -28,6 +28,17 @@ pub struct HostSource {
     pub needs_diffs: Option<Vec<String>>,
 }
 
+impl HostSource {
+    /// The symbol the text exports for its entry: a host entry carries the host writer's suffix, a device kernel is its name.
+    pub fn symbol(&self) -> String {
+        if self.meta.target == "host" {
+            crate::unit::host::render::exported(&self.entry)
+        } else {
+            self.entry.clone()
+        }
+    }
+}
+
 /// What one render owns besides the unit: the body it wrote and whether that body draws random
 /// numbers.
 pub struct Render<'a> {

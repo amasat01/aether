@@ -833,9 +833,15 @@ fn sample_sum_frame(
     Ok((opened, closed))
 }
 
+/// The symbol the host text exports for the entry named `name`: the one place that names it.
+pub(crate) fn exported(name: &str) -> String {
+    format!("{name}_host")
+}
+
 /// The signature of the host entry named `name`.
 fn signature(name: &str) -> String {
-    format!("extern \"C\" void {name}_host(void* const* params,\n    std::int64_t base,\n    std::int64_t count,\n    std::int64_t nSamples)")
+    let symbol = exported(name);
+    format!("extern \"C\" void {symbol}(void* const* params,\n    std::int64_t base,\n    std::int64_t count,\n    std::int64_t nSamples)")
 }
 
 #[cfg(test)]
