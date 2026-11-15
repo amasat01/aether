@@ -1,7 +1,7 @@
 //! Operations: scalar and tensor spellings, casts, integer calls and index clamps.
 use super::{linalg, Frame, Name, NameKind, Node, Out, Span};
 use crate::body::frame::needs::Need;
-use crate::body::values::{component_index, literal_of, text_field};
+use crate::body::values::{component_index, literal_of, real_value, text_field};
 use crate::body::{Class, OpKind};
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, RxCtx};
@@ -134,8 +134,13 @@ fn whole_value(
 /// Writes, in a banded unit, the fused add of a product, and `exp`, `sin` and `cos`: the raw twin when every reader takes a raw band, the
 /// shared `sincos` of a sine and cosine of one operand at the top scope, else none (the plain math call).
 fn banded_special(f: &mut Frame, p: usize, kind: OpKind, args: &[String]) -> Option<String> {
-    if f.banded() && kind == OpKind::Add && args.len() == 2 {
-        return fused_add(f, p, args);
+    if f.banded() && args.len() == 2 {
+        if let Some(text) = literal_op(f, p, kind, args) {
+            return Some(text);
+        }
+        if kind == OpKind::Add {
+            return fused_add(f, p, args);
+        }
     }
     if !f.banded() || args.len() != 1 {
         return None;
@@ -156,6 +161,19 @@ fn banded_special(f: &mut Frame, p: usize, kind: OpKind, args: &[String]) -> Opt
         spell::banded_raw_twin(kind, &args[0])
     } else {
         None
+    }
+}
+
+/// `x <op> c` with exactly one real literal operand, by its exact class (see `spell::literal_op`).
+fn literal_op(f: &Frame, p: usize, kind: OpKind, args: &[String]) -> Option<String> {
+    if !matches!(kind, OpKind::Add | OpKind::Sub | OpKind::Mul | OpKind::Div) {
+        return None;
+    }
+    let ops = f.opp(p);
+    match (real_value(f, ops[0]), real_value(f, ops[1])) {
+        (Some(c), None) => spell::literal_op(kind, &args[1], c, true),
+        (None, Some(c)) => spell::literal_op(kind, &args[0], c, false),
+        _ => None,
     }
 }
 

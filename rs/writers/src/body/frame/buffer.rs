@@ -3,8 +3,9 @@
 //! truncated when a loop or case scope closes (the lines of a closed scope stay in the buffer and
 //! so do their declarations); a buffer scope puts both aside together.
 use super::namer::Name;
-use crate::body::Frame;
+use crate::body::{Class, Frame};
 use crate::contract::types::Scalar;
+use crate::ir::door;
 use crate::refuse::Refusal;
 use crate::spell;
 use std::collections::BTreeSet;
@@ -192,6 +193,29 @@ impl Frame<'_> {
         self.unit.scalar == Scalar::Banded
     }
 
+    /// Whether a banded local of the node at `p` flows on unnormalised: a computed value whose every reader is an operation that
+    /// takes a raw band (a plane element is decoded once, and a sink, carry or exit reads limbs in order).
+    pub(crate) fn flows_raw(&self, p: usize, held: &[u32]) -> bool {
+        let n = self.node(p);
+        self.banded()
+            && !matches!(n.class, Class::Leaf | Class::At)
+            && !held.contains(&n.h)
+            && !self.users(p).is_empty()
+            && self
+                .users(p)
+                .iter()
+                .all(|&(u, _)| self.node(u).kind.is_some_and(spell::reads_raw))
+    }
+
+    /// The handles of the values the walk's sinks commit (a sink reads limbs in order).
+    pub(crate) fn sink_values(&self) -> Result<Vec<u32>, Refusal> {
+        let mut out = vec![];
+        for &s in self.sinks() {
+            out.extend(door::operands(self.ctx(), s)?);
+        }
+        Ok(out)
+    }
+
     /// Declares a typed local through `spell::declare` and records it in the buffer.
     pub(crate) fn declare(
         &mut self,
@@ -200,8 +224,9 @@ impl Frame<'_> {
         shape: &[usize],
         value: &str,
         held: bool,
+        raw: bool,
     ) -> Result<(), Refusal> {
-        let mode = if self.banded() {
+        let mode = if self.banded() && !raw {
             spell::Mode::Banded
         } else {
             spell::Mode::Plain

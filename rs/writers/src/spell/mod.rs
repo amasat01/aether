@@ -1,8 +1,10 @@
 //! The C++ expression spelling of the aether writer (rank-0 subset): literals, leaves, scalar
 //! operations, stores. A construct
 //! it does not spell yet is a refusal "not in this build: <construct>".
+mod band;
 use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
+pub use band::{band_literal, literal_op};
 
 /// The prefix of the names a role's slots are bound under, none for a role that has no binding.
 pub fn ident_prefix(role: &str) -> Option<&'static str> {
@@ -273,6 +275,15 @@ pub fn raw_reader(kind: OpKind) -> bool {
     )
 }
 
+/// Whether the reader `kind` takes an unnormalised band operand (a chain operator or a door that normalises at entry).
+pub fn reads_raw(kind: OpKind) -> bool {
+    raw_reader(kind)
+        || matches!(
+            kind,
+            OpKind::Exp | OpKind::Log | OpKind::Sin | OpKind::Cos | OpKind::Sqrt
+        )
+}
+
 /// The raw-exit twin of a banded exp, sin or cos of `arg`; none for another operation.
 pub fn banded_raw_twin(kind: OpKind, arg: &str) -> Option<String> {
     let twin = match kind {
@@ -441,6 +452,9 @@ fn ext(shape: &[usize]) -> String {
         .join(", ")
 }
 
+/// The type of a banded float scalar.
+pub const BAND_TYPE: &str = "aether::banded::Band";
+
 /// The scalar mode a local is spelled for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -462,7 +476,7 @@ pub fn declared_type(
         return Ok(format!("aether::Item<{}, {}>", element(dtype)?, shape[0]));
     }
     if mode == Mode::Banded && shape.is_empty() && matches!(dtype, "f64" | "f32") {
-        return Ok("aether::banded::Band".to_string());
+        return Ok(BAND_TYPE.to_string());
     }
     Ok("auto".to_string())
 }

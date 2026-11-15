@@ -495,7 +495,8 @@ fn render_nodes(f: &mut Frame, order: &[usize], tally: &[usize]) -> Result<(), R
                 let name = f.names.body_temp();
                 let ty = f.node(p).ty.clone();
                 let held = tally[p] >= 2 && !leaf_valued;
-                f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held)?;
+                let raw = f.flows_raw(p, &f.sink_values()?);
+                f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held, raw)?;
                 f.set_text(p, name.text);
             } else {
                 f.set_text(p, text)

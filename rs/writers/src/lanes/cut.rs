@@ -129,7 +129,7 @@ fn emit_break_trip(
     let (pos, body, exits, edge) = (head.pos, &head.body, &head.exits, head);
     let (elems, names, flag, speculative) = (&head.elems, &t.names, &t.flag, t.speculative);
     let pre = exit_part(f, body, exits)?;
-    render_scope(f, body, base, fan, Some(&pre), &[])?;
+    render_scope(f, head, base, fan, Some(&pre), &[])?;
     let cond = f.arg(edge.exit_cond.unwrap())?;
     f.emit(format!("const bool {flag} = {cond};"));
     let held: Vec<String> = (0..names.len())
@@ -163,9 +163,9 @@ fn emit_selected_rest(
     pre: &[u32],
     held: &[String],
 ) -> Result<(), Refusal> {
-    let (pos, body, edge) = (head.pos, &head.body, head);
+    let (pos, edge) = (head.pos, head);
     let (elems, names, nexts, flag) = (&head.elems, &t.names, &t.nexts, &t.flag);
-    render_scope(f, body, base, fan, None, pre)?;
+    render_scope(f, head, base, fan, None, pre)?;
     for j in 0..names.len() {
         let result = f.names.result(pos, j).text;
         let line = format!("const {} {result} = {};", elems[j], f.arg(edge.nexts[j])?);
@@ -191,7 +191,7 @@ fn emit_guarded_rest(
     pre: &[u32],
     held: &[String],
 ) -> Result<(), Refusal> {
-    let (pos, body, edge) = (head.pos, &head.body, head);
+    let (pos, edge) = (head.pos, head);
     let (elems, names, nexts, flag) = (&head.elems, &t.names, &t.nexts, &t.flag);
     for j in 0..names.len() {
         f.emit(format!(
@@ -203,7 +203,7 @@ fn emit_guarded_rest(
     }
     f.emit(format!("if (!{flag}) {{"));
     f.buf.indent.push_str("    ");
-    render_scope(f, body, base, fan, None, pre)?;
+    render_scope(f, head, base, fan, None, pre)?;
     for (j, &next) in edge.nexts[..names.len()].iter().enumerate() {
         let line = format!("{} = {};", f.names.write_back(pos, j).text, f.arg(next)?);
         f.emit(line)
@@ -230,9 +230,9 @@ fn emit_plain_trip(
     base: usize,
     fan: &[usize],
 ) -> Result<(), Refusal> {
-    let (body, edge, form) = (&head.body, head, head.form);
+    let (edge, form) = (head, head.form);
     let (elems, names, nexts, flag, planed) = (&head.elems, &t.names, &t.nexts, &t.flag, &t.planed);
-    render_scope(f, body, base, fan, None, &[])?;
+    render_scope(f, head, base, fan, None, &[])?;
     for j in 0..names.len() {
         if planed[j] {
             if f.arg(edge.nexts[j])? != names[j] {

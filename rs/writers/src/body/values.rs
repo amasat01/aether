@@ -140,11 +140,27 @@ pub fn sample_index() -> Result<Out, Refusal> {
     Ok(Out::Value(spell::SAMPLE_INDEX.to_string(), None))
 }
 
+/// The value of a rank-0 real constant at `p`, else none.
+pub(crate) fn real_value(f: &Frame, p: usize) -> Option<f64> {
+    let n = f.node(p);
+    if n.class != Class::Const || n.rank() != 0 || !matches!(n.ty.dtype.as_str(), "f64" | "f32") {
+        return None;
+    }
+    match literal_of(f.ctx(), n.h).ok()? {
+        door::Scalar::Real(v) => Some(v),
+        door::Scalar::Int(v) => Some(v as f64),
+        _ => None,
+    }
+}
+
 /// A constant, spelled for its type and rank.
 pub fn constant(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let n = &f.node(p);
     if f.banded() && matches!(n.ty.dtype.as_str(), "f64" | "f32") {
-        return Err(nib("a banded literal"));
+        return match real_value(f, p) {
+            Some(v) if n.rank() == 0 => spell::band_literal(v).map(|t| Out::Value(t, None)),
+            _ => Err(nib("a banded literal")),
+        };
     }
     Ok(Out::Value(
         spell::constant(&n.ty.dtype, n.rank(), &held_of(&literal_of(f.ctx(), n.h)?))?,

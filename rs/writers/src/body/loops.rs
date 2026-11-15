@@ -303,16 +303,27 @@ pub(crate) fn exit_part(f: &Frame, body: &[u32], roots: &[u32]) -> Result<Vec<u3
     Ok(need)
 }
 
+/// The handles the loop's carries, exits and body sinks read: consumers that are no operation.
+fn held_by_nothing_but_ops(f: &Frame, head: &LoopHead) -> Result<Vec<u32>, Refusal> {
+    let mut held: Vec<u32> = head.nexts.iter().chain(&head.exits).copied().collect();
+    for &sink in &head.body_sinks {
+        held.extend(door::operands(f.ctx(), sink)?);
+    }
+    Ok(held)
+}
+
 /// Renders the body's nodes inside the open scope: a value read twice within the body, and a
 /// vector, are named `tb<n>`.
 pub(crate) fn render_scope(
     f: &mut Frame,
-    body: &[u32],
+    head: &LoopHead,
     base: usize,
     sf: &[usize],
     only: Option<&[u32]>,
     skip: &[u32],
 ) -> Result<(), Refusal> {
+    let body = &head.body;
+    let exempt = held_by_nothing_but_ops(f, head)?;
     for &h in body {
         if skip.contains(&h) || only.is_some_and(|o| !o.contains(&h)) {
             continue;
@@ -332,7 +343,8 @@ pub(crate) fn render_scope(
                 let name = f.names.body_temp();
                 let ty = f.node(s).ty.clone();
                 let held = sf[s - base] >= 2 && !f.leaf_valued(s)?;
-                f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held)?;
+                let raw = f.flows_raw(s, &exempt);
+                f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held, raw)?;
                 f.set_text(s, name.text);
             }
             Out::Value(text, _) => f.set_text(s, text),
@@ -411,10 +423,13 @@ pub(crate) fn read_head(f: &mut Frame, lp: u32) -> Result<LoopHead, Refusal> {
     let (mut elems, mut names, mut types) = (vec![], vec![], vec![]);
     for (j, &c) in carries.iter().enumerate() {
         let t = crate::body::ty_of(ctx, c)?;
-        if f.banded() && matches!(t.dtype.as_str(), "f64" | "f32") {
-            return Err(nib("a banded loop-carried float value"));
-        }
-        elems.push(spell::carry_type(&t.dtype, &t.shape)?);
+        elems.push(
+            if f.banded() && t.shape.is_empty() && matches!(t.dtype.as_str(), "f64" | "f32") {
+                spell::BAND_TYPE.to_string()
+            } else {
+                spell::carry_type(&t.dtype, &t.shape)?
+            },
+        );
         types.push(t);
         names.push(
             f.names
@@ -648,7 +663,7 @@ fn render_trip_body(
     let (pos, body, form) = (head.pos, &head.body, head.form);
     if form == "head" || form == "middle" {
         let pre = exit_part(f, body, &head.exits)?;
-        render_scope(f, body, base, sf, Some(&pre), &[])?;
+        render_scope(f, head, base, sf, Some(&pre), &[])?;
         let line = format!("if ({}) {{", f.arg(head.exit_cond.unwrap())?);
         f.emit(line);
         f.buf.indent.push_str("    ");
@@ -676,9 +691,9 @@ fn render_trip_body(
         f.emit("break;".into());
         f.buf.indent.truncate(f.buf.indent.len() - 4);
         f.emit("}".into());
-        render_scope(f, body, base, sf, None, &pre)?;
+        render_scope(f, head, base, sf, None, &pre)?;
     } else {
-        render_scope(f, body, base, sf, None, &[])?
+        render_scope(f, head, base, sf, None, &[])?
     }
     Ok(())
 }

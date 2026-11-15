@@ -412,7 +412,8 @@ pub(crate) fn name_value(
         };
         let ty = f.node(p).ty.clone();
         let held = f.fanout(p) >= 2 && !leaf_valued;
-        f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held)?;
+        let raw = f.flows_raw(p, &f.sink_values()?);
+        f.declare(name.clone(), &ty.dtype, &ty.shape, &text, held, raw)?;
         f.set_text(p, name.text);
     } else {
         f.set_text(p, text)

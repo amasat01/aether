@@ -2,7 +2,7 @@
 //! fan-out, readers, spans); they are built once and never written after. The rows of an open loop
 //! scope are kept apart, appended after the table's, and dropped with the scope. `Pos` is what
 //! rendering records for one position. The fields are private: everything goes through methods.
-use crate::body::Node;
+use crate::body::{Class, Node};
 use crate::ir::door::RxCtx;
 use std::collections::BTreeSet;
 
@@ -323,6 +323,13 @@ impl Positions {
     /// Sets the operand positions of the node at `p`, a slot of an open loop scope.
     pub fn set_opp(&mut self, p: usize, positions: Vec<usize>) {
         let table = self.table.nodes.len();
+        if self.scope.nodes[p - table].class != Class::Primitive {
+            for (k, &q) in positions.iter().enumerate() {
+                if q >= table {
+                    self.scope.users[q - table].push((p, k))
+                }
+            }
+        }
         self.scope.opp[p - table] = positions
     }
 
