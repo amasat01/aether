@@ -17,6 +17,10 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         Scalar::Text(name) if name == "warp_read" => true,
         _ => return Err(nib("a runtime-index read with a literal")),
     };
+    // a source already held in a placed plane is read from the plane, whatever made it
+    if f.proxies.iter().any(|x| x.name == *f.peek(source)) {
+        return Ok(Out::Value(format!("{}.at({index})", f.text(source)), None));
+    }
     // an element-wise source is rewritten first: the read moves to its operands (a rewrite of the
     // walk, not written)
     if f.node(source).class == Class::Op && f.node(source).rank() == 1 {
@@ -41,9 +45,6 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         {
             return Err(nib("a runtime-index read of an element-wise value (the read is pushed to its operands first)"));
         }
-    }
-    if f.proxies.iter().any(|x| x.name == *f.peek(source)) {
-        return Ok(Out::Value(format!("{}.at({index})", f.text(source)), None));
     }
     if f.node(source).class == Class::Leaf {
         let (role, name) = (
