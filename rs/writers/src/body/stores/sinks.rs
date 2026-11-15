@@ -142,17 +142,19 @@ pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Refus
             seen += 1
         }
     }
-    let sink_h = f.node(f.at(sink)?).h;
-    if f.banded() && text_field(f.ctx(), sink_h, "op")? == "sum" {
-        return Err(nib("a banded sample sum (the accumulator form)"));
-    }
     let value = f.text(f.opp(p)[0]).clone();
-    let value = if f.banded() {
-        format!("aether::banded::Band({value})")
+    if !f.banded() {
+        f.emit(format!("hawk_ss[{column}] = {value};"));
+        return Ok(());
+    }
+    // a banded sum adds the term to the column's accumulator; the other ops take the term as it is
+    let term = format!("aether::banded::Band({value})");
+    let sink_h = f.node(f.at(sink)?).h;
+    if text_field(f.ctx(), sink_h, "op")? == "sum" {
+        f.emit(format!("hawk_ss[{column}].addTerm({term});"));
     } else {
-        value
-    };
-    f.emit(format!("hawk_ss[{column}] = {value};"));
+        f.emit(format!("hawk_ss[{column}] = {term};"));
+    }
     Ok(())
 }
 
