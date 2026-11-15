@@ -1,7 +1,7 @@
 //! The C++ expression spelling of the aether writer (rank-0 subset): literals, leaves, scalar
 //! operations, stores. A construct
 //! it does not spell yet is a refusal "not in this build: <construct>".
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 
 /// The prefix of the names a role's slots are bound under, none for a role that has no binding.
 pub fn ident_prefix(role: &str) -> Option<&'static str> {
@@ -23,7 +23,7 @@ pub fn ident_prefix(role: &str) -> Option<&'static str> {
 }
 
 /// The C++ name a slot of `role` and `name` is bound under.
-pub fn binding_name(role: &str, name: &str) -> Result<String, String> {
+pub fn binding_name(role: &str, name: &str) -> Result<String, Refusal> {
     ident_prefix(role)
         .map(|p| format!("{p}_{name}"))
         .ok_or_else(|| nib(format!("slot role {role}")))
@@ -75,7 +75,7 @@ pub fn real_literal(x: f64) -> String {
 }
 
 /// A rank-0 leaf read at the body's own sample.
-pub fn leaf(role: &str, name: &str, rank: usize, dtype: &str) -> Result<String, String> {
+pub fn leaf(role: &str, name: &str, rank: usize, dtype: &str) -> Result<String, Refusal> {
     let b = binding_name(role, name)?;
     if rank > 0 {
         return Err(nib(format!("leaf of rank {rank} ({role})")));
@@ -92,7 +92,7 @@ pub fn leaf(role: &str, name: &str, rank: usize, dtype: &str) -> Result<String, 
 }
 
 /// A plane read at a computed index (`index` is the rendered index operand).
-pub fn at(role: &str, name: &str, index: &str, rank: usize) -> Result<String, String> {
+pub fn at(role: &str, name: &str, index: &str, rank: usize) -> Result<String, Refusal> {
     Ok(format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>({index}))]{}",
         binding_name(role, name)?,
@@ -122,7 +122,7 @@ pub fn cast_op(
     target: &str,
     source: &str,
     used: &mut Vec<Helper>,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let (e, float_src) = (elem(target)?, matches!(source, "f64" | "f32"));
     elem(source)?;
     Ok(if int_plane(target) && float_src {
@@ -134,7 +134,7 @@ pub fn cast_op(
 }
 
 /// The name of the cell a by-value parameter of `role` is read from.
-pub fn param_cell(role: &str, name: &str) -> Result<String, String> {
+pub fn param_cell(role: &str, name: &str) -> Result<String, Refusal> {
     Ok(format!("{}_cell", binding_name(role, name)?))
 }
 
@@ -153,7 +153,7 @@ pub enum Held<'a> {
 /// The C++ text of a constant of the given element type and rank, spelled from the value it holds.
 /// A value the element type cannot hold (a real for an integer type, an integer other than 0 or 1
 /// or real other than 0 and 1 for a flag, a flag for a number) is not in this build.
-pub fn constant(dtype: &str, rank: usize, held: &Held) -> Result<String, String> {
+pub fn constant(dtype: &str, rank: usize, held: &Held) -> Result<String, Refusal> {
     if rank > 0 {
         return Err(nib("literal of rank > 0"));
     }
@@ -183,8 +183,13 @@ pub fn constant(dtype: &str, rank: usize, held: &Held) -> Result<String, String>
     }
 }
 
-/// The expression for the current sample's index.
+/// The sample index as the device entry declares it (a `long long`).
+pub const SAMPLE_INDEX_IDENT: &str = "hawk_i";
+/// The sample index as an `Int` expression.
 pub const SAMPLE_INDEX: &str = "static_cast<Int>(hawk_i)";
+
+/// The lane's place in its warp: the team prologue binds it.
+pub const WARP_LANE: &str = "hawk_wl";
 
 /// A select. `host` is the blend setting with both arms free to evaluate: a blend at rank 0, a held
 /// Item above; otherwise a
@@ -198,7 +203,7 @@ pub fn select(
     shape: &[usize],
     args: &[String],
     hoist: &mut dyn FnMut(String) -> String,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let (mut c, a, b) = (args[0].clone(), &args[1], &args[2]);
     if shape.is_empty() {
         return Ok(if host && (dtype == "f64" || dtype == "f32") {
@@ -263,7 +268,7 @@ pub fn scalar_op(
     args: &[String],
     dtype: &str,
     used: &mut Vec<Helper>,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let int_call = [
         ("floordiv", "int_floordiv"),
         ("mod", "int_mod"),
@@ -341,7 +346,7 @@ pub fn scalar_op(
 }
 
 /// The C++ element type of a plane of `dtype`, as a fixed text.
-fn element(dtype: &str) -> Result<&'static str, String> {
+fn element(dtype: &str) -> Result<&'static str, Refusal> {
     match dtype {
         "f64" | "f32" => Ok("Real"),
         "i32" | "i64" => Ok("Int"),
@@ -354,7 +359,7 @@ pub fn int_plane(dtype: &str) -> bool {
     matches!(dtype, "int32" | "uint32")
 }
 /// The C++ element type of `dtype`.
-fn elem(dtype: &str) -> Result<String, String> {
+fn elem(dtype: &str) -> Result<String, Refusal> {
     if int_plane(dtype) {
         Ok(format!("std::{dtype}_t"))
     } else {
@@ -362,7 +367,7 @@ fn elem(dtype: &str) -> Result<String, String> {
     }
 }
 /// A cast of `text` to the element type of `dtype`.
-fn cast(text: &str, dtype: &str) -> Result<String, String> {
+fn cast(text: &str, dtype: &str) -> Result<String, Refusal> {
     let e = element(dtype)?;
     Ok(if text.starts_with(&format!("static_cast<{e}>")) {
         text.to_string()
@@ -380,7 +385,7 @@ fn ext(shape: &[usize]) -> String {
 }
 
 /// The C++ type `declare` gives a local: `auto`, or the `aether::Item` of a held vector.
-pub fn declared_type(dtype: &str, shape: &[usize], held: bool) -> Result<String, String> {
+pub fn declared_type(dtype: &str, shape: &[usize], held: bool) -> Result<String, Refusal> {
     if held && shape.len() == 1 {
         return Ok(format!("aether::Item<{}, {}>", element(dtype)?, shape[0]));
     }
@@ -395,7 +400,7 @@ pub fn declare(
     shape: &[usize],
     text: &str,
     held: bool,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     if held && shape.len() == 1 {
         return Ok(format!(
             "const aether::Item<{}, {}> {name} = {text};",
@@ -407,7 +412,7 @@ pub fn declare(
 }
 
 /// A leaf of rank >= 1 read whole (a row of the sample): materialised as an Item.
-pub fn row_leaf(role: &str, name: &str) -> Result<String, String> {
+pub fn row_leaf(role: &str, name: &str) -> Result<String, Refusal> {
     let b = binding_name(role, name)?;
     match role {
         "vec_in" | "mat_in" | "per_sample" | "lookup" | "mutable" => Ok(format!("{b}[i].get()")),
@@ -440,7 +445,7 @@ fn broadcast(
     op: &TensorOp,
     hoist: &mut dyn FnMut(String) -> String,
     scalar: &str,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     Ok(hoist(format!(
         "aether::constant<aether::extents<{}>>({})",
         ext(op.shape),
@@ -450,7 +455,10 @@ fn broadcast(
 
 /// An op with an operand or a result of rank >= 1. `hoist` binds a text to a fresh local ahead of
 /// the current line.
-pub fn tensor_op(op: &TensorOp, hoist: &mut dyn FnMut(String) -> String) -> Result<String, String> {
+pub fn tensor_op(
+    op: &TensorOp,
+    hoist: &mut dyn FnMut(String) -> String,
+) -> Result<String, Refusal> {
     structure_op(op)
         .or_else(|| arithmetic_op(op, hoist))
         .or_else(|| unary_op(op))
@@ -459,7 +467,7 @@ pub fn tensor_op(op: &TensorOp, hoist: &mut dyn FnMut(String) -> String) -> Resu
 }
 
 /// Component reads, splats and the construction of a vector; none for another op.
-fn structure_op(op: &TensorOp) -> Option<Result<String, String>> {
+fn structure_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let (args, shape, dtype) = (op.args, op.shape, op.dtype);
     Some(match op.kind {
         "component" => {
@@ -484,7 +492,7 @@ fn structure_op(op: &TensorOp) -> Option<Result<String, String>> {
 fn arithmetic_op(
     op: &TensorOp,
     hoist: &mut dyn FnMut(String) -> String,
-) -> Option<Result<String, String>> {
+) -> Option<Result<String, Refusal>> {
     let (kind, args, ranks) = (op.kind, op.args, op.ranks);
     if args.len() != 2 {
         return None;
@@ -526,7 +534,7 @@ fn arithmetic_op(
 fn product_or_quotient(
     op: &TensorOp,
     hoist: &mut dyn FnMut(String) -> String,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let (kind, args, ranks) = (op.kind, op.args, op.ranks);
     let sym = if kind == "mul" { "*" } else { "/" };
     if ranks[0] == 0 && kind == "mul" {
@@ -550,7 +558,7 @@ fn product_or_quotient(
 }
 
 /// Negation, absolute value and the element-wise math functions; none for another op.
-fn unary_op(op: &TensorOp) -> Option<Result<String, String>> {
+fn unary_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let (kind, args) = (op.kind, op.args);
     Some(match kind {
         "neg" => Ok(format!("({} * static_cast<Real>(-1))", args[0])),
@@ -566,7 +574,7 @@ fn unary_op(op: &TensorOp) -> Option<Result<String, String>> {
 }
 
 /// Norms, sums, transposes and the matrix and vector products; none for another op.
-fn product_op(op: &TensorOp) -> Option<Result<String, String>> {
+fn product_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let (kind, args, ranks) = (op.kind, op.args, op.ranks);
     let one = args.len() == 1;
     let two = args.len() == 2;
@@ -582,7 +590,7 @@ fn product_op(op: &TensorOp) -> Option<Result<String, String>> {
 }
 
 /// A PlaneExtent node: the element count of the plane's view.
-pub fn plane_extent(role: &str, name: &str) -> Result<String, String> {
+pub fn plane_extent(role: &str, name: &str) -> Result<String, Refusal> {
     Ok(format!(
         "static_cast<Int>({}.samples())",
         binding_name(role, name)?
@@ -590,7 +598,7 @@ pub fn plane_extent(role: &str, name: &str) -> Result<String, String> {
 }
 
 /// The C++ type one loop-carried local is declared as: a plain scalar at rank 0, an Item above.
-pub fn carry_type(dtype: &str, shape: &[usize]) -> Result<String, String> {
+pub fn carry_type(dtype: &str, shape: &[usize]) -> Result<String, Refusal> {
     let e = elem(dtype)?;
     Ok(if shape.is_empty() {
         e
@@ -683,10 +691,14 @@ mod tests {
             ("f64", Held::Other("text")),
         ] {
             let message = refused(dtype, held);
-            assert!(message.starts_with("not in this build: "), "{message}");
+            assert!(
+                message.reason.starts_with("not in this build: "),
+                "{message}"
+            );
         }
         assert!(constant("f64", 1, &Held::Real(1.0))
             .unwrap_err()
+            .reason
             .starts_with("not in this build: "));
     }
 }

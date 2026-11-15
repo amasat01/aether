@@ -3,7 +3,7 @@
 //! it does not know is refused by name, never given a default.
 use super::types::*;
 use super::{Contract, Json};
-use crate::refuse::nib;
+use crate::refuse::{bad, unknown, Refusal};
 
 /// The request as recorded, in either call form.
 struct Old<'a> {
@@ -64,7 +64,7 @@ fn find_number(j: &Json, key: &str) -> Option<i64> {
 }
 
 /// The typed description of a recorded request, or the refusal that names what is not known.
-pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, String> {
+pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, Refusal> {
     let top = &contract.0;
     let source = live(top.get("args")).is_some();
     let old = Old {
@@ -73,11 +73,11 @@ pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, String> {
     };
     let kernel = if source { None } else { top.get("kernel") };
     if !source && kernel.is_none() {
-        return Err(nib("an unknown call form"));
+        return Err(unknown("an unknown call form"));
     }
     let form = old.form(kernel)?;
     let active = old.active(kernel)?;
-    let spec = old.spec().ok_or("the call carries no spec")?;
+    let spec = old.spec().ok_or_else(|| bad("the call carries no spec"))?;
     Ok(Unit {
         name: old.name(),
         target,
@@ -85,20 +85,17 @@ pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, String> {
         kind: kind_of(old.arg("kind"))?,
         sinks: old.sinks(kernel),
         walk: old.walk(kernel)?,
-        source_call: source,
-        body_given: old.arg("body").is_some(),
-        prerendered_body: old.prerendered(kernel),
+        body: given_body(top).map_or(BodySource::Walk, BodySource::Given),
         active,
         segment: old.segment(),
-        thread_box: old.thread_box(),
+        thread_box: if source { None } else { old.thread_box() },
         one_step: old.one_step()?,
-        rows: old.arg("rows").and_then(Json::int).unwrap_or(1),
+        rows: old.arg("rows").and_then(Json::int).unwrap_or(DEFAULT_ROWS),
         team: old.team(kernel, spec)?,
         build: build_of(spec, &target, source)?,
         machine: machine_of(spec, top.get("facts"))?,
         exports: old.exports()?,
         literal_table: old.literal_table(),
-        given_body: given_body(top),
         form,
     })
 }
@@ -127,7 +124,7 @@ impl<'a> Old<'a> {
     }
 
     /// The scalar mode; an omitted mode is `Float64`.
-    fn scalar(&self) -> Result<Scalar, String> {
+    fn scalar(&self) -> Result<Scalar, Refusal> {
         let mode = match self.kwargs {
             Some(kwargs) => live(kwargs.get("mode")),
             None => live(self.top.get("smode")),
@@ -139,7 +136,7 @@ impl<'a> Old<'a> {
             "FLOAT64" => Ok(Scalar::Float64),
             "FLOAT32" => Ok(Scalar::Float32),
             "BANDED" => Ok(Scalar::Banded),
-            other => Err(nib(format!("scalar mode {other:?}"))),
+            other => Err(unknown(format!("scalar mode {other:?}"))),
         }
     }
 
@@ -152,7 +149,7 @@ impl<'a> Old<'a> {
     }
 
     /// The unit's own arguments, when the record carries a walk.
-    fn walk(&self, kernel: Option<&Json>) -> Result<Option<Walk>, String> {
+    fn walk(&self, kernel: Option<&Json>) -> Result<Option<Walk>, Refusal> {
         let walk = match kernel {
             Some(kernel) => kernel.get("walk"),
             None => self.top.get("args").and_then(|a| a.arr().get(2)),
@@ -160,14 +157,8 @@ impl<'a> Old<'a> {
         walk.map(walk_of).transpose()
     }
 
-    /// Whether the caller supplies the body: a given body, or a kernel that renders per target.
-    fn prerendered(&self, kernel: Option<&Json>) -> bool {
-        let per_target = kernel.and_then(|k| k.get("per_target_body"));
-        self.arg("body").is_some() || matches!(per_target, Some(Json::Bool(true)))
-    }
-
     /// What the body is, from the kernel record and the call.
-    fn form(&self, kernel: Option<&Json>) -> Result<Form, String> {
+    fn form(&self, kernel: Option<&Json>) -> Result<Form, Refusal> {
         let Some(kernel) = kernel else {
             return Ok(Form::Plain);
         };
@@ -186,14 +177,14 @@ impl<'a> Old<'a> {
             ("Kernel" | "TeamStage" | "Chain" | "SegmentUnit" | "ClassifyUnit", _) => {
                 Ok(Form::Plain)
             }
-            (other, _) => Err(nib(format!("kernel record {other}"))),
+            (other, _) => Err(unknown(format!("kernel record {other}"))),
         }
     }
 
     /// The active set the launch takes. A launch over keys, chunks or targets takes none; a team
     /// stage
     /// over one of them still reads its own map (see `TeamStage::active`).
-    fn active(&self, kernel: Option<&Json>) -> Result<Option<Active>, String> {
+    fn active(&self, kernel: Option<&Json>) -> Result<Option<Active>, Refusal> {
         let grid = text(
             kernel
                 .and_then(|k| k.get("team"))
@@ -207,24 +198,24 @@ impl<'a> Old<'a> {
     }
 
     /// The active-set record of the call, whatever the launch shape.
-    fn active_record(&self) -> Result<Option<Active>, String> {
+    fn active_record(&self) -> Result<Option<Active>, Refusal> {
         let Some(spec) = self.arg("active") else {
             return Ok(None);
         };
         let map_bits = match int_at(spec, "map_bits") {
             None | Some(32) => MapBits::B32,
             Some(64) => MapBits::B64,
-            Some(other) => return Err(nib(format!("an index map {other} bits wide"))),
+            Some(other) => return Err(unknown(format!("an index map {other} bits wide"))),
         };
         let Some(count_binding) = spec.get("count_binding").and_then(Json::str) else {
-            return Err(nib("an index map record"));
+            return Err(unknown("an index map record"));
         };
         Ok(Some(Active {
             map_binding: live(spec.get("map_binding"))
                 .and_then(Json::str)
                 .map(String::from),
             count_binding: count_binding.to_string(),
-            group: int_at(spec, "group").unwrap_or(1),
+            group: int_at(spec, "group").unwrap_or(DEFAULT_GROUP),
             map_bits,
             lane_set: matches!(spec.get("lane_set"), Some(Json::Bool(true))),
         }))
@@ -235,7 +226,7 @@ impl<'a> Old<'a> {
         let segment = self.arg("segment")?;
         Some(Segment {
             offsets_binding: text(segment.get("offsets_binding")).to_string(),
-            j: int_at(segment, "j").unwrap_or(0),
+            j: int_at(segment, "j").unwrap_or(DEFAULT_RUN_START),
         })
     }
 
@@ -244,13 +235,13 @@ impl<'a> Old<'a> {
         let record = self.arg("box")?;
         Some(ThreadBox {
             axis: int_at(record, "axis"),
-            t: int_at(record, "T").unwrap_or(1),
-            stride: int_at(record, "stride").unwrap_or(1),
+            t: int_at(record, "T").unwrap_or(DEFAULT_THREADS),
+            stride: int_at(record, "stride").unwrap_or(DEFAULT_STRIDE),
         })
     }
 
     /// The single-step variant, when the call has one.
-    fn one_step(&self) -> Result<Option<OneStep>, String> {
+    fn one_step(&self) -> Result<Option<OneStep>, Refusal> {
         let Some(step) = self.arg("one_step") else {
             return Ok(None);
         };
@@ -261,24 +252,26 @@ impl<'a> Old<'a> {
     }
 
     /// The team of the unit: the kernel's team record, or the source form's thread count.
-    fn team(&self, kernel: Option<&Json>, spec: &Json) -> Result<Option<TeamShape>, String> {
+    fn team(&self, kernel: Option<&Json>, spec: &Json) -> Result<Option<TeamShape>, Refusal> {
         let settings_warps = spec.get("settings").and_then(|s| int_at(s, "warps"));
         if self.kwargs.is_some() {
             let Some(given) = self.arg("team") else {
                 return Ok(None);
             };
-            let threads = given.int().ok_or_else(|| nib("a team of another form"))?;
+            let threads = given
+                .int()
+                .ok_or_else(|| unknown("a team of another form"))?;
             return Ok(Some(TeamShape {
                 threads,
-                warps: settings_warps.unwrap_or(1),
+                warps: settings_warps.unwrap_or(DEFAULT_WARPS),
             }));
         }
         let Some(team) = live(kernel.and_then(|k| k.get("team"))) else {
             return Ok(None);
         };
         Ok(Some(TeamShape {
-            threads: int_at(team, "threads").unwrap_or(1),
-            warps: int_at(team, "warps").unwrap_or(1),
+            threads: int_at(team, "threads").unwrap_or(DEFAULT_THREADS),
+            warps: int_at(team, "warps").unwrap_or(DEFAULT_WARPS),
         }))
     }
 
@@ -290,7 +283,7 @@ impl<'a> Old<'a> {
     }
 
     /// The export block: finished text in the source form, layout sizes in the backend form.
-    fn exports(&self) -> Result<Exports, String> {
+    fn exports(&self) -> Result<Exports, Refusal> {
         if let Some(kwargs) = self.kwargs {
             return Ok(Exports::Text(text(kwargs.get("exports")).to_string()));
         }
@@ -303,11 +296,11 @@ impl<'a> Old<'a> {
         };
         let mut values = [0u64; 5];
         if sizes.arr().len() != values.len() {
-            return Err("layout_sizes_override= takes 5 sizes".into());
+            return Err(bad("layout_sizes_override= takes 5 sizes"));
         }
         for (slot, size) in values.iter_mut().zip(sizes.arr()) {
             let size = size.int().and_then(|n| u64::try_from(n).ok());
-            *slot = size.ok_or_else(|| "layout size".to_string())?;
+            *slot = size.ok_or_else(|| bad("layout size"))?;
         }
         Ok(Exports::Sizes(values))
     }
@@ -319,9 +312,9 @@ fn reference(j: Option<&Json>) -> Option<&str> {
 }
 
 /// The kind of unit from its record or its default reference.
-fn kind_of(kind: Option<&Json>) -> Result<Kind, String> {
+fn kind_of(kind: Option<&Json>) -> Result<Kind, Refusal> {
     let Some(kind) = kind else {
-        return Err(nib("kernel kind (absent)"));
+        return Err(unknown("kernel kind (absent)"));
     };
     if let Some(path) = reference(Some(kind)) {
         return match path {
@@ -330,11 +323,11 @@ fn kind_of(kind: Option<&Json>) -> Result<Kind, String> {
                 lanes: false,
                 sink: SinkPolicy::Plain,
             }),
-            other => Err(nib(format!("kernel kind {other}"))),
+            other => Err(unknown(format!("kernel kind {other}"))),
         };
     }
     if text(kind.get("$type")) != "Kind" {
-        return Err(nib(format!("kernel kind {}", text(kind.get("$type")))));
+        return Err(unknown(format!("kernel kind {}", text(kind.get("$type")))));
     }
     Ok(Kind {
         guard: guard_of(kind.get("guard"))?,
@@ -344,8 +337,8 @@ fn kind_of(kind: Option<&Json>) -> Result<Kind, String> {
 }
 
 /// The sink policy of a kind record.
-fn sink_of(sink: Option<&Json>, output: Option<&Json>) -> Result<SinkPolicy, String> {
-    let other = || nib("kind with a sink policy of another form");
+fn sink_of(sink: Option<&Json>, output: Option<&Json>) -> Result<SinkPolicy, Refusal> {
+    let other = || unknown("kind with a sink policy of another form");
     let sink = sink.ok_or_else(other)?;
     if sink.get("$ref").and_then(Json::str) == Some("hawk.ext:PLAIN") {
         return Ok(SinkPolicy::Plain);
@@ -377,8 +370,8 @@ fn compensated_sink(plane: &str, output: Option<&Json>) -> SinkPolicy {
 }
 
 /// The guard of a kind record: a named constant or a record that lists masks.
-fn guard_of(guard: Option<&Json>) -> Result<Guard, String> {
-    let other = || nib("kind with a guard of another form");
+fn guard_of(guard: Option<&Json>) -> Result<Guard, Refusal> {
+    let other = || unknown("kind with a guard of another form");
     let guard = guard.ok_or_else(other)?;
     match guard.get("$ref").and_then(Json::str) {
         Some("hawk.ext:DEFAULT_GUARD") => return Ok(Guard::Default),
@@ -408,29 +401,31 @@ fn guard_of(guard: Option<&Json>) -> Result<Guard, String> {
 }
 
 /// The members of a fused kernel record.
-fn fused_of(kernel: &Json) -> Result<Form, String> {
+fn fused_of(kernel: &Json) -> Result<Form, Refusal> {
     let mut lanes = vec![];
     for member in kernel.get("members").map_or(&[][..], |m| m.arr()) {
         let name = member.get("name").and_then(Json::str);
+        if !text(member.get("prologue")).is_empty() {
+            return Err(unknown("a fused lane with a prologue text"));
+        }
         lanes.push(FusedLane {
             name: name
-                .ok_or_else(|| nib("a fused lane without a name"))?
+                .ok_or_else(|| unknown("a fused lane without a name"))?
                 .to_string(),
             sinks: nodes(member.get("sinks")),
-            prologue: text(member.get("prologue")).to_string(),
         });
     }
     Ok(Form::Fused(lanes))
 }
 
 /// The team stage a team record describes.
-fn stage_of(team: &Json, active: Option<Active>) -> Result<TeamStage, String> {
+fn stage_of(team: &Json, active: Option<Active>) -> Result<TeamStage, Refusal> {
     let grid = match text(team.get("grid")) {
         "lanes" => Grid::Lanes,
         "keys" => Grid::Keys,
         "chunks" => Grid::Chunks,
         "targets" => Grid::Targets,
-        other => return Err(nib(format!("team grid {other:?}"))),
+        other => return Err(unknown(format!("team grid {other:?}"))),
     };
     let mut planes = vec![];
     for plane in team.get("planes").map_or(&[][..], |p| p.arr()) {
@@ -439,14 +434,14 @@ fn stage_of(team: &Json, active: Option<Active>) -> Result<TeamStage, String> {
             int_at(plane, "per_lane"),
         ) {
             (Some(name), Some(width)) => planes.push((name.to_string(), width)),
-            _ => return Err(nib("a team plane record")),
+            _ => return Err(unknown("a team plane record")),
         }
     }
     let mut reads = vec![];
     for leaf in team.get("reads").map_or(&[][..], |r| r.arr()) {
         match int_at(leaf, "$node") {
             Some(node) if node >= 0 => reads.push(node as u32),
-            _ => return Err(nib("a team read record")),
+            _ => return Err(unknown("a team read record")),
         }
     }
     let steps = team.get("steps").map_or(&[][..], |s| s.arr());
@@ -461,9 +456,9 @@ fn stage_of(team: &Json, active: Option<Active>) -> Result<TeamStage, String> {
 }
 
 /// One step record of a team stage.
-fn step_of(step: &Json) -> Result<Step, String> {
+fn step_of(step: &Json) -> Result<Step, Refusal> {
     let number =
-        |key: &str| int_at(step, key).ok_or_else(|| nib(format!("a team step without {key}")));
+        |key: &str| int_at(step, key).ok_or_else(|| unknown(format!("a team step without {key}")));
     let mut planes = vec![];
     for pair in step.get("planes").map_or(&[][..], |p| p.arr()) {
         match (
@@ -471,14 +466,14 @@ fn step_of(step: &Json) -> Result<Step, String> {
             pair.arr().get(1).and_then(Json::str),
         ) {
             (Some(role), Some(name)) => planes.push((role.to_string(), name.to_string())),
-            _ => return Err(nib("a team step plane")),
+            _ => return Err(unknown("a team step plane")),
         }
     }
     Ok(Step {
         op: step_op(
             step.get("op")
                 .and_then(Json::str)
-                .ok_or_else(|| nib("a team step without op"))?,
+                .ok_or_else(|| unknown("a team step without op"))?,
         )?,
         n: number("n")?,
         k: number("k")?,
@@ -489,31 +484,8 @@ fn step_of(step: &Json) -> Result<Step, String> {
 }
 
 /// The operation a team step names.
-fn step_op(name: &str) -> Result<StepOp, String> {
-    Ok(match name {
-        "lu" => StepOp::Lu,
-        "lu_solve" => StepOp::LuSolve,
-        "lu_solve_t" => StepOp::LuSolveT,
-        "lu_inverse" => StepOp::LuInverse,
-        "lu_det" => StepOp::LuDet,
-        "chol" => StepOp::Chol,
-        "chol_from" => StepOp::CholFrom,
-        "cho_solve" => StepOp::ChoSolve,
-        "tri_lower" => StepOp::TriLower,
-        "tri_upper_t" => StepOp::TriUpperT,
-        "eigh" => StepOp::Eigh,
-        "eigh_warp" => StepOp::EighWarp,
-        "qr" => StepOp::Qr,
-        "qr_solve" => StepOp::QrSolve,
-        "qr_gram_solve" => StepOp::QrGramSolve,
-        "block_sum" => StepOp::BlockSum,
-        "block_part" => StepOp::BlockPart,
-        "ordered_fold" => StepOp::OrderedFold,
-        "scatter_zero" => StepOp::ScatterZero,
-        "scatter_chunks" => StepOp::ScatterChunks,
-        "scatter_cells" => StepOp::ScatterCells,
-        other => return Err(nib(format!("team step {other}"))),
-    })
+fn step_op(name: &str) -> Result<StepOp, Refusal> {
+    StepOp::named(name).ok_or_else(|| unknown(format!("team step {name}")))
 }
 
 /// The `(role, name)` pair a slot key records.
@@ -537,19 +509,19 @@ fn lookup<'a>(map: &[(&'a Json, &'a Json)], role: &str, name: &str) -> Option<&'
 }
 
 /// The walk a walk record describes.
-fn walk_of(walk: &Json) -> Result<Walk, String> {
+fn walk_of(walk: &Json) -> Result<Walk, Refusal> {
     let types = map_pairs(walk.get("slot_types"));
     let indices = map_pairs(walk.get("slot_of"));
     let spec = walk
         .get("arg_spec")
-        .ok_or("contract: walk without arg_spec")?;
+        .ok_or_else(|| bad("contract: walk without arg_spec"))?;
     let mut slots = vec![];
     for key in spec.arr() {
         let (role, name) = pair_key(key);
-        let ty = lookup(&types, role, name).ok_or("contract: slot without a type")?;
+        let ty = lookup(&types, role, name).ok_or_else(|| bad("contract: slot without a type"))?;
         let index = lookup(&indices, role, name)
             .and_then(Json::int)
-            .ok_or("contract: slot without an index")?;
+            .ok_or_else(|| bad("contract: slot without an index"))?;
         slots.push(Slot {
             role: role_of(role)?,
             name: name.to_string(),
@@ -574,7 +546,7 @@ fn walk_of(walk: &Json) -> Result<Walk, String> {
 }
 
 /// The role a slot records.
-fn role_of(name: &str) -> Result<Role, String> {
+fn role_of(name: &str) -> Result<Role, Refusal> {
     Ok(match name {
         "mutable" => Role::Mutable,
         "per_sample" => Role::PerSample,
@@ -588,12 +560,12 @@ fn role_of(name: &str) -> Result<Role, String> {
         "wide_in" => Role::WideIn,
         "nsamples" => Role::Nsamples,
         "out" => Role::Out,
-        other => return Err(nib(format!("slot role {other:?}"))),
+        other => return Err(unknown(format!("slot role {other:?}"))),
     })
 }
 
 /// The element type a slot records.
-fn dtype_of(name: &str) -> Result<Dtype, String> {
+fn dtype_of(name: &str) -> Result<Dtype, Refusal> {
     Ok(match name {
         "f64" => Dtype::F64,
         "f32" => Dtype::F32,
@@ -602,17 +574,17 @@ fn dtype_of(name: &str) -> Result<Dtype, String> {
         "int32" => Dtype::Int32,
         "uint32" => Dtype::Uint32,
         "bool" => Dtype::Bool,
-        other => return Err(nib(format!("slot dtype {other:?}"))),
+        other => return Err(unknown(format!("slot dtype {other:?}"))),
     })
 }
 
 /// The access class a walk records.
-fn access_of(name: &str) -> Result<Access, String> {
+fn access_of(name: &str) -> Result<Access, Refusal> {
     Ok(match name {
         "sample_local" => Access::SampleLocal,
         "cross_sample_read" => Access::CrossSampleRead,
         "cross_sample_write" => Access::CrossSampleWrite,
-        other => return Err(nib(format!("access class {other:?}"))),
+        other => return Err(unknown(format!("access class {other:?}"))),
     })
 }
 
@@ -639,19 +611,19 @@ fn by_target(spec: &Json, name: &str, section: &str, key: &str) -> Option<i64> {
 }
 
 /// The build's settings and the numbers of the target.
-fn build_of(spec: &Json, target: &Target, source: bool) -> Result<Build, String> {
+fn build_of(spec: &Json, target: &Target, source: bool) -> Result<Build, Refusal> {
     let wing = primary_wing(spec, target);
     let settings = spec.get("settings");
     let required =
-        |key: &str| setting(wing, "form", key).ok_or_else(|| format!("spec: form.{key}"));
-    let fold_form = match settings
-        .and_then(|s| s.get("form"))
-        .map_or("auto", |f| text(Some(f)))
-    {
-        "auto" => FoldForm::Auto,
-        "static" => FoldForm::Static,
-        "rolled" => FoldForm::Rolled,
-        other => return Err(nib(format!("fold form {other:?}"))),
+        |key: &str| setting(wing, "form", key).ok_or_else(|| bad(format!("spec: form.{key}")));
+    let fold_form = match settings.and_then(|s| s.get("form")) {
+        None => FoldForm::default(),
+        Some(form) => match text(Some(form)) {
+            "auto" => FoldForm::Auto,
+            "static" => FoldForm::Static,
+            "rolled" => FoldForm::Rolled,
+            other => return Err(unknown(format!("fold form {other:?}"))),
+        },
     };
     let launch = live(settings.and_then(|s| s.get("launch_bounds")));
     let name = if *target == Target::Device {
@@ -676,7 +648,7 @@ fn build_of(spec: &Json, target: &Target, source: bool) -> Result<Build, String>
                 "host"
             })
             .and_then(|w| setting(Some(of(w)), "linalg", "max_dim")),
-        cells_row: by_target(spec, name, "cells", "row").unwrap_or(0),
+        cells_row: by_target(spec, name, "cells", "row").unwrap_or(DEFAULT_CELLS_ROW),
         blend: if source {
             matches!(
                 settings.and_then(|s| s.get("blend")),
@@ -685,7 +657,9 @@ fn build_of(spec: &Json, target: &Target, source: bool) -> Result<Build, String>
         } else {
             *target == Target::Host
         },
-        warps: settings.and_then(|s| int_at(s, "warps")).unwrap_or(1),
+        warps: settings
+            .and_then(|s| int_at(s, "warps"))
+            .unwrap_or(DEFAULT_WARPS),
         launch_bounds: bounds,
         fold_k: live(settings.and_then(|s| s.get("fold_k")))
             .and_then(Json::int)
@@ -746,15 +720,15 @@ fn wide_card(spec: &Json) -> Option<WideCard> {
 }
 
 /// The machine facts of the spec, and the recorded answers to the select-weight question.
-fn machine_of(spec: &Json, answers: Option<&Json>) -> Result<Machine, String> {
+fn machine_of(spec: &Json, answers: Option<&Json>) -> Result<Machine, Refusal> {
     let machine = spec
         .get("machine")
-        .ok_or_else(|| nib("a spec without machine facts"))?;
+        .ok_or_else(|| unknown("a spec without machine facts"))?;
     let isa = match text(machine.get("isa")) {
         "" => None,
         "arm64" => Some(Isa::Arm64),
         "x86_64" => Some(Isa::X86_64),
-        other => return Err(nib(format!("machine isa {other:?}"))),
+        other => return Err(unknown(format!("machine isa {other:?}"))),
     };
     let facts = machine.get("facts");
     let profile = text(facts.and_then(|f| f.get("host_profile")));
@@ -766,8 +740,10 @@ fn machine_of(spec: &Json, answers: Option<&Json>) -> Result<Machine, String> {
         facts.and_then(|f| f.get("arm64_gcc")),
         Some(Json::Bool(true))
     );
+    let vector_isa = text(facts.and_then(|f| f.get("vector_isa")));
     Ok(Machine {
         isa,
+        vector_isa: Some(vector_isa.to_string()).filter(|name| !name.is_empty()),
         exact_libm: listed || isa != Some(Isa::X86_64),
         routed_pow: !listed && arm64_gcc,
         caches: caches_of(facts),
@@ -832,7 +808,7 @@ mod tests {
     const MODE: &str = r#"{"$ref":"wrapper:FLOAT64"}"#;
 
     /// The typed unit of a recorded request given as text.
-    fn typed(json: &str) -> Result<Unit, String> {
+    fn typed(json: &str) -> Result<Unit, Refusal> {
         typed_of(
             &Contract::parse(json).expect("the test contract parses"),
             Target::Host,
@@ -920,10 +896,10 @@ mod tests {
         let team = format!(r#"{{"grid":"lanes","planes":[],"reads":[],"steps":[{step}]}}"#);
         let kernel = format!(r#"{{"$type":"TeamStage","team":{team}}}"#);
         let refused = typed(&backend(&kernel, KIND, MODE)).expect_err("refused");
-        assert_eq!(refused, "not in this build: team step frobnicate");
+        assert_eq!(refused, unknown("team step frobnicate"));
         let plain = format!(r#"{{"$type":"Kernel","sinks":[],"walk":{WALK}}}"#);
         let mode = r#"{"$ref":"wrapper:FLOAT16"}"#;
         let refused = typed(&backend(&plain, KIND, mode)).expect_err("refused");
-        assert_eq!(refused, "not in this build: scalar mode \"FLOAT16\"");
+        assert_eq!(refused, unknown("scalar mode \"FLOAT16\""));
     }
 }

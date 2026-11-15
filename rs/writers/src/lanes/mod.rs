@@ -12,6 +12,7 @@ use crate::body::frame::needs::Needs;
 use crate::body::render_cut;
 use crate::contract::types::Unit;
 use crate::ir::door::RxCtx;
+use crate::refuse::{fault, Refusal};
 
 /// The body cut at the given top-level loops, which the host runs interchanged: `None` when a
 /// value crossing a cut has no recorded type (the unit then keeps its plain body).
@@ -21,12 +22,12 @@ pub fn lane_segments(
     unit: &Unit,
     indent: &str,
     cut: &[u32],
-) -> Result<(cut::LaneSegments, Needs), String> {
+) -> Result<(cut::LaneSegments, Needs), Refusal> {
     let mut emitter = cut::CutEmitter::default();
     render_cut(ctx, walk, unit, indent, cut, &mut emitter)?;
     emitter
         .done
-        .ok_or_else(|| "the cut render did not finish".to_string())
+        .ok_or_else(|| fault("the cut render did not finish"))
 }
 
 /// The body cut at its one loop for the lane split of a finishing kernel: `None` when the body is
@@ -36,7 +37,7 @@ pub fn lane_split(
     walk: u32,
     unit: &Unit,
     indent: &str,
-) -> Result<Option<(split::LaneSplit, Needs)>, String> {
+) -> Result<Option<(split::LaneSplit, Needs)>, Refusal> {
     let Some(lp) = split::candidate(ctx, walk)? else {
         return Ok(None);
     };

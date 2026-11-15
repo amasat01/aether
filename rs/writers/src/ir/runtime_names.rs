@@ -1,6 +1,7 @@
 //! What the host runtime and the emitted text fix, which the wing analyses must not know: the C++
 //! type names of an argument slot, the spelling of derived plane names, and the most trips of a
 //! loop the host compiler unrolls.
+use crate::refuse::{bad, Refusal};
 
 /// The most trips of a loop the host compiler fully unrolls.
 pub const UNROLL_LIMIT: i64 = 16;
@@ -31,7 +32,7 @@ const HANDLE_ONLY: [&str; 6] = [
 /// How a slot of the role crosses the launch boundary: the runtime's `GRefMirror` for a plane
 /// read by reference, its `ScalarHandle`, or `value` for a by-value argument. A role that is a
 /// handle only but carries a plane of a rank, or an unknown role, is refused.
-pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, String> {
+pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, Refusal> {
     if role == "mutable" {
         return Ok(if rank > 0 {
             "GRefMirror"
@@ -40,14 +41,14 @@ pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, String> {
         });
     }
     if HANDLE_ONLY.contains(&role) && rank > 0 {
-        return Err(format!(
+        return Err(bad(format!(
             "role {role:?} carries a rank-{rank} plane, but the map pins it to the scalar handle"
-        ));
+        )));
     }
     match role {
         "out" | "vec_in" | "mat_in" => Ok("GRefMirror"),
         "uniform" | "nsamples" => Ok("value"),
         _ if HANDLE_ONLY.contains(&role) => Ok("ScalarHandle"),
-        _ => Err(format!("unknown role {role:?}")),
+        _ => Err(bad(format!("unknown role {role:?}"))),
     }
 }

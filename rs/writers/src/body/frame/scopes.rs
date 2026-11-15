@@ -5,6 +5,7 @@
 use super::buffer::Buffer;
 use crate::body::{ty_of, Class, Frame, Node};
 use crate::ir::door;
+use crate::refuse::Refusal;
 
 /// What an open loop scope must undo when it closes.
 #[must_use = "a loop scope must be closed"]
@@ -36,7 +37,7 @@ impl Frame<'_> {
     }
 
     /// Appends the slot of one node of a loop scope.
-    fn add_slot(&mut self, h: u32) -> Result<usize, String> {
+    fn add_slot(&mut self, h: u32) -> Result<usize, Refusal> {
         let s = self.count();
         let node = Node {
             h,
@@ -67,7 +68,7 @@ impl Frame<'_> {
         index_h: u32,
         carries: &[u32],
         body: &[u32],
-    ) -> Result<LoopScope, String> {
+    ) -> Result<LoopScope, Refusal> {
         let (saved_indent, base) = (self.buf.indent.clone(), self.count());
         self.buf.indent.push_str("    ");
         let mut added = vec![index_h];
@@ -107,8 +108,8 @@ impl Frame<'_> {
     /// were (the lazy and forced flags and the namer do not).
     pub(crate) fn in_case<R>(
         &mut self,
-        run: impl FnOnce(&mut Frame) -> Result<R, String>,
-    ) -> Result<R, String> {
+        run: impl FnOnce(&mut Frame) -> Result<R, Refusal>,
+    ) -> Result<R, Refusal> {
         let saved = (self.buf.indent.clone(), self.save_scope());
         let out = run(self);
         self.buf.indent = saved.0;

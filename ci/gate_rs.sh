@@ -129,5 +129,5 @@ for l in $legs; do
   echo "== $l"
   if "leg_$l"; then green="$green $l"; else red="$red $l"; fi
 done
-echo "GREEN:$green"; echo "RED:$red"
+echo "GREEN:$green"; [ -z "$red" ] || echo "RED:$red"
 [ -z "$red" ]

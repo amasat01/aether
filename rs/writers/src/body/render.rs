@@ -6,6 +6,7 @@
 //! positions, the commit of the
 //! sinks and the guard's close. The steps run in this order; the text depends on it.
 use super::*;
+use crate::refuse::{nib, Refusal};
 
 /// The node table of a walk before a frame owns it: nodes in walk order, the operand positions of
 /// each, how many readers each has, who they are and the clamped spans.
@@ -47,7 +48,7 @@ struct Plans {
 }
 
 /// The position of node `h` in the walk.
-fn at(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, String> {
+fn at(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, Refusal> {
     walk_position(ctx, walk, h)
 }
 
@@ -61,7 +62,7 @@ pub(super) fn render_frame_over<'e>(
     cut: &[u32],
     emit: Option<&'e mut dyn LoopEmitter>,
     given_sinks: Option<&[u32]>,
-) -> Result<(Frame<'e>, Option<String>), String> {
+) -> Result<(Frame<'e>, Option<String>), Refusal> {
     let one_trip = emit.as_ref().is_some_and(|e| e.one_trip());
     check_unit(walk, unit, cut, one_trip, given_sinks)?;
     let (guard_names, _) = guard_and_policy(unit);
@@ -119,7 +120,7 @@ pub(super) fn render_frame_over<'e>(
     Ok((f, guard.cond))
 }
 
-/// Refuses the units this render does not write: no walk, a banded scalar, a warp stage, a fused
+/// Refuses the units this render does not write: no walk, a banded scalar, a fused
 /// kernel without given sinks, and a boxed or two-path unit whose wrapper composes the body.
 fn check_unit(
     walk: u32,
@@ -127,7 +128,7 @@ fn check_unit(
     cut: &[u32],
     split: bool,
     given_sinks: Option<&[u32]>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     if walk == u32::MAX {
         return Err(nib("a unit with no walk (team stage)"));
     }
@@ -135,7 +136,6 @@ fn check_unit(
         return Err(nib("scalar mode BANDED"));
     }
     match &unit.form {
-        Form::WarpStage => return Err(nib("kernel record WarpStage")),
         Form::Fused(_) if given_sinks.is_none() => return Err(nib("kernel record FusedKernel")),
         _ => {}
     }
@@ -153,7 +153,7 @@ fn check_unit(
 }
 
 /// The walk's nodes with their operand positions, fan-out, readers and clamped spans.
-fn load_rows(ctx: *mut RxCtx, walk: u32) -> Result<WalkRows, String> {
+fn load_rows(ctx: *mut RxCtx, walk: u32) -> Result<WalkRows, Refusal> {
     let order = door::walk_order(ctx, walk)?;
     let mut nodes = Vec::with_capacity(order.len());
     for &h in &order {
@@ -201,7 +201,7 @@ fn plan_guard(
     walk: u32,
     guard_names: &[String],
     indent: &str,
-) -> Result<GuardPlan, String> {
+) -> Result<GuardPlan, Refusal> {
     let mut indent = indent.to_string();
     let mut head: Vec<String> = vec![];
     let mut bound_names = vec![];
@@ -242,7 +242,7 @@ fn block_fold_for(
     unit: &Unit,
     nodes: &[Node],
     sinks: &[u32],
-) -> Result<bool, String> {
+) -> Result<bool, Refusal> {
     let sums = sinks
         .iter()
         .any(|&q| at(ctx, walk, q).is_ok_and(|p| nodes[p].class == Class::SampleSum));
@@ -255,7 +255,7 @@ fn companion_planes(
     walk: u32,
     nodes: &[Node],
     sinks: &[u32],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let mut companions: Vec<String> = vec![];
     for &q in sinks {
         let n = &nodes[at(ctx, walk, q)?];
@@ -268,7 +268,7 @@ fn companion_planes(
 
 /// The (role, name) of every leaf among the top-level nodes: the planes the body reads outside
 /// loop bodies.
-fn top_level_reads(ctx: *mut RxCtx, nodes: &[Node]) -> Result<Vec<(String, String)>, String> {
+fn top_level_reads(ctx: *mut RxCtx, nodes: &[Node]) -> Result<Vec<(String, String)>, Refusal> {
     nodes
         .iter()
         .filter(|n| n.class == Class::Leaf)
@@ -287,7 +287,7 @@ fn early_stores(
     sinks: &[u32],
     companions: &[String],
     read: &[(String, String)],
-) -> Result<Vec<(usize, u32)>, String> {
+) -> Result<Vec<(usize, u32)>, Refusal> {
     let nodes = &rows.nodes;
     let mut early: Vec<(usize, u32)> = vec![];
     for &s in sinks {
@@ -308,7 +308,7 @@ fn early_stores(
 
 /// The positions a loop reads from outside: each is named once, before the loop (a plane read
 /// through At excepted).
-fn forced_reads(ctx: *mut RxCtx, nodes: &[Node], opp: &[Vec<usize>]) -> Result<Vec<bool>, String> {
+fn forced_reads(ctx: *mut RxCtx, nodes: &[Node], opp: &[Vec<usize>]) -> Result<Vec<bool>, Refusal> {
     let mut forced = vec![false; nodes.len()];
     for (u, n) in nodes.iter().enumerate() {
         if n.class != Class::Loop {
@@ -369,7 +369,8 @@ fn new_frame<'e>(
         cut: cut.to_vec(),
         loop_emitter: emit,
         compensated: None,
-        placed: !cut.is_empty() && !one_trip,
+        placed: unit.target == crate::contract::types::Target::Device
+            || (!cut.is_empty() && !one_trip),
         absorbed: Default::default(),
         proxies: vec![],
         stores: Default::default(),
@@ -380,7 +381,7 @@ fn new_frame<'e>(
 
 /// The second phase of the read list: the plane reads of the whole body, loop bodies included (the
 /// commit plan sees them; the early stores did not).
-fn add_loop_body_reads(f: &Frame, read: &mut Vec<(String, String)>) -> Result<(), String> {
+fn add_loop_body_reads(f: &Frame, read: &mut Vec<(String, String)>) -> Result<(), Refusal> {
     let ctx = f.ctx();
     for lp in (0..f.count())
         .filter(|&p| f.node(p).class == Class::Loop)
@@ -407,7 +408,7 @@ fn plan_compensated(
     f: &mut Frame,
     unit: &Unit,
     early: &mut Vec<(usize, u32)>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     if let SinkPolicy::Compensated {
         plane: comp,
         output_slot: slot,
@@ -436,7 +437,7 @@ fn commit_plan(
     cut: &[u32],
     read: &[(String, String)],
     count: usize,
-) -> Result<stores::commits::Plan, String> {
+) -> Result<stores::commits::Plan, Refusal> {
     Ok(if cut.is_empty() {
         stores::commits::plan(f, read)?
     } else {
@@ -466,7 +467,7 @@ fn emit_zero_lines(f: &mut Frame, plans: &mut Plans) {
 
 /// The walk of the positions, each rendered in order with the early stores that follow it; refuses
 /// a per-component commit that was planned for a value the walk never rendered.
-fn walk_positions(f: &mut Frame, plans: &mut Plans, count: usize) -> Result<(), String> {
+fn walk_positions(f: &mut Frame, plans: &mut Plans, count: usize) -> Result<(), Refusal> {
     for p in 0..count {
         render_pos(f, &mut plans.commits, p)?;
         for &(_, s) in plans.early.iter().filter(|e| e.0 == p) {
@@ -485,7 +486,7 @@ fn walk_positions(f: &mut Frame, plans: &mut Plans, count: usize) -> Result<(), 
 /// and plain stores; the
 /// finish comes last. A loop sink is emitted with its scope, and a compensated target or a
 /// companion plane is skipped.
-fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), String> {
+fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
     let mut finish: Option<u32> = None;
     for s in f.sinks().to_vec() {
         let p = f.at(s)?;
@@ -502,6 +503,13 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), String> {
         }
         if class == Class::BoxStore {
             stores::sinks::box_store(f, p)?;
+            continue;
+        }
+        if class == Class::WarpStore {
+            let planned = plans.early.iter().any(|e| e.1 == s) || plans.commits.held.contains(&s);
+            if !planned {
+                stores::sinks::warp_store(f, p)?;
+            }
             continue;
         }
         if class == Class::Finish && nops == 1 {

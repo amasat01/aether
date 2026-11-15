@@ -18,7 +18,7 @@ mod wide;
 
 use crate::contract::types::{Form, Guard, Scalar, SinkPolicy, Unit};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 pub(crate) use frame::buffer::{Buffer, Mark};
 pub(crate) use frame::class::Class;
@@ -39,7 +39,7 @@ pub struct Ty {
 
 /// The canonical position of a node in the walk; a node inside a loop body has none, which is
 /// refused by name.
-fn walk_position(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, String> {
+fn walk_position(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, Refusal> {
     door::position(ctx, walk, h).map_err(|e| {
         if door::in_loop_body(ctx, walk, h).unwrap_or(false) {
             nib("an operand inside a loop body")
@@ -50,7 +50,7 @@ fn walk_position(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, String> {
 }
 
 /// The type of a node, as the door's typed reader answers it.
-pub(crate) fn ty_of(ctx: *mut RxCtx, h: u32) -> Result<Ty, String> {
+pub(crate) fn ty_of(ctx: *mut RxCtx, h: u32) -> Result<Ty, Refusal> {
     let t = door::ttype_of(ctx, h)?;
     Ok(Ty {
         dtype: t.dtype,
@@ -59,7 +59,7 @@ pub(crate) fn ty_of(ctx: *mut RxCtx, h: u32) -> Result<Ty, String> {
 }
 
 /// The text a node's field holds, without quotes; empty when the field holds nothing.
-pub(crate) fn field_text(ctx: *mut RxCtx, h: u32, f: &str) -> Result<String, String> {
+pub(crate) fn field_text(ctx: *mut RxCtx, h: u32, f: &str) -> Result<String, Refusal> {
     Ok(door::field_text(ctx, h, f)?.unwrap_or_default())
 }
 
@@ -127,9 +127,9 @@ pub struct Proxy {
 pub trait LoopEmitter {
     /// Writes the loop `lp` when the walk meets it (one of the loops the caller asked to cut): the loop's own text is not
     /// emitted unless this does it.
-    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), String>;
+    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), Refusal>;
     /// Called once with the finished frame and the guard's condition (when the kernel has one), after the last position.
-    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), String>;
+    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), Refusal>;
     /// Whether the cut renders one trip of a loop into a text of its own and leaves the walk's placements unwritten as
     /// planes; false for a cut whose placements are written as their planes. A typed flag, not a lane fact.
     fn one_trip(&self) -> bool {
@@ -209,15 +209,15 @@ impl<'e> Frame<'e> {
 
 impl Frame<'_> {
     /// The text a node's field holds, without quotes; empty when the field holds nothing.
-    pub fn field_text(&self, h: u32, f: &str) -> Result<String, String> {
+    pub fn field_text(&self, h: u32, f: &str) -> Result<String, Refusal> {
         field_text(self.ctx(), h, f)
     }
     /// The canonical position of a node in the walk (a node inside a loop body is refused by name).
-    pub fn at(&self, h: u32) -> Result<usize, String> {
+    pub fn at(&self, h: u32) -> Result<usize, Refusal> {
         walk_position(self.ctx(), self.walk(), h)
     }
     /// The rendering of the node with handle `h`, read like `peek`: no read is recorded.
-    pub fn peek_arg(&self, h: u32) -> Result<String, String> {
+    pub fn peek_arg(&self, h: u32) -> Result<String, Refusal> {
         Ok(self.peek(self.pos_of(h)?).clone())
     }
     /// Notes that the text being written holds the text of the node at `p`: for a writer that
@@ -255,23 +255,23 @@ impl Frame<'_> {
         self.table.set_text(p, name, true)
     }
     /// The declared names the text of the node with handle `h` reads.
-    pub fn reads_of(&self, h: u32) -> Result<std::collections::BTreeSet<String>, String> {
+    pub fn reads_of(&self, h: u32) -> Result<std::collections::BTreeSet<String>, Refusal> {
         Ok(self.reads(self.pos_of(h)?).clone())
     }
     /// The position of a node: its slot while a loop scope holds it, else its canonical position
     /// in the walk.
-    pub fn pos_of(&self, h: u32) -> Result<usize, String> {
+    pub fn pos_of(&self, h: u32) -> Result<usize, Refusal> {
         match self.slot.get(&h) {
             Some(&s) => Ok(s),
             None => self.at(h),
         }
     }
     /// The rendering of a node as an operand.
-    pub fn arg(&self, h: u32) -> Result<String, String> {
+    pub fn arg(&self, h: u32) -> Result<String, Refusal> {
         Ok(self.text(self.pos_of(h)?).clone())
     }
     /// A value that is itself an aether leaf (a row of a plane, an assembled vector): always named.
-    pub fn leaf_valued(&self, s: usize) -> Result<bool, String> {
+    pub fn leaf_valued(&self, s: usize) -> Result<bool, Refusal> {
         let n = &self.node(s);
         Ok(
             ((n.class == Class::Leaf || n.class == Class::At) && n.rank() > 0)
@@ -320,7 +320,7 @@ pub(crate) fn render_pos(
     f: &mut Frame,
     plan: &mut stores::commits::Plan,
     p: usize,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     if !f.is_outside(p) || f.disp(p) == Disp::Sink {
         return Ok(());
     }
@@ -353,7 +353,7 @@ fn flush_group(
     f: &mut Frame,
     plan: &mut stores::commits::Plan,
     group: &[usize],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     if plan.due.is_empty() {
         return Ok(());
     }
@@ -370,12 +370,17 @@ pub(crate) fn name_value(
     p: usize,
     text: String,
     role: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let n_h = f.node(p).h;
     let leaf_valued = f.leaf_valued(p)?;
     // a uniform leaf and a literal are never named; a row leaf, a vec and a splat always are; any
     // other value once two readers use it
     let named = f.naming(p, ScopeKind::Top, role.as_deref(), f.fanout(p))?;
+    // A loop value whose text is a plane proxy stays unnamed: a run-time index read recognises the
+    // proxy by its text and reads the plane in place; a named copy would be a local item of the
+    // plane's full width that the read then indexes.
+    let named =
+        named && !(f.node(p).class == Class::LoopValue && f.proxies.iter().any(|x| x.name == text));
     if named {
         let name = match &role {
             Some(r) => Name::new(
@@ -400,7 +405,7 @@ pub(crate) fn name_value(
 
 /// The text of one node by its class (a statement class writes its lines and says it bound the
 /// rendering itself).
-pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     // a literal a placement absorbs may be shared with another reader (equal literals are one
     // position): it is
     // never named (its disposition is not `Absorbed`), so its text is always there for whoever
@@ -428,7 +433,8 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, String> {
         | Class::TeamStore
         | Class::ScatterLog
         | Class::LogStore => team::stmt(f, p)?,
-        Class::BoxStore => Out::Bound,
+        Class::BoxStore | Class::WarpStore => Out::Bound,
+        Class::WarpLane => Out::Value(crate::spell::WARP_LANE.to_string(), None),
         // an extension primitive stands for its forward expression
         Class::Primitive => {
             let forward = door::field_refs(f.ctx(), f.node(p).h, "forward")?.unwrap_or_default();
@@ -449,7 +455,7 @@ pub fn render_body(
     walk: u32,
     unit: &Unit,
     indent: &str,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     Ok(render_body_with_needs(ctx, walk, unit, indent)?.text)
 }
 
@@ -459,7 +465,7 @@ pub fn render_body_with_needs(
     walk: u32,
     unit: &Unit,
     indent: &str,
-) -> Result<frame::needs::Rendered, String> {
+) -> Result<frame::needs::Rendered, Refusal> {
     let frame = render::render_frame_over(ctx, walk, unit, indent, &[], None, None)?.0;
     Ok(frame::needs::Rendered {
         text: frame.buf.lines.join("\n"),
@@ -477,7 +483,7 @@ pub fn render_body_over(
     unit: &Unit,
     indent: &str,
     sinks: &[u32],
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     Ok(render_body_over_with_needs(ctx, walk, unit, indent, sinks)?.text)
 }
 
@@ -488,7 +494,7 @@ pub fn render_body_over_with_needs(
     unit: &Unit,
     indent: &str,
     sinks: &[u32],
-) -> Result<frame::needs::Rendered, String> {
+) -> Result<frame::needs::Rendered, Refusal> {
     let frame = render::render_frame_over(ctx, walk, unit, indent, &[], None, Some(sinks))?.0;
     Ok(frame::needs::Rendered {
         text: frame.buf.lines.join("\n"),
@@ -505,7 +511,7 @@ pub(crate) fn render_cut(
     indent: &str,
     cut: &[u32],
     emit: &mut dyn LoopEmitter,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (mut f, guard) = render::render_frame_over(ctx, walk, unit, indent, cut, Some(emit), None)?;
     if let Some(emit) = f.loop_emitter.take() {
         emit.finish(&f, guard)?;
@@ -530,7 +536,7 @@ fn guard_and_policy(unit: &Unit) -> (Vec<String>, Option<String>) {
 
 /// Whether the plain frame turns the block fold on: no segment, active set, box, team, two-path
 /// entry, sample sum, staged rows or mask.
-fn block_fold_of(ctx: *mut RxCtx, walk: u32, unit: &Unit, sums: bool) -> Result<bool, String> {
+fn block_fold_of(ctx: *mut RxCtx, walk: u32, unit: &Unit, sums: bool) -> Result<bool, Refusal> {
     let keyed = unit.segment.is_some()
         || unit.active.is_some()
         || unit.thread_box.is_some()

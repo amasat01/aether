@@ -6,7 +6,7 @@ use crate::body::render_body_over_with_needs;
 use crate::contract::types::Unit;
 use crate::ir::analysis as an;
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 
 /// The box of a unit: (lanes per thread, stride, lane axis).
 fn box_record(unit: &Unit) -> Option<(usize, i64, usize)> {
@@ -21,7 +21,7 @@ fn box_record(unit: &Unit) -> Option<(usize, i64, usize)> {
 /// The two bodies of a boxed unit joined by the `nSamples` test, or `None` when the unit has no
 /// box. A box whose sinks
 /// the analysis cannot copy is refused by name.
-pub fn boxed_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<Rendered>, String> {
+pub fn boxed_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<Rendered>, Refusal> {
     let Some((lanes, stride, axis)) = box_record(unit) else {
         return Ok(None);
     };

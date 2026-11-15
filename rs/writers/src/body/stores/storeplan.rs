@@ -13,7 +13,7 @@ use crate::body::{placed, Frame, Out};
 use crate::body::{Class, Name, NameKind};
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, same_index, through, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{fault, nib, Refusal};
 use crate::spell::carry_type;
 use std::collections::{HashMap, HashSet};
 
@@ -72,20 +72,20 @@ pub(crate) struct Plan {
 }
 
 /// The value of a numeric constant node; refuses a literal that is not a number.
-fn number(ctx: *mut RxCtx, h: u32) -> Result<f64, String> {
+fn number(ctx: *mut RxCtx, h: u32) -> Result<f64, Refusal> {
     match literal_of(ctx, h)? {
         Scalar::Int(v) => Ok(v as f64),
         Scalar::Real(v) => Ok(v),
-        other => Err(format!(
+        other => Err(fault(format!(
             "a literal of {} that is not a number",
             other.kind_name()
-        )),
+        ))),
     }
 }
 
 /// The bounds of an index-valued node from its clamps and constant offsets alone; unknown is
 /// unbounded.
-fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), String> {
+fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), Refusal> {
     let h = through(ctx, h)?;
     let class = Class::of(ctx, h)?;
     if class == Class::Const {
@@ -124,7 +124,7 @@ fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), String> {
 }
 
 /// `(base, offset)` of `key = base + constants`; the base is none when the key is all constant.
-fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), String> {
+fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), Refusal> {
     let (mut key, mut offset) = (through(ctx, key)?, 0i64);
     while door::class_is(ctx, key, "Op")? && text_field(ctx, key, "kind")? == "add" {
         let operands = door::operands(ctx, key)?;
@@ -146,7 +146,7 @@ fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), String> {
 }
 
 /// Whether a node is a store at a runtime index.
-fn is_store(f: &Frame, h: u32) -> Result<bool, String> {
+fn is_store(f: &Frame, h: u32) -> Result<bool, Refusal> {
     Ok(door::class_is(f.ctx(), h, "Op")?
         && matches!(
             text_field(f.ctx(), h, "kind")?.as_str(),
@@ -157,7 +157,7 @@ fn is_store(f: &Frame, h: u32) -> Result<bool, String> {
 impl Plan {
     /// The plan of a frame: every store of the body and of the loop bodies, its run, and what the
     /// runs swallow.
-    pub fn build(f: &Frame) -> Result<Plan, String> {
+    pub fn build(f: &Frame) -> Result<Plan, Refusal> {
         let mut plan = Plan::default();
         let nodes = plan.walk(f)?;
         let mut links: Vec<Link> = vec![];
@@ -175,14 +175,14 @@ impl Plan {
     }
 
     /// Records that `by` reads `child`.
-    fn use_of(&mut self, ctx: *mut RxCtx, child: u32, by: u32) -> Result<(), String> {
+    fn use_of(&mut self, ctx: *mut RxCtx, child: u32, by: u32) -> Result<(), Refusal> {
         let child = through(ctx, child)?;
         self.uses.entry(child).or_default().push(by);
         Ok(())
     }
 
     /// The use graph and scopes; the stores found, in the walk's order.
-    fn walk(&mut self, f: &Frame) -> Result<Vec<u32>, String> {
+    fn walk(&mut self, f: &Frame) -> Result<Vec<u32>, Refusal> {
         let ctx = f.ctx();
         let mut stores = vec![];
         let mut seen: HashSet<u32> = HashSet::new();
@@ -221,7 +221,7 @@ impl Plan {
 
     /// Whether the store belongs to an accumulate chain over a `vec` or `splat` a sink commits link
     /// by link.
-    fn is_committed(&self, f: &Frame, node: u32) -> Result<bool, String> {
+    fn is_committed(&self, f: &Frame, node: u32) -> Result<bool, Refusal> {
         let (mut chain, mut base) = (false, node);
         while door::class_is(f.ctx(), base, "Op")? && text_field(f.ctx(), base, "kind")? == "add_at"
         {
@@ -237,7 +237,7 @@ impl Plan {
     /// over a structural zero): the
     /// chain is committed link by link by its sink, never rendered as a value, and its plane is
     /// zeroed once before the walk.
-    fn accumulating_sinks(&mut self, f: &Frame) -> Result<(), String> {
+    fn accumulating_sinks(&mut self, f: &Frame) -> Result<(), Refusal> {
         let mut pending: Vec<u32> = f
             .nodes()
             .filter(|n| n.class == Class::Loop)
@@ -278,7 +278,7 @@ impl Plan {
 
     /// The link a store node makes: its key split into a base and an offset, the components it
     /// reaches, and whether it is an accumulate.
-    fn link(&self, f: &Frame, node: u32) -> Result<Link, String> {
+    fn link(&self, f: &Frame, node: u32) -> Result<Link, Refusal> {
         let ctx = f.ctx();
         let operands = door::operands(ctx, node)?;
         let (base, key, mut value) = (
@@ -339,7 +339,7 @@ impl Plan {
         base: u32,
         key: u32,
         value: u32,
-    ) -> Result<Option<(u32, u32, u32)>, String> {
+    ) -> Result<Option<(u32, u32, u32)>, Refusal> {
         let ctx = f.ctx();
         if !(door::class_is(ctx, value, "Op")?
             && text_field(f.ctx(), value, "kind")? == "add"
@@ -391,7 +391,7 @@ impl Plan {
 
     /// Joins links into runs: a store whose only reader is the next store of the same scope belongs
     /// to that store's run.
-    fn chain(&mut self, f: &Frame, links: Vec<Link>) -> Result<(), String> {
+    fn chain(&mut self, f: &Frame, links: Vec<Link>) -> Result<(), Refusal> {
         let ctx = f.ctx();
         let by_node: HashMap<u32, usize> =
             links.iter().enumerate().map(|(i, l)| (l.node, i)).collect();
@@ -444,7 +444,7 @@ impl Plan {
 
 /// The (key, element) links of a loop-body sink that accumulates per iteration, or none for any
 /// other sink.
-pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, u32)>>, String> {
+pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, u32)>>, Refusal> {
     let ctx = f.ctx();
     if !door::class_is(ctx, sink, "Assign")? || door::operands(ctx, sink)?.len() != 1 {
         return Ok(None);
@@ -474,7 +474,7 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
 /// The statements of a loop's body sinks: each link of a per-iteration accumulate on the own column
 /// where it stands. Any other
 /// body sink is refused by name.
-pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), String> {
+pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
     for sink in door::field_refs(f.ctx(), lp, "body_sinks")?.unwrap_or_default() {
         if door::class_is(f.ctx(), sink, "AccumWrite")? && door::operands(f.ctx(), sink)?.len() == 2
         {
@@ -518,7 +518,7 @@ enum Pick {
 
 /// What one add written as selects costs against an indexed access, for the scalar type, as the
 /// unit's machine facts answer it.
-fn select_weight(f: &Frame, scalar_type: &str) -> Result<f64, String> {
+fn select_weight(f: &Frame, scalar_type: &str) -> Result<f64, Refusal> {
     let weight = &f.unit.machine.select_weight;
     let held = if scalar_type == "float64" {
         weight.float64
@@ -530,7 +530,7 @@ fn select_weight(f: &Frame, scalar_type: &str) -> Result<f64, String> {
 
 /// The select weight when `Real` is eight bytes wide, and when four: the scalar type is chosen when
 /// the unit is compiled.
-fn weights(f: &Frame, dtype: &str) -> Result<(f64, f64), String> {
+fn weights(f: &Frame, dtype: &str) -> Result<(f64, f64), Refusal> {
     Ok(match dtype {
         "f64" => (select_weight(f, "float64")?, select_weight(f, "float32")?),
         "f32" => {
@@ -543,7 +543,7 @@ fn weights(f: &Frame, dtype: &str) -> Result<(f64, f64), String> {
 
 /// The stores of a run in order, each group a list: accumulates that share one runtime base and
 /// take distinct offsets fuse.
-fn groups(ctx: *mut RxCtx, links: &[Link]) -> Result<Vec<Vec<Link>>, String> {
+fn groups(ctx: *mut RxCtx, links: &[Link]) -> Result<Vec<Vec<Link>>, Refusal> {
     let mut groups: Vec<Vec<Link>> = vec![];
     for link in links {
         if let Some(last) = groups.last_mut() {
@@ -580,7 +580,7 @@ fn at(f: &Frame, name: &str, k: &str) -> String {
 }
 
 /// Whether every key of the dynamic stores is proven equal over the lanes of an aligned run.
-fn uniform(f: &Frame, keys: &[u32]) -> Result<bool, String> {
+fn uniform(f: &Frame, keys: &[u32]) -> Result<bool, Refusal> {
     if keys.is_empty() {
         return Ok(false);
     }
@@ -591,7 +591,7 @@ fn uniform(f: &Frame, keys: &[u32]) -> Result<bool, String> {
 
 /// A store node: nothing for a store a run swallows, the run's statements at its last store, else
 /// one copy written at the index.
-pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let Some(run) = f.stores.runs.get(&h).cloned() else {
         if f.stores.skip.contains(&h) {
@@ -620,7 +620,7 @@ pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, String> {
 
 /// The statements of the run that ends at node `p`, and the name of the local that holds the
 /// result.
-fn emit_run(f: &mut Frame, p: usize, run: &[Link]) -> Result<Out, String> {
+fn emit_run(f: &mut Frame, p: usize, run: &[Link]) -> Result<Out, Refusal> {
     let ctx = f.ctx();
     let ty = f.node(p).ty.clone();
     let base = through(ctx, door::operands(ctx, run[0].node)?[0])?;
@@ -684,7 +684,7 @@ fn pick_styles(
     ty: &crate::body::Ty,
     name: &str,
     groups: &[Vec<Link>],
-) -> Result<Picks, String> {
+) -> Result<Picks, Refusal> {
     let dynamic: Vec<&Vec<Link>> = groups.iter().filter(|g| g[0].base.is_some()).collect();
     let accesses: usize = dynamic
         .iter()
@@ -772,7 +772,7 @@ fn assign_op(acc: bool) -> &'static str {
 
 /// The statements of the groups of a run: as selects over the reachable components, or as indexed
 /// writes.
-fn write(f: &mut Frame, sp: &Spelling, groups: &[Vec<Link>], pick: Pick) -> Result<(), String> {
+fn write(f: &mut Frame, sp: &Spelling, groups: &[Vec<Link>], pick: Pick) -> Result<(), Refusal> {
     for (j, group) in groups.iter().enumerate() {
         let tag = format!("{}_{j}", sp.token);
         let mut names = vec![];
@@ -822,7 +822,7 @@ fn write_lean(
     tag: &str,
     first: &Link,
     value: &str,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (ty, name) = (sp.ty, sp.name);
     let (k, old) = (format!("{tag}_k"), format!("{tag}_old"));
     let key = f.arg(first.key)?;
@@ -856,7 +856,7 @@ fn write_selects(
     tag: &str,
     first: &Link,
     value: &str,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let k = format!("{tag}_k");
     let key = f.arg(first.key)?;
     f.declare_auto(Name::new(k.clone(), NameKind::Key), &key);
@@ -880,7 +880,7 @@ fn write_fused_selects(
     tag: &str,
     group: &[Link],
     names: &[String],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (name, elem, zero) = (sp.name, sp.elem, sp.zero);
     let k = format!("{tag}_k");
     let base = f.arg(group[0].base.unwrap_or(0))?;

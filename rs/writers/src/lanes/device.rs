@@ -6,6 +6,7 @@ use crate::body::frame::buffer::tokens;
 use crate::body::Buffer;
 use crate::lanes::cut::Carry;
 use crate::lanes::split::LaneSplit;
+use crate::refuse::{fault, Refusal};
 use crate::spell::binding_name;
 use crate::spell::carry_type;
 use std::collections::BTreeSet;
@@ -50,34 +51,21 @@ struct LiveValue {
 }
 
 /// The finish counter's binding.
-fn finish_counter() -> Result<String, String> {
+fn finish_counter() -> Result<String, Refusal> {
     binding_name("lookup", "finished_count")
 }
 
 /// One count into the finish counter for a sample finished on entry.
-fn finished_on_entry() -> Result<String, String> {
+fn finished_on_entry() -> Result<String, Refusal> {
     Ok(format!("hawk_abi::finish_count({});", finish_counter()?))
 }
 
 /// The word that is the fused-steps plane read at sample 0.
-fn fused_steps_word() -> Result<String, String> {
+fn fused_steps_word() -> Result<String, Refusal> {
     Ok(format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
         binding_name("lookup", "fused_steps")?
     ))
-}
-
-/// Whether a value the step reads may be one no sample changes (a parameter and what is computed from it alone): the old
-/// writer hoists those to entry. Whether a value is such is the lane split's own analysis, which the split does not report, so
-/// a live value whose one-line declarations read no plane and no sample index is taken as possibly such, and the unit is refused.
-fn possibly_sample_free(pre: &Buffer, name: &str) -> bool {
-    let chain = pre.one_line_chain(&[name.to_string()]);
-    let recorded = !chain.is_empty()
-        && chain.iter().all(|d| {
-            let value = d.value.as_deref().unwrap_or("");
-            !value.contains('[') && !tokens(value).any(|w| w == "i")
-        });
-    recorded
 }
 
 /// The indexes of the lines of the step budget `count` in `pre` when it reads the launch's fused-steps word alone, so the
@@ -177,9 +165,11 @@ fn put(store: &str, ctype: &str, value: &str, shaped: bool) -> String {
 }
 
 /// The signature of a fast entry: the unit's own signature with the entry's extra parameters, under the `_suffix` name.
-fn fast_head(signature: &str, name: &str, params: &str, suffix: &str) -> Result<String, String> {
+fn fast_head(signature: &str, name: &str, params: &str, suffix: &str) -> Result<String, Refusal> {
     if !signature.ends_with("    long long nSamples)") {
-        return Err("fast entry: the signature does not end with the partition triple".into());
+        return Err(fault(
+            "fast entry: the signature does not end with the partition triple",
+        ));
     }
     let head = format!("{},\n{params})", &signature[..signature.len() - 1]);
     Ok(head.replacen(
@@ -214,7 +204,9 @@ struct PersistParts {
     carries: Vec<HeldCarry>,
     /// The live values: register, type and name.
     live: Vec<LiveValue>,
-    /// The head's lines, without the launch budget.
+    /// The one-line declarations of the values no sample changes, evaluated once at entry.
+    hoisted: Vec<String>,
+    /// The head's lines, without the launch budget and the hoisted declarations.
     pre: String,
     /// The one-line declarations the entry evaluates once for the launch budget.
     budget: Vec<String>,
@@ -232,7 +224,7 @@ struct PersistParts {
 const PERSIST_INDEX: &str = "aether::SampleIndex::make(static_cast<std::size_t>(base + hawk_s))";
 
 /// The tail with its finish count rewritten to the entry's own counter; refuses when the head or the step counts the finish.
-fn counted_post(split: &LaneSplit) -> Result<String, String> {
+fn counted_post(split: &LaneSplit) -> Result<String, Refusal> {
     let per_sample = finished_on_entry()?;
     let post = split.post.with_finish_counted("++hawk_fin;", &per_sample);
     let marked = |b: &crate::body::Buffer| {
@@ -249,7 +241,7 @@ fn counted_post(split: &LaneSplit) -> Result<String, String> {
 }
 
 /// The carries the step reads (held in registers) and those it never reads (type, name, next value).
-fn held_and_fresh(split: &LaneSplit) -> Result<(Vec<HeldCarry>, Vec<Local>), String> {
+fn held_and_fresh(split: &LaneSplit) -> Result<(Vec<HeldCarry>, Vec<Local>), Refusal> {
     let (mut carries, mut fresh): (Vec<HeldCarry>, Vec<Local>) = (vec![], vec![]);
     for (
         j,
@@ -320,21 +312,15 @@ fn entry_commit(
 }
 
 /// Works out what the persistent entry is built from; refuses a split it cannot carry.
-fn persist_parts(cut: &Cut) -> Result<PersistParts, String> {
+fn persist_parts(cut: &Cut) -> Result<PersistParts, Refusal> {
     let split = cut.split;
     let post = counted_post(split)?;
     let (carries, fresh) = held_and_fresh(split)?;
-    if split
-        .live_ins
-        .iter()
-        .any(|(lname, _)| possibly_sample_free(&split.pre, lname))
-    {
-        return Err(crate::refuse::nib("a persistent entry with a live value no sample changes (the split does not report which are)"));
-    }
     let live: Vec<LiveValue> = split
         .live_ins
         .iter()
         .enumerate()
+        .filter(|(_, (lname, _))| !split.sample_free.names.contains(lname))
         .map(|(m, (lname, ty))| {
             Ok(LiveValue {
                 store: format!("hawk_pl{m}"),
@@ -342,9 +328,20 @@ fn persist_parts(cut: &Cut) -> Result<PersistParts, String> {
                 name: lname.clone(),
             })
         })
-        .collect::<Result<_, String>>()?;
+        .collect::<Result<_, Refusal>>()?;
     let budget_at = launch_budget(&split.pre, &split.count);
-    let pre = split.pre.text_without(&budget_at);
+    let hoisted: Vec<String> = split
+        .sample_free
+        .at
+        .iter()
+        .map(|&at| split.pre.lines[at].trim().to_string())
+        .collect();
+    let dropped: Vec<usize> = budget_at
+        .iter()
+        .chain(&split.sample_free.at)
+        .copied()
+        .collect();
+    let pre = split.pre.text_without(&dropped);
     let budget: Vec<String> = budget_at
         .iter()
         .map(|&at| split.pre.lines[at].trim().to_string())
@@ -352,7 +349,7 @@ fn persist_parts(cut: &Cut) -> Result<PersistParts, String> {
     let count = split
         .count
         .clone()
-        .ok_or("persistent entry: no runtime trip count")?;
+        .ok_or_else(|| fault("persistent entry: no runtime trip count"))?;
     let post = match (&split.guard, post.is_empty()) {
         (Some(guard), false) => post.replace(&format!("!{guard} && "), ""),
         _ => post,
@@ -368,6 +365,7 @@ fn persist_parts(cut: &Cut) -> Result<PersistParts, String> {
         head,
         carries,
         live,
+        hoisted,
         pre,
         budget,
         count,
@@ -383,6 +381,7 @@ fn persist_prologue(cut: &Cut, parts: &PersistParts) -> Vec<String> {
         head,
         carries,
         live,
+        hoisted,
         budget,
         count,
         rebuilt,
@@ -398,6 +397,7 @@ fn persist_prologue(cut: &Cut, parts: &PersistParts) -> Vec<String> {
         live.iter()
             .map(|LiveValue { store, ctype, .. }| format!("    {ctype} {store}{{}};")),
     );
+    lines.extend(hoisted.iter().map(|d| format!("    {d}")));
     lines.extend(budget.iter().map(|d| format!("    {d}")));
     lines.push(if budget.is_empty() { "    unsigned int hawk_budget = 0u;".into() }
                else { format!("    const unsigned int hawk_budget = static_cast<unsigned>(hawk_clamp_count({count}));") });
@@ -592,7 +592,7 @@ fn persist_chunk(cut: &Cut, parts: &PersistParts, lines: &mut Vec<String>) {
 }
 
 /// The end of a trip, the commit of an ended sample and the closing counters.
-fn persist_tail(cut: &Cut, parts: &PersistParts, lines: &mut Vec<String>) -> Result<(), String> {
+fn persist_tail(cut: &Cut, parts: &PersistParts, lines: &mut Vec<String>) -> Result<(), Refusal> {
     let PersistParts {
         post,
         rebuilt,
@@ -641,7 +641,7 @@ fn persist_tail(cut: &Cut, parts: &PersistParts, lines: &mut Vec<String>) -> Res
 }
 
 /// The persistent entry `<name>_persist`.
-pub fn persist_entry(cut: &Cut) -> Result<String, String> {
+pub fn persist_entry(cut: &Cut) -> Result<String, Refusal> {
     let parts = persist_parts(cut)?;
     let mut lines = persist_prologue(cut, &parts);
     persist_claims(cut, &parts, &mut lines);
@@ -666,12 +666,12 @@ struct RangeParts {
 }
 
 /// Works out what the range entry is built from; refuses a lane prologue it cannot open.
-fn range_parts(cut: &Cut) -> Result<RangeParts, String> {
+fn range_parts(cut: &Cut) -> Result<RangeParts, Refusal> {
     let split = cut.split;
     let plain = cut.plain_prologue.clone();
     let exit_line = "    if (hawk_flat >= count) return;\n    {";
     if !plain.contains(exit_line) {
-        return Err("range entry: the lane prologue has no exit line".into());
+        return Err(fault("range entry: the lane prologue has no exit line"));
     }
     let opened = plain.replace(exit_line, "    if (hawk_flat < count) {");
     let live = match &split.guard {
@@ -702,7 +702,7 @@ fn range_parts(cut: &Cut) -> Result<RangeParts, String> {
     let count = split
         .count
         .clone()
-        .ok_or("range entry: no runtime trip count")?;
+        .ok_or_else(|| fault("range entry: no runtime trip count"))?;
     let head = fast_head(&cut.signature, cut.name, RANGE_PARAMS, "_range")?;
     Ok(RangeParts {
         head,
@@ -714,7 +714,7 @@ fn range_parts(cut: &Cut) -> Result<RangeParts, String> {
 }
 
 /// The entry's opening and the lane that runs the single step when the launch is one step.
-fn range_single(cut: &Cut, parts: &RangeParts, single: &str) -> Result<Vec<String>, String> {
+fn range_single(cut: &Cut, parts: &RangeParts, single: &str) -> Result<Vec<String>, Refusal> {
     let RangeParts {
         head, opened, live, ..
     } = parts;
@@ -796,7 +796,7 @@ fn range_loop(cut: &Cut, parts: &RangeParts, lines: &mut Vec<String>) {
 }
 
 /// The end of the loop, the tail over the held carries and the closing counters.
-fn range_tail(cut: &Cut, parts: &RangeParts, lines: &mut Vec<String>) -> Result<(), String> {
+fn range_tail(cut: &Cut, parts: &RangeParts, lines: &mut Vec<String>) -> Result<(), Refusal> {
     let RangeParts { carries, .. } = parts;
     let split = cut.split;
     let pad = "            ";
@@ -839,7 +839,7 @@ fn range_tail(cut: &Cut, parts: &RangeParts, lines: &mut Vec<String>) -> Result<
 }
 
 /// The contiguous-range entry `<name>_range`; `single` is the single step's body.
-pub fn range_entry(cut: &Cut, single: &str) -> Result<String, String> {
+pub fn range_entry(cut: &Cut, single: &str) -> Result<String, Refusal> {
     let parts = range_parts(cut)?;
     let mut lines = range_single(cut, &parts, single)?;
     range_start(cut, &parts, &mut lines);
@@ -850,7 +850,7 @@ pub fn range_entry(cut: &Cut, single: &str) -> Result<String, String> {
 
 /// The fast entries of a two-path unit, as lines after its own entry: the helpers they share, then the persistent entry
 /// (always for a map-free kernel) and the range entry (under the build's fast-entries macro).
-pub fn fast_entries(cut: &Cut, single: &str, active: bool) -> Result<Vec<String>, String> {
+pub fn fast_entries(cut: &Cut, single: &str, active: bool) -> Result<Vec<String>, Refusal> {
     let persist = persist_entry(cut)?;
     let ranged = range_entry(cut, single)?;
     let (always, gated): (Vec<String>, Vec<String>) = if active {

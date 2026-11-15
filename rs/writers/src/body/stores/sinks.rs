@@ -4,11 +4,11 @@ use crate::body::values::text_field;
 use crate::body::Class;
 use crate::body::{CompensatedPlan, CompensatedTarget, Frame, Name, NameKind};
 use crate::ir::door;
-use crate::refuse::nib;
+use crate::refuse::{fault, nib, Refusal};
 use crate::spell::binding_name;
 
 /// One own-column store (early, right after the value, or at the end).
-pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), String> {
+pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let p = f.at(sink)?;
     let v = f.opp(p)[0];
     let h = f.node(p).h;
@@ -57,7 +57,7 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), String> {
 }
 
 /// A thread box lane's own-column store, made only for a lane the thread owns.
-pub(crate) fn box_store(f: &mut Frame, p: usize) -> Result<(), String> {
+pub(crate) fn box_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let (value, lane) = (f.text(f.opp(p)[0]).clone(), f.text(f.opp(p)[1]).clone());
     let target = binding_name(
         &text_field(f.ctx(), f.node(p).h, "role")?,
@@ -67,8 +67,57 @@ pub(crate) fn box_store(f: &mut Frame, p: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// The lane's slice of a wide value into the elements `j * 32 + lane` of the plane. A block that serves several lanes puts a
+/// vector output through the shared tile its frame holds, which the block then copies out; otherwise the lane stores into the plane
+/// itself (every lane holds a value of the output's own shape: lane 0 stores it).
+pub(crate) fn warp_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+    let value = f.opp(p)[0];
+    let h = f.node(p).h;
+    let target = binding_name(
+        &text_field(f.ctx(), h, "role")?,
+        &text_field(f.ctx(), h, "name")?,
+    )?;
+    let (width, held) = (f.node(p).ty.shape.clone(), f.node(value).ty.shape.clone());
+    let text = f.text(value).clone();
+    let rows = f.unit.rows;
+    let sliced = width.first().is_some_and(|&n| {
+        n as i64
+            >= f.unit
+                .build
+                .wide_card
+                .as_ref()
+                .and_then(|card| card.slice_min)
+                .unwrap_or(i64::MAX)
+    });
+    if rows > 1 && sliced {
+        let (n, tile) = (held[0], format!("hawk_stg_{target}"));
+        f.emit("{".into());
+        f.emit(format!("const aether::Item<Real, {n}> hawk_ws = {text};"));
+        if n == width[0] {
+            f.emit(format!("if (hawk_wl == 0) {{ for (Int hawk_lk = 0; hawk_lk < {n}; ++hawk_lk) {tile}[hawk_lk * {} + hawk_wb] = hawk_ws.data()[hawk_lk]; }}", rows + 1));
+        } else {
+            f.emit("#pragma unroll".into());
+            f.emit(format!("for (Int hawk_lk = 0; hawk_lk < {n}; ++hawk_lk) {tile}[(hawk_lk * 32 + hawk_wl) * {} + hawk_wb] = hawk_ws.data()[hawk_lk];", rows + 1));
+        }
+        f.emit("if (hawk_wl == 0) hawk_wrote[hawk_wb] = 1;".into());
+        f.emit("}".into());
+        return Ok(());
+    }
+    if held == width {
+        f.emit(format!("if (hawk_wl == 0) {target}[i] = {text};"));
+        return Ok(());
+    }
+    let n = held[0];
+    f.emit("{".into());
+    f.emit(format!("const aether::Item<Real, {n}> hawk_ws = {text};"));
+    f.emit("#pragma unroll".into());
+    f.emit(format!("for (Int hawk_lk = 0; hawk_lk < {n}; ++hawk_lk) {target}[i].at(hawk_lk * 32 + hawk_wl) = hawk_ws.data()[hawk_lk];"));
+    f.emit("}".into());
+    Ok(())
+}
+
 /// The sample's term into its column of the row the wrapper sums.
-pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), String> {
+pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Refusal> {
     let mut column = 0;
     let mut seen = 0;
     for &q in &f.sinks().to_vec() {
@@ -85,12 +134,12 @@ pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Strin
 
 /// A scattered accumulate: the target's atomic add, or once per run of lanes when the key moves in
 /// runs.
-pub(crate) fn accum(f: &mut Frame, sink: u32, _p: usize) -> Result<(), String> {
+pub(crate) fn accum(f: &mut Frame, sink: u32, _p: usize) -> Result<(), Refusal> {
     accum_of(f, sink)
 }
 
 /// A scattered accumulate by the sink's handle (a loop body's sink has no slot of its own).
-pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), String> {
+pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let h = sink;
     let operands = crate::ir::door::operands(f.ctx(), h)?;
     let contract = text_field(f.ctx(), h, "contract")?;
@@ -191,7 +240,7 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), String> {
 /// The finish epilogue, the last text of the guarded scope: an unfinished sample whose condition
 /// holds sets its mask and adds one
 /// to the reserved counter (FINISHED_PLANE = "finished_count", raptor wings cells.py).
-pub(crate) fn finish(f: &mut Frame, sink: u32) -> Result<(), String> {
+pub(crate) fn finish(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let p = f.at(sink)?;
     let name = text_field(f.ctx(), f.node(p).h, "name")?;
     let (mask, cond, counter) = (
@@ -225,19 +274,20 @@ fn flat_indices(shape: &[usize]) -> Vec<Vec<usize>> {
 /// One tape row on the own column, under `if (on)`: component `row * width + c` of the sample's
 /// plane gets the `c`-th
 /// flattened component of the stored values, in order. Rendered where the sink stands.
-pub(crate) fn tape_write(f: &mut Frame, p: usize) -> Result<(), String> {
+pub(crate) fn tape_write(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let h = f.node(p).h;
     tape_write_of(f, h)
 }
 
 /// A tape row write by the sink's handle (a loop body's sink has no slot of its own): the row, the
 /// switch, then the values.
-pub(super) fn tape_write_of(f: &mut Frame, h: u32) -> Result<(), String> {
+pub(super) fn tape_write_of(f: &mut Frame, h: u32) -> Result<(), Refusal> {
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
         &text_field(f.ctx(), h, "name")?,
     )?;
-    let width = door::field_int(f.ctx(), h, "width")?.ok_or("a tape write holds no width")?;
+    let width = door::field_int(f.ctx(), h, "width")?
+        .ok_or_else(|| fault("a tape write holds no width"))?;
     let operands = crate::ir::door::operands(f.ctx(), h)?;
     let (row, on) = (f.arg(operands[0])?, f.arg(operands[1])?);
     let mut lines = vec![];

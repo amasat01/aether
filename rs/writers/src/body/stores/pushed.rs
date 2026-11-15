@@ -6,6 +6,7 @@ use crate::body::values::{literal_of, text_field};
 use crate::body::Class;
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, rx_make_op_like, rx_rebuild, rx_substitute, RxCtx};
+use crate::refuse::{fault, Refusal};
 use std::collections::HashMap;
 use std::ffi::c_int;
 
@@ -23,22 +24,22 @@ struct Pusher {
 }
 
 /// Turns a door status code into the door's message when it is not OK.
-fn status(ctx: *mut RxCtx, code: c_int) -> Result<(), String> {
+fn status(ctx: *mut RxCtx, code: c_int) -> Result<(), Refusal> {
     if code == 0 {
         Ok(())
     } else {
-        Err(door::last_error(ctx))
+        Err(door::failed(ctx, code))
     }
 }
 
 impl Pusher {
     /// The rank of a node's type.
-    fn rank(&self, node: u32) -> Result<usize, String> {
+    fn rank(&self, node: u32) -> Result<usize, Refusal> {
         Ok(crate::body::ty_of(self.ctx, node)?.shape.len())
     }
 
     /// An element-wise operation over a vector.
-    fn is_elementwise_vector(&self, node: u32) -> Result<bool, String> {
+    fn is_elementwise_vector(&self, node: u32) -> Result<bool, Refusal> {
         if !door::class_is(self.ctx, node, "Op")? || self.rank(node)? != 1 {
             return Ok(false);
         }
@@ -48,7 +49,7 @@ impl Pusher {
     }
 
     /// A runtime-index read, without a literal, of an element-wise vector.
-    fn is_pushable(&self, node: u32) -> Result<bool, String> {
+    fn is_pushable(&self, node: u32) -> Result<bool, Refusal> {
         if !door::class_is(self.ctx, node, "Op")?
             || text_field(self.ctx, node, "kind")? != "component_at"
         {
@@ -61,8 +62,8 @@ impl Pusher {
 
     /// A new operation node of the given kind over the operands, carrying the literal of the node
     /// `like` (none when `None`).
-    fn make_op(&self, kind: &str, operands: &[u32], like: Option<u32>) -> Result<u32, String> {
-        let kind = std::ffi::CString::new(kind).map_err(|e| e.to_string())?;
+    fn make_op(&self, kind: &str, operands: &[u32], like: Option<u32>) -> Result<u32, Refusal> {
+        let kind = std::ffi::CString::new(kind).map_err(fault)?;
         let mut out = 0u32;
         let code = unsafe {
             rx_make_op_like(
@@ -81,7 +82,7 @@ impl Pusher {
 
     /// One element of a value: a rank-0 value is itself, an element-wise vector is the same
     /// operation over the elements of its operands, any other vector is read at the index.
-    fn element(&mut self, value: u32, index: u32) -> Result<u32, String> {
+    fn element(&mut self, value: u32, index: u32) -> Result<u32, Refusal> {
         if self.rank(value)? == 0 {
             return Ok(value);
         }
@@ -103,7 +104,7 @@ impl Pusher {
     }
 
     /// Whether every sink commits a value the rewrite can replace.
-    fn sinks_allow(&self, sinks: &[u32]) -> Result<bool, String> {
+    fn sinks_allow(&self, sinks: &[u32]) -> Result<bool, Refusal> {
         for &sink in sinks {
             let class = Class::of(self.ctx, sink)?;
             let known = VALUE_SINKS.contains(&class.as_str())
@@ -126,7 +127,7 @@ pub(crate) fn push_reads(
     ctx: *mut RxCtx,
     walk: u32,
     sinks: &[u32],
-) -> Result<(u32, Vec<u32>), String> {
+) -> Result<(u32, Vec<u32>), Refusal> {
     let mut pusher = Pusher {
         ctx,
         elementwise: ["ELEMENTWISE_BINARY", "UNARY_MATH", "ELEMENTWISE_TERNARY"]

@@ -3,6 +3,7 @@
 //! the operation and the fill that sets a row to the operation's identity.
 use super::{element, Walk};
 use crate::ir::door::{self, RxCtx};
+use crate::refuse::{fault, Refusal};
 use crate::spell::binding_name;
 
 /// One sample-sum sink: its operation (`sum`, `max` or `min`), the plane it stores to and that
@@ -19,7 +20,7 @@ pub struct SumSink {
 }
 
 /// The sample-sum sinks among a unit's sinks, in order.
-pub fn sample_sum_nodes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<u32>, String> {
+pub fn sample_sum_nodes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<u32>, Refusal> {
     let mut sums = vec![];
     for &sink in sinks {
         if door::class_is(ctx, sink, "SampleSum")? {
@@ -30,7 +31,7 @@ pub fn sample_sum_nodes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<u32>, Stri
 }
 
 /// The sample-sum sinks among `nodes`, read through the door; `walk` gives their planes' types.
-pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumSink>, String> {
+pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumSink>, Refusal> {
     let text =
         |node: u32, field: &str| door::field_text(ctx, node, field).map(Option::unwrap_or_default);
     let mut sinks = vec![];
@@ -44,7 +45,7 @@ pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumS
             .slots
             .iter()
             .find(|slot| slot.name == name)
-            .ok_or("sample-sum sink without a slot")?;
+            .ok_or_else(|| fault("sample-sum sink without a slot"))?;
         sinks.push(SumSink {
             op,
             role,
@@ -56,18 +57,18 @@ pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumS
 }
 
 /// The code of the operation the row sum takes as a template argument.
-pub fn op_code(op: &str) -> Result<i64, String> {
+pub fn op_code(op: &str) -> Result<i64, Refusal> {
     match op {
         "sum" => Ok(0),
         "max" => Ok(1),
         "min" => Ok(2),
-        other => Err(format!("unknown sample-sum op {other:?}")),
+        other => Err(fault(format!("unknown sample-sum op {other:?}"))),
     }
 }
 
 /// The statement that sets `width` slots of `array` to the identity of `op`; nothing for a sum,
 /// whose array is zeroed.
-pub fn identity_fill(op: &str, width: i64, array: &str, element: &str) -> Result<String, String> {
+pub fn identity_fill(op: &str, width: i64, array: &str, element: &str) -> Result<String, Refusal> {
     if op == "sum" {
         return Ok(String::new());
     }
@@ -87,7 +88,7 @@ pub fn store_lambda(
     rows: i64,
     cells_row: i64,
     cells: bool,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let (out, comp) = if cells {
         ("hawk_abi::ssOut_(hawk_s)", "hawk_abi::ssComp_(hawk_c)")
     } else {

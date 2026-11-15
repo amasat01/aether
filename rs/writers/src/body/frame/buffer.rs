@@ -4,6 +4,7 @@
 //! so do their declarations); a buffer scope puts both aside together.
 use super::namer::Name;
 use crate::body::Frame;
+use crate::refuse::Refusal;
 use crate::spell;
 use std::collections::BTreeSet;
 
@@ -193,7 +194,7 @@ impl Frame<'_> {
         shape: &[usize],
         value: &str,
         held: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let line = spell::declare(&name.text, dtype, shape, value, held)?;
         let cty = spell::declared_type(dtype, shape, held)?;
         self.record(name, cty, Some(value.to_string()), line, true);

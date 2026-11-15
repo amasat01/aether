@@ -3,6 +3,7 @@
 //! forms (flat lane, team stage, active-set map, run segment, thread box) and the entry signature.
 use crate::contract::types::{Active, MapBits};
 use crate::ir::analysis as an;
+use crate::refuse::Refusal;
 use crate::spell::binding_name;
 use crate::unit::{active_reads, view_type, Slot, Walk};
 
@@ -153,7 +154,7 @@ pub fn index_epilogue() -> &'static str {
 }
 
 /// The by-value ABI shape one slot crosses the launch boundary as.
-fn param_type(slot: &Slot) -> Result<String, String> {
+fn param_type(slot: &Slot) -> Result<String, Refusal> {
     let shape = an::mirror_of(&slot.role, &slot.dtype, slot.shape.len())?;
     if shape == "value" {
         view_type(slot)
@@ -163,7 +164,7 @@ fn param_type(slot: &Slot) -> Result<String, String> {
 }
 
 /// The identifier the entry takes a slot's mirror under.
-pub fn param_name(slot: &Slot) -> Result<String, String> {
+pub fn param_name(slot: &Slot) -> Result<String, Refusal> {
     Ok(format!("p_{}", binding_name(&slot.role, &slot.name)?))
 }
 
@@ -172,7 +173,7 @@ pub fn entry_signature(
     walk: &Walk,
     name: &str,
     launch_bounds: Option<(i64, i64)>,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let mut params = vec![];
     for slot in &walk.slots {
         params.push(format!("    {} {}", param_type(slot)?, param_name(slot)?));

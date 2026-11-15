@@ -1,6 +1,7 @@
 //! The IR core's C door as seen from this crate: the functions are declared here as `extern "C"`
 //! (their meaning is that of
 //! raptor_ir.h) and are resolved when the final binary is linked. The helpers return owned values.
+use crate::refuse::{bad, fault, nib, Refusal};
 use std::ffi::{c_char, c_int, CString};
 
 #[repr(C)]
@@ -255,21 +256,23 @@ extern "C" {
 }
 
 /// The node a value passes through (the node itself when it has none).
-pub fn through(ctx: impl Into<CtxPtr>, h: u32) -> Result<u32, String> {
+pub fn through(ctx: impl Into<CtxPtr>, h: u32) -> Result<u32, Refusal> {
     let ctx = ctx.into().raw();
     let mut out = h;
-    if unsafe { rx_through(ctx, h, &mut out) } != RX_OK {
-        return Err(last_error(ctx));
+    let st = unsafe { rx_through(ctx, h, &mut out) };
+    if st != RX_OK {
+        return Err(failed(ctx, st));
     }
     Ok(out)
 }
 
 /// Whether two indexed accesses are at the same index.
-pub fn same_index(ctx: impl Into<CtxPtr>, a: u32, b: u32) -> Result<bool, String> {
+pub fn same_index(ctx: impl Into<CtxPtr>, a: u32, b: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     let mut out: c_int = 0;
-    if unsafe { rx_same_index(ctx, a, b, &mut out) } != RX_OK {
-        return Err(last_error(ctx));
+    let st = unsafe { rx_same_index(ctx, a, b, &mut out) };
+    if st != RX_OK {
+        return Err(failed(ctx, st));
     }
     Ok(out != 0)
 }
@@ -282,12 +285,23 @@ pub fn last_error(ctx: impl Into<CtxPtr>) -> String {
         .into_owned()
 }
 
+/// The refusal a failed door status stands for, with the context's reason: a construct the core
+/// refuses is not written, a bad argument is a bad request, anything else is a fault.
+pub fn failed(ctx: impl Into<CtxPtr>, status: c_int) -> Refusal {
+    let reason = last_error(ctx);
+    match status {
+        RX_REFUSED => nib(reason),
+        RX_BADARG => bad(reason),
+        _ => fault(reason),
+    }
+}
+
 /// Turns a status into a result, with the context's reason for a refusal.
-fn check(ctx: *mut RxCtx, st: c_int) -> Result<(), String> {
+fn check(ctx: *mut RxCtx, st: c_int) -> Result<(), Refusal> {
     if st == RX_OK {
         Ok(())
     } else {
-        Err(last_error(ctx))
+        Err(failed(ctx, st))
     }
 }
 
@@ -295,7 +309,7 @@ fn check(ctx: *mut RxCtx, st: c_int) -> Result<(), String> {
 fn text(
     ctx: *mut RxCtx,
     f: impl Fn(*mut c_char, usize, *mut usize) -> c_int,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let mut len = 0usize;
     let st = f(std::ptr::null_mut(), 0, &mut len);
     if st != RX_TRUNC {
@@ -304,14 +318,14 @@ fn text(
     let mut buf = vec![0u8; len + 1];
     check(ctx, f(buf.as_mut_ptr() as *mut c_char, len + 1, &mut len))?;
     buf.truncate(len);
-    String::from_utf8(buf).map_err(|e| e.to_string())
+    String::from_utf8(buf).map_err(fault)
 }
 
 /// A handle list output of the door (`n` is set even when the buffer is too small).
 fn handles(
     ctx: *mut RxCtx,
     f: impl Fn(*mut u32, usize, *mut usize) -> c_int,
-) -> Result<Vec<u32>, String> {
+) -> Result<Vec<u32>, Refusal> {
     let mut n = 0usize;
     let st = f(std::ptr::null_mut(), 0, &mut n);
     if st != RX_TRUNC {
@@ -325,35 +339,35 @@ fn handles(
 }
 
 /// A C string of the text, or a refusal for an interior NUL.
-fn cs(s: &str) -> Result<CString, String> {
-    CString::new(s).map_err(|_| "interior NUL".to_string())
+fn cs(s: &str) -> Result<CString, Refusal> {
+    CString::new(s).map_err(|_| bad("interior NUL"))
 }
 
 /// The class name of a node.
-pub(crate) fn class_name(ctx: impl Into<CtxPtr>, node: u32) -> Result<String, String> {
+pub(crate) fn class_name(ctx: impl Into<CtxPtr>, node: u32) -> Result<String, Refusal> {
     let ctx = ctx.into().raw();
     text(ctx, |b, c, l| unsafe { rx_class(ctx, node, b, c, l) })
 }
 /// The operands of a node.
-pub fn operands(ctx: impl Into<CtxPtr>, node: u32) -> Result<Vec<u32>, String> {
+pub fn operands(ctx: impl Into<CtxPtr>, node: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe { rx_operands(ctx, node, b, c, n) })
 }
 /// The nodes of a walk, in order.
-pub fn walk_order(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, String> {
+pub fn walk_order(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe { rx_walk_order(ctx, walk, b, c, n) })
 }
 /// Whether the node's class is exactly `name` (a refinement of it does not count, unlike `is_a`).
-pub fn class_is(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<bool, String> {
+pub fn class_is(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<bool, Refusal> {
     Ok(class_name(ctx, node)? == name)
 }
 
 /// The plain text of a field that always holds text (no quotes around it); a field that holds
 /// nothing is refused.
-pub fn text_field(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<String, String> {
+pub fn text_field(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<String, Refusal> {
     let held = field_text(ctx, node, name)?;
-    held.ok_or_else(|| format!("node {node} has no {name}"))
+    held.ok_or_else(|| fault(format!("node {node} has no {name}")))
 }
 
 /// Whether the walk binds the slot (`role`, `name`).
@@ -362,7 +376,7 @@ pub fn walk_binds(
     walk: u32,
     role: &str,
     name: &str,
-) -> Result<bool, String> {
+) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     let (role, name) = (cs(role)?, cs(name)?);
     let mut out: c_int = 0;
@@ -373,7 +387,7 @@ pub fn walk_binds(
 }
 
 /// The slots the walk binds, as (role, name) pairs in argument order.
-pub fn walk_args(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, String)>, String> {
+pub fn walk_args(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, String)>, Refusal> {
     let ctx = ctx.into().raw();
     let (mut len, mut count) = (0usize, 0usize);
     let status = unsafe { rx_walk_args(ctx, walk, std::ptr::null_mut(), 0, &mut len, &mut count) };
@@ -394,7 +408,7 @@ pub fn walk_args(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, Strin
     };
     check(ctx, status)?;
     buf.truncate(len);
-    let text = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8(buf).map_err(fault)?;
     let texts: Vec<&str> = text.split_terminator('\0').collect();
     Ok(texts
         .chunks(2)
@@ -404,7 +418,7 @@ pub fn walk_args(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, Strin
 }
 
 /// The digest of a walk.
-pub fn digest(ctx: impl Into<CtxPtr>, walk: u32) -> Result<String, String> {
+pub fn digest(ctx: impl Into<CtxPtr>, walk: u32) -> Result<String, Refusal> {
     let ctx = ctx.into().raw();
     let mut out = [0 as c_char; 65];
     check(ctx, unsafe { rx_digest(ctx, walk, out.as_mut_ptr()) })?;
@@ -415,25 +429,25 @@ pub fn digest(ctx: impl Into<CtxPtr>, walk: u32) -> Result<String, String> {
 
 /// The canonical position of any node the walk reached (a duplicate answers its representative's
 /// position).
-pub fn position(ctx: impl Into<CtxPtr>, walk: u32, node: u32) -> Result<usize, String> {
+pub fn position(ctx: impl Into<CtxPtr>, walk: u32, node: u32) -> Result<usize, Refusal> {
     let ctx = ctx.into().raw();
     let mut p = 0u32;
     check(ctx, unsafe { rx_walk_position(ctx, walk, node, &mut p) })?;
     Ok(p as usize)
 }
 /// The nodes in the body of a loop.
-pub fn body_nodes(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, String> {
+pub fn body_nodes(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe { rx_body_nodes(ctx, lp, b, c, n) })
 }
 /// The roots of the body of a loop.
-pub fn body_roots(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, String> {
+pub fn body_roots(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe { rx_body_roots(ctx, lp, b, c, n) })
 }
 
 /// A constant raptor owns, by name, as the list of texts it holds; refuses a name that is no list.
-pub fn constant_list(ctx: impl Into<CtxPtr>, name: &str) -> Result<Vec<String>, String> {
+pub fn constant_list(ctx: impl Into<CtxPtr>, name: &str) -> Result<Vec<String>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let (mut len, mut count) = (0usize, 0usize);
@@ -464,13 +478,13 @@ pub fn constant_list(ctx: impl Into<CtxPtr>, name: &str) -> Result<Vec<String>, 
     };
     check(ctx, status)?;
     buf.truncate(len);
-    let text = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8(buf).map_err(fault)?;
     Ok(text.split_terminator('\0').map(String::from).collect())
 }
 
 /// The dispatch nodes of a walk, top-level first, then those inside loop bodies: the order that
 /// names its dispatch groups.
-pub fn dispatch_nodes(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, String> {
+pub fn dispatch_nodes(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe {
         rx_dispatch_nodes(ctx, walk, b, c, n)
@@ -485,7 +499,7 @@ pub fn canonical_over(
     ctx: impl Into<CtxPtr>,
     sinks: &[u32],
     unit_walk: u32,
-) -> Result<u32, String> {
+) -> Result<u32, Refusal> {
     let ctx = ctx.into().raw();
     let mut walk = u32::MAX;
     let status =
@@ -501,12 +515,12 @@ const KEYED_AUTO_CONTRACT: &str = "keyed_auto";
 /// Whether an accumulate under the contract commits through a companion plane: the contracts
 /// `compensated` and
 /// the automatic keyed one.
-pub fn compensates(contract: &str) -> Result<bool, String> {
+pub fn compensates(contract: &str) -> Result<bool, Refusal> {
     Ok(contract == "compensated" || contract == KEYED_AUTO_CONTRACT)
 }
 
 /// Whether the node is of the named node kind or a kind derived from it.
-pub fn is_a(ctx: impl Into<CtxPtr>, node: u32, kind: &str) -> Result<bool, String> {
+pub fn is_a(ctx: impl Into<CtxPtr>, node: u32, kind: &str) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(kind)?;
     let mut out: c_int = 0;
@@ -515,7 +529,7 @@ pub fn is_a(ctx: impl Into<CtxPtr>, node: u32, kind: &str) -> Result<bool, Strin
 }
 
 /// The type of a node. Refuses (the door's message) a rank over 8 or an unknown node.
-pub fn ttype_of(ctx: impl Into<CtxPtr>, node: u32) -> Result<Ttype, String> {
+pub fn ttype_of(ctx: impl Into<CtxPtr>, node: u32) -> Result<Ttype, Refusal> {
     let ctx = ctx.into().raw();
     let mut raw = RxType {
         rank: 0,
@@ -526,7 +540,7 @@ pub fn ttype_of(ctx: impl Into<CtxPtr>, node: u32) -> Result<Ttype, String> {
     check(ctx, unsafe { rx_ttype_of(ctx, node, &mut raw) })?;
     let dtype = DTYPE_NAMES
         .get(raw.dtype as usize)
-        .ok_or_else(|| format!("dtype code {}", raw.dtype))?;
+        .ok_or_else(|| fault(format!("dtype code {}", raw.dtype)))?;
     let tag = unsafe { std::ffi::CStr::from_ptr(raw.tag.as_ptr()) }.to_string_lossy();
     Ok(Ttype {
         shape: raw.dims[..raw.rank as usize].to_vec(),
@@ -537,7 +551,7 @@ pub fn ttype_of(ctx: impl Into<CtxPtr>, node: u32) -> Result<Ttype, String> {
 
 /// Reads a status of a typed reader: `Ok(true)` for a value, `Ok(false)` for absence, the door's
 /// message otherwise.
-fn present(ctx: *mut RxCtx, status: c_int) -> Result<bool, String> {
+fn present(ctx: *mut RxCtx, status: c_int) -> Result<bool, Refusal> {
     match status {
         RX_ABSENT => Ok(false),
         other => check(ctx, other).map(|()| true),
@@ -546,7 +560,11 @@ fn present(ctx: *mut RxCtx, status: c_int) -> Result<bool, String> {
 
 /// A field that holds text, without quotes; `None` when the field holds nothing; an error when it
 /// holds another kind.
-pub fn field_text(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<String>, String> {
+pub fn field_text(
+    ctx: impl Into<CtxPtr>,
+    node: u32,
+    name: &str,
+) -> Result<Option<String>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut len = 0usize;
@@ -569,11 +587,11 @@ pub fn field_text(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Optio
     };
     check(ctx, status)?;
     buf.truncate(len);
-    String::from_utf8(buf).map(Some).map_err(|e| e.to_string())
+    String::from_utf8(buf).map(Some).map_err(fault)
 }
 
 /// A field that holds an integer; `None` when the field holds nothing.
-pub fn field_int(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<i64>, String> {
+pub fn field_int(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<i64>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut out = 0i64;
@@ -583,7 +601,7 @@ pub fn field_int(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option
 
 /// A field that holds a real number (an integer reads as its value); `None` when the field holds
 /// nothing.
-pub fn field_real(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<f64>, String> {
+pub fn field_real(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<f64>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut out = 0f64;
@@ -592,7 +610,7 @@ pub fn field_real(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Optio
 }
 
 /// A field that holds a flag; `None` when the field holds nothing.
-pub fn field_flag(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<bool>, String> {
+pub fn field_flag(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<bool>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut out: c_int = 0;
@@ -607,7 +625,7 @@ pub fn field_refs(
     ctx: impl Into<CtxPtr>,
     node: u32,
     name: &str,
-) -> Result<Option<Vec<u32>>, String> {
+) -> Result<Option<Vec<u32>>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut count = 0usize;
@@ -645,7 +663,7 @@ pub fn field_names(
     ctx: impl Into<CtxPtr>,
     node: u32,
     name: &str,
-) -> Result<Option<Vec<String>>, String> {
+) -> Result<Option<Vec<String>>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let (mut len, mut count) = (0usize, 0usize);
@@ -677,7 +695,7 @@ pub fn field_names(
     };
     check(ctx, status)?;
     buf.truncate(len);
-    let text = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8(buf).map_err(fault)?;
     Ok(Some(
         text.split_terminator('\0').map(String::from).collect(),
     ))
@@ -685,7 +703,7 @@ pub fn field_names(
 
 /// Whether the node lies inside a loop body of the walk (the walk's flat traversal gives it no
 /// position).
-pub fn in_loop_body(ctx: impl Into<CtxPtr>, walk: u32, node: u32) -> Result<bool, String> {
+pub fn in_loop_body(ctx: impl Into<CtxPtr>, walk: u32, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     let mut out: c_int = 0;
     check(ctx, unsafe { rx_in_loop_body(ctx, walk, node, &mut out) })?;
@@ -699,7 +717,7 @@ pub fn field_node_list(
     ctx: impl Into<CtxPtr>,
     node: u32,
     name: &str,
-) -> Result<Option<Vec<u32>>, String> {
+) -> Result<Option<Vec<u32>>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut count = 0usize;
@@ -737,7 +755,7 @@ pub fn field_ints(
     ctx: impl Into<CtxPtr>,
     node: u32,
     name: &str,
-) -> Result<Option<Vec<i64>>, String> {
+) -> Result<Option<Vec<i64>>, Refusal> {
     let ctx = ctx.into().raw();
     let name = cs(name)?;
     let mut count = 0usize;
@@ -802,14 +820,14 @@ const KIND_INTS: c_int = 7;
 
 /// The scalar a field holds, read by the typed reader its kind picks; refuses a field that holds
 /// anything else.
-pub fn field_scalar(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Scalar, String> {
+pub fn field_scalar(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Scalar, Refusal> {
     let ctx = ctx.into().raw();
     let cname = cs(name)?;
     let mut kind: c_int = 0;
     check(ctx, unsafe {
         rx_field_kind(ctx, node, cname.as_ptr(), &mut kind)
     })?;
-    let missing = || format!("node {node} lost its {name}");
+    let missing = || fault(format!("node {node} lost its {name}"));
     Ok(match kind {
         KIND_ABSENT => Scalar::Absent,
         KIND_TEXT => Scalar::Text(field_text(ctx, node, name)?.ok_or_else(missing)?),
@@ -817,7 +835,7 @@ pub fn field_scalar(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Sca
         KIND_REAL => Scalar::Real(field_real(ctx, node, name)?.ok_or_else(missing)?),
         KIND_FLAG => Scalar::Flag(field_flag(ctx, node, name)?.ok_or_else(missing)?),
         KIND_INTS => Scalar::Ints(field_ints(ctx, node, name)?.ok_or_else(missing)?),
-        _ => return Err(format!("the field {name} holds more than a scalar")),
+        _ => return Err(fault(format!("the field {name} holds more than a scalar"))),
     })
 }
 

@@ -1,5 +1,6 @@
 //! The class of a node, built once from the door's class name. A class the writers do not name
 //! stays `Other` with its name, so it is refused exactly as an unnamed class always was.
+use crate::refuse::Refusal;
 
 /// The node classes the writers tell apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +57,10 @@ pub enum Class {
     LogStore,
     /// A store of a boxed value.
     BoxStore,
+    /// The lane's place in its warp.
+    WarpLane,
+    /// A store of a value held sliced across the lanes of a warp.
+    WarpStore,
     /// A primitive a loop body calls for its effect.
     Primitive,
     /// An assignment to a plane or a mutable argument.
@@ -100,6 +105,8 @@ impl Class {
             "ScatterLog" => Class::ScatterLog,
             "LogStore" => Class::LogStore,
             "BoxStore" => Class::BoxStore,
+            "WarpLane" => Class::WarpLane,
+            "WarpStore" => Class::WarpStore,
             "Primitive" => Class::Primitive,
             "Assign" => Class::Assign,
             "SampleSum" => Class::SampleSum,
@@ -110,7 +117,7 @@ impl Class {
     }
 
     /// The class of a node, by the name the door answers for it.
-    pub fn of(ctx: *mut crate::ir::door::RxCtx, node: u32) -> Result<Class, String> {
+    pub fn of(ctx: *mut crate::ir::door::RxCtx, node: u32) -> Result<Class, Refusal> {
         Ok(Class::from_name(&crate::ir::door::class_name(ctx, node)?))
     }
 
@@ -143,6 +150,8 @@ impl Class {
             Class::ScatterLog => "ScatterLog",
             Class::LogStore => "LogStore",
             Class::BoxStore => "BoxStore",
+            Class::WarpLane => "WarpLane",
+            Class::WarpStore => "WarpStore",
             Class::Primitive => "Primitive",
             Class::Assign => "Assign",
             Class::SampleSum => "SampleSum",

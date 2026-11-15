@@ -7,18 +7,20 @@
 use super::frame::disp::ScopeKind;
 use super::{node_out, Frame, Name, NameKind, Out};
 use crate::body::{Class, Ty};
+use crate::ir::analysis::{is_resident, is_scratch};
 use crate::ir::door;
-use crate::refuse::nib;
+use crate::refuse::{fault, nib, Refusal};
 use crate::spell::{self, ident};
 
 /// The integer a node's field holds.
-pub(crate) fn int(f: &Frame, h: u32, name: &str) -> Result<i64, String> {
-    door::field_int(f.ctx(), h, name)?.ok_or_else(|| format!("loop field {name} is not a number"))
+pub(crate) fn int(f: &Frame, h: u32, name: &str) -> Result<i64, Refusal> {
+    door::field_int(f.ctx(), h, name)?
+        .ok_or_else(|| fault(format!("loop field {name} is not a number")))
 }
 
 /// A loop in the flat walk: its statement, then the rendering of the node is empty (its values are
 /// read through LoopValue).
-pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     if f.table.loop_pos().is_empty() {
         index_loops(f)?
@@ -42,7 +44,7 @@ pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, String> {
 }
 
 /// One carried slot's final value: the C++ local the loop left it in.
-pub fn value(f: &Frame, p: usize) -> Result<Out, String> {
+pub fn value(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (lp, slot) = (f.node(p).ops[0], int(f, h, "literal")? as usize);
     let pos = loop_pos(f, lp)?;
@@ -55,13 +57,13 @@ pub fn value(f: &Frame, p: usize) -> Result<Out, String> {
         .1
         .get(slot)
         .cloned()
-        .ok_or("a loop value of a missing carry")?;
+        .ok_or_else(|| fault("a loop value of a missing carry"))?;
     f.add_read(&name);
     Ok(Out::Value(name, None))
 }
 
 /// A forward loop's carried value at one iteration, out of its tape.
-pub fn tape_read(f: &Frame, p: usize) -> Result<Out, String> {
+pub fn tape_read(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (lp, slot) = (f.node(p).ops[0], int(f, h, "slot")? as usize);
     let pos = loop_pos(f, lp)?;
@@ -69,7 +71,7 @@ pub fn tape_read(f: &Frame, p: usize) -> Result<Out, String> {
         .tape_names()
         .iter()
         .find(|t| t.0 == (pos, slot))
-        .ok_or("a tape read of a slot with no tape")?
+        .ok_or_else(|| fault("a tape read of a slot with no tape"))?
         .1;
     f.add_read(tape);
     Ok(Out::Value(
@@ -104,13 +106,13 @@ fn ordinal(index: &str, start: i64, step: i64) -> String {
 }
 
 /// The per-sample iteration counter of a loop whose count a derived node reads.
-pub fn count(f: &Frame, p: usize) -> Result<Out, String> {
+pub fn count(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let pos = loop_pos(f, f.node(p).ops[0])?;
     Ok(Out::Value(
         f.count_names()
             .iter()
             .find(|c| c.0 == pos)
-            .ok_or("a loop count of a loop with no counter")?
+            .ok_or_else(|| fault("a loop count of a loop with no counter"))?
             .1
             .clone(),
         None,
@@ -118,19 +120,19 @@ pub fn count(f: &Frame, p: usize) -> Result<Out, String> {
 }
 
 /// The position of the loop node `lp` in the frame's table.
-pub(crate) fn loop_pos(f: &Frame, lp: u32) -> Result<usize, String> {
+pub(crate) fn loop_pos(f: &Frame, lp: u32) -> Result<usize, Refusal> {
     f.table
         .loop_pos()
         .iter()
         .find(|x| x.0 == lp)
         .map(|x| x.1)
-        .ok_or_else(|| "a loop that was not indexed".to_string())
+        .ok_or_else(|| fault("a loop that was not indexed"))
 }
 
 /// Every loop gets a stable suffix: a top-level loop its canonical position, a nested one (no
 /// position of its own) the next number
 /// above every position; then the loops whose count a derived node reads get a counter.
-fn index_loops(f: &mut Frame) -> Result<(), String> {
+fn index_loops(f: &mut Frame) -> Result<(), Refusal> {
     let mut counter = f.count();
     let mut pending: std::collections::VecDeque<u32> = f.nodes().map(|n| n.h).collect();
     let mut all: Vec<u32> = vec![];
@@ -289,7 +291,7 @@ fn counted_range(
 
 /// The body nodes a break needs: its condition, the carried values at the break and everything
 /// they read in the body.
-pub(crate) fn exit_part(f: &Frame, body: &[u32], roots: &[u32]) -> Result<Vec<u32>, String> {
+pub(crate) fn exit_part(f: &Frame, body: &[u32], roots: &[u32]) -> Result<Vec<u32>, Refusal> {
     let (mut need, mut stack): (Vec<u32>, Vec<u32>) = (vec![], roots.to_vec());
     while let Some(h) = stack.pop() {
         if !body.contains(&h) || need.contains(&h) {
@@ -310,7 +312,7 @@ pub(crate) fn render_scope(
     sf: &[usize],
     only: Option<&[u32]>,
     skip: &[u32],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     for &h in body {
         if skip.contains(&h) || only.is_some_and(|o| !o.contains(&h)) {
             continue;
@@ -388,10 +390,12 @@ struct LoopLocals {
     tapes: Vec<(usize, String)>,
     /// The per-sample iteration counter, when the loop has one.
     counter: Option<String>,
+    /// The carried slots that live in a plane (a placed render): the carry is the plane's proxy, written in place.
+    planed: Vec<bool>,
 }
 
 /// Reads the loop's head from the door and names its carried locals; writes nothing.
-pub(crate) fn read_head(f: &mut Frame, lp: u32) -> Result<LoopHead, String> {
+pub(crate) fn read_head(f: &mut Frame, lp: u32) -> Result<LoopHead, Refusal> {
     let ctx = f.ctx();
     let pos = loop_pos(f, lp)?;
     let carries = door::field_node_list(ctx, lp, "carries")?.unwrap_or_default();
@@ -454,9 +458,17 @@ pub(crate) fn read_head(f: &mut Frame, lp: u32) -> Result<LoopHead, String> {
 
 /// One lowered loop as statements: the carried locals, the header, the body in its own scope, the
 /// results.
-fn emit_loop(f: &mut Frame, lp: u32) -> Result<(), String> {
-    let head = read_head(f, lp)?;
-    let locals = declare_locals(f, &head)?;
+fn emit_loop(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
+    let mut head = read_head(f, lp)?;
+    let mut planed = vec![];
+    for (j, &init) in head.inits.iter().enumerate() {
+        let in_plane = f.placed && (is_resident(f.ctx(), init)? || is_scratch(f.ctx(), init)?);
+        if in_plane {
+            head.names[j] = f.arg(init)?;
+        }
+        planed.push(in_plane);
+    }
+    let locals = declare_locals(f, &head, planed)?;
     let index = emit_header(f, &head)?;
     let scope = open_trip(f, &head, &locals, &index)?;
     let base = scope.base;
@@ -471,10 +483,14 @@ fn emit_loop(f: &mut Frame, lp: u32) -> Result<(), String> {
 
 /// Declares the carried locals with their initial values, the tape arrays and the iteration
 /// counter.
-fn declare_locals(f: &mut Frame, head: &LoopHead) -> Result<LoopLocals, String> {
+fn declare_locals(
+    f: &mut Frame,
+    head: &LoopHead,
+    planed: Vec<bool>,
+) -> Result<LoopLocals, Refusal> {
     let (pos, lp) = (head.pos, head.lp);
     f.record_carries(pos, head.names.clone());
-    for j in 0..head.carries.len() {
+    for j in (0..head.carries.len()).filter(|&j| !planed[j]) {
         let init = f.arg(head.inits[j])?;
         f.declare_var(
             Name::new(head.names[j].clone(), NameKind::Carry),
@@ -508,11 +524,15 @@ fn declare_locals(f: &mut Frame, head: &LoopHead) -> Result<LoopLocals, String> 
             Some("0"),
         )
     }
-    Ok(LoopLocals { tapes, counter })
+    Ok(LoopLocals {
+        tapes,
+        counter,
+        planed,
+    })
 }
 
 /// Writes the `for` header and returns the index variable's name.
-fn emit_header(f: &mut Frame, head: &LoopHead) -> Result<String, String> {
+fn emit_header(f: &mut Frame, head: &LoopHead) -> Result<String, Refusal> {
     let (ctx, lp) = (f.ctx(), head.lp);
     let index = f
         .names
@@ -545,7 +565,7 @@ fn open_trip(
     head: &LoopHead,
     locals: &LoopLocals,
     index: &str,
-) -> Result<super::frame::scopes::LoopScope, String> {
+) -> Result<super::frame::scopes::LoopScope, Refusal> {
     let scope = f.open_loop(head.index_h, &head.carries, &head.body)?;
     let base = scope.base;
     f.set_text(base, index.to_string());
@@ -574,7 +594,7 @@ pub(crate) fn body_fanout(
     head: &LoopHead,
     base: usize,
     skip_primitives: bool,
-) -> Result<Vec<usize>, String> {
+) -> Result<Vec<usize>, Refusal> {
     let ctx = f.ctx();
     let mut roots: Vec<u32> = head
         .nexts
@@ -621,7 +641,7 @@ fn render_trip_body(
     locals: &LoopLocals,
     base: usize,
     sf: &[usize],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (pos, body, form) = (head.pos, &head.body, head.form);
     if form == "head" || form == "middle" {
         let pre = exit_part(f, body, &head.exits)?;
@@ -662,7 +682,7 @@ fn render_trip_body(
 
 /// The results of a trip: each changed carry's next value, the tail break's flag, the carries'
 /// updates, the counter and the tail break.
-fn emit_results(f: &mut Frame, head: &LoopHead, locals: &LoopLocals) -> Result<(), String> {
+fn emit_results(f: &mut Frame, head: &LoopHead, locals: &LoopLocals) -> Result<(), Refusal> {
     let pos = head.pos;
     let mut results: Vec<Option<String>> = vec![];
     for j in 0..head.carries.len() {
@@ -673,6 +693,16 @@ fn emit_results(f: &mut Frame, head: &LoopHead, locals: &LoopLocals) -> Result<(
         let next = f.names.next(pos, j);
         let r = next.text.clone();
         let value = f.arg(head.nexts[j])?;
+        if locals.planed[j] {
+            // the pass admits only chains stored in place: the next value is the proxy itself
+            if value != head.names[j] {
+                return Err(nib(
+                    "a plane-carried slot whose next value is not stored in place",
+                ));
+            }
+            results.push(None);
+            continue;
+        }
         f.declare_as(next, head.elems[j].clone(), Some(&value));
         results.push(Some(r));
     }

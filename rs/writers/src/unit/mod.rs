@@ -4,8 +4,9 @@
 //! unpacking of the entry's
 //! arguments. The host and device arms differ only in the arguments they pass here.
 use crate::body::frame::needs::{Need, Needs as BodyNeeds};
-use crate::contract::types::{Active, Exports, Scalar, Walk as TypedWalk};
+use crate::contract::types::{Active, Exports, Scalar, ThreadBox, Walk as TypedWalk};
 use crate::ir::door::RxCtx;
+use crate::refuse::{not_written, Refusal};
 use crate::spell::binding_name;
 use text::*;
 
@@ -58,9 +59,9 @@ pub fn unpack_lines(
     ctx: *mut RxCtx,
     walk: u32,
     w: &Walk,
-    source_of: &dyn Fn(&Slot) -> Result<String, String>,
-    binding_of: &dyn Fn(&Slot) -> Result<Option<String>, String>,
-) -> Result<String, String> {
+    source_of: &dyn Fn(&Slot) -> Result<String, Refusal>,
+    binding_of: &dyn Fn(&Slot) -> Result<Option<String>, Refusal>,
+) -> Result<String, Refusal> {
     let mut lines: Vec<String> = vec![];
     for s in &w.slots {
         let id = binding_name(&s.role, &s.name)?;
@@ -127,6 +128,37 @@ pub struct Mode {
     pub cells: bool,
 }
 
+/// The facts of a rendered unit that its caller reads back: a typed record, written as one JSON object by `json`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Meta {
+    /// `host` or `cuda`.
+    pub target: &'static str,
+    /// The scalar mode's id.
+    pub mode: &'static str,
+    /// Whether the lane loop runs its lanes side by side; the device text never does.
+    pub vectorised: bool,
+    /// The thread box, when each thread serves several samples and the box has an axis.
+    pub thread_box: Option<ThreadBox>,
+}
+
+impl Meta {
+    /// The facts as JSON text: target, mode, vectorised and the thread box (null when none).
+    pub fn json(&self) -> String {
+        let boxed = match &self.thread_box {
+            Some(ThreadBox {
+                axis: Some(axis),
+                t,
+                stride,
+            }) => format!("{{\"axis\":{axis},\"T\":{t},\"stride\":{stride}}}"),
+            _ => "null".to_string(),
+        };
+        format!(
+            "{{\"target\":\"{}\",\"mode\":\"{}\",\"vectorised\":{},\"box\":{boxed}}}",
+            self.target, self.mode, self.vectorised
+        )
+    }
+}
+
 /// One argument slot of the entry: role, name, element type and shape.
 pub struct Slot {
     /// The slot's role.
@@ -152,18 +184,22 @@ pub struct Walk {
 }
 
 /// The C++ element spelling of an element type of a plane.
-pub fn element(dtype: &str) -> Result<String, String> {
+pub fn element(dtype: &str) -> Result<String, Refusal> {
     Ok(match dtype {
         "f64" | "f32" => "Real".into(),
         "i32" | "i64" => "Int".into(),
         d if INT_PLANE.contains(&d) => format!("std::{d}_t"),
         "bool" => "bool".into(),
-        d => return Err(format!("no C++ element spelling for dtype {d:?}")),
+        d => {
+            return Err(not_written(format!(
+                "no C++ element spelling for dtype {d:?}"
+            )))
+        }
     })
 }
 
 /// The C++ type an entry binds a slot to: a plain value or a view over its extents.
-pub fn view_type(s: &Slot) -> Result<String, String> {
+pub fn view_type(s: &Slot) -> Result<String, Refusal> {
     if an::mirror_of(&s.role, &s.dtype, s.shape.len())? == "value" {
         if s.role == "nsamples" {
             return Ok("EAGLE_ABI_INDEX_T".into());
@@ -188,7 +224,7 @@ pub fn view_type(s: &Slot) -> Result<String, String> {
 }
 
 /// The expression that rebuilds a slot's view from the entry's source text for it.
-pub fn reconstruct(s: &Slot, src: &str) -> Result<String, String> {
+pub fn reconstruct(s: &Slot, src: &str) -> Result<String, Refusal> {
     if an::mirror_of(&s.role, &s.dtype, s.shape.len())? == "value" {
         return Ok(src.into());
     }
@@ -470,7 +506,7 @@ pub fn walk_from(walk: &TypedWalk) -> Walk {
 
 /// The export block of the unit: the layout self-check, a host object or a device object
 /// (`device`), or the finished text the unit carries.
-pub fn exports(exports: &Exports, device: bool) -> Result<String, String> {
+pub fn exports(exports: &Exports, device: bool) -> Result<String, Refusal> {
     let values: Vec<String> = match exports {
         Exports::Text(text) => return Ok(text.clone()),
         Exports::Derived => DERIVED_SIZES.iter().map(|s| s.to_string()).collect(),

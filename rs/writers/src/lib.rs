@@ -13,6 +13,7 @@ pub use body::render_body;
 pub use ir::door;
 pub use ir::door::RxCtx;
 pub use lanes::{lane_segments, lane_split};
+pub use refuse::{Refusal, RefusalKind};
 pub use unit::device as cuda;
 pub use unit::entry::{cuda_render, entry_body, host_render, HostSource};
 #[cfg(feature = "old-contract")]

@@ -7,11 +7,12 @@ use super::{Frame, Out, Proxy};
 use crate::body::frame::needs::Need;
 use crate::body::values::{literal_of, text_field};
 use crate::body::Class;
+use crate::contract::types::Target;
 use crate::ir::analysis::{
     element_kind, gather, is_prior, is_resident, is_tiled, loops_flat, plane_widths, Gather,
 };
 use crate::ir::door;
-use crate::refuse::nib;
+use crate::refuse::{fault, nib, Refusal};
 use crate::spell::{binding_name, carry_type, scalar_op};
 use std::collections::{HashMap, HashSet};
 
@@ -34,7 +35,7 @@ fn key(f: &Frame, h: u32) -> u64 {
 /// taken. Asking "has every reader been taken" of walk nodes too would name each index of a
 /// rolled read and unroll it: one recorded unit grows from 1,057 to 1,569 lines (512 named
 /// indices), so the rule is the one that keeps a gathered read rolled.
-pub(super) fn written(f: &Frame) -> Result<HashSet<u32>, String> {
+pub(super) fn written(f: &Frame) -> Result<HashSet<u32>, Refusal> {
     let ctx = f.ctx();
     let mut scanned: Vec<u32> = f.nodes().map(|n| n.h).collect();
     let loops: Vec<u32> = f
@@ -137,7 +138,7 @@ pub(super) fn is_absorbed(f: &Frame, p: usize) -> bool {
 
 /// The lane proxy of a plane leaf a placement writes: a row of the tile the arm declares, read by
 /// the lane's own index.
-pub(super) fn plane_leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub(super) fn plane_leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (role, name) = (
         text_field(f.ctx(), h, "role")?,
@@ -159,13 +160,21 @@ pub(super) fn plane_leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
         return Ok(Out::Bound);
     }
     let proxy = format!("{plane}_i");
+    let nodes: Vec<u32> = f.nodes().map(|n| n.h).collect();
+    let wide = plane_widths(f.ctx(), &nodes)?
+        .into_iter()
+        .find(|w| w.0 == name)
+        .ok_or_else(|| nib("a plane no placement records"))?
+        .1;
+    if f.unit.target == Target::Device {
+        // a device lane has no tile around the body: the proxy is the sample's row of the plane, declared where it is read
+        f.emit(format!(
+            "const auto {proxy} = hawk_abi::tiled<Real, {wide}>({plane}, {});",
+            crate::spell::SAMPLE_INDEX_IDENT
+        ));
+        f.need(Need::Tiled);
+    }
     if !f.proxies.iter().any(|x| x.name == proxy) {
-        let nodes: Vec<u32> = f.nodes().map(|n| n.h).collect();
-        let wide = plane_widths(f.ctx(), &nodes)?
-            .into_iter()
-            .find(|w| w.0 == name)
-            .ok_or_else(|| nib("a plane no placement records"))?
-            .1;
         f.proxies.push(Proxy {
             name: proxy.clone(),
             plane,
@@ -178,7 +187,7 @@ pub(super) fn plane_leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
 
 /// A value placed in its plane: the statements that write it there, then the proxy as the text of
 /// the value.
-pub(super) fn resident(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub(super) fn resident(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (value, plane) = (f.node(p).ops[0], f.node(p).ops[1]);
     let proxy = f.text(f.opp(p)[1]).clone();
     if f.absorbed.contains(&value) {
@@ -205,7 +214,7 @@ pub(super) fn resident(f: &mut Frame, p: usize) -> Result<Out, String> {
 /// Writes an elementwise value or a vector of parts into the proxy one element at a time: a rolled
 /// loop over the elements when
 /// each is the same expression of its index, else one statement per element.
-fn fill(f: &mut Frame, proxy: &str, value: u32) -> Result<(), String> {
+fn fill(f: &mut Frame, proxy: &str, value: u32) -> Result<(), Refusal> {
     let ty = crate::body::ty_of(f.ctx(), value)?;
     let width = ty.shape[0];
     if rolled_elements(f, value)? {
@@ -224,7 +233,7 @@ fn fill(f: &mut Frame, proxy: &str, value: u32) -> Result<(), String> {
 }
 
 /// The text cast to an element type unless it already is.
-pub(super) fn cast(text: &str, dtype: &str) -> Result<String, String> {
+pub(super) fn cast(text: &str, dtype: &str) -> Result<String, Refusal> {
     let elem = carry_type(dtype, &[])?;
     Ok(if text.starts_with(&format!("static_cast<{elem}>")) {
         text.to_string()
@@ -235,7 +244,7 @@ pub(super) fn cast(text: &str, dtype: &str) -> Result<String, String> {
 
 /// Whether every element of the value is one expression of the element index: no vector of distinct
 /// parts is under it.
-fn rolled_elements(f: &Frame, value: u32) -> Result<bool, String> {
+fn rolled_elements(f: &Frame, value: u32) -> Result<bool, Refusal> {
     let mut stack = vec![value];
     let mut seen: Vec<u32> = vec![];
     while let Some(node) = stack.pop() {
@@ -276,7 +285,7 @@ fn rolled_elements(f: &Frame, value: u32) -> Result<bool, String> {
 /// The text of element `k` of a value (`fixed` its number when it is a compile-time index): a plane
 /// read at it, a part, or the
 /// operation on the elements of its operands.
-fn element_of(f: &Frame, value: u32, k: &str, fixed: Option<usize>) -> Result<String, String> {
+fn element_of(f: &Frame, value: u32, k: &str, fixed: Option<usize>) -> Result<String, Refusal> {
     let mut work = vec![(value, false)];
     let mut texts: Vec<String> = vec![];
     // the nodes whose texts the element is built from; an operation may fold some away
@@ -303,9 +312,7 @@ fn element_of(f: &Frame, value: u32, k: &str, fixed: Option<usize>) -> Result<St
             texts.push(operation(f, node, &args)?);
         }
     }
-    let element = texts
-        .pop()
-        .ok_or_else(|| "an element of nothing".to_string())?;
+    let element = texts.pop().ok_or_else(|| fault("an element of nothing"))?;
     for h in used {
         f.record_names_in(f.pos_of(h)?, &element);
     }
@@ -320,7 +327,7 @@ fn element_text(
     k: &str,
     fixed: Option<usize>,
     used: &mut Vec<u32>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, Refusal> {
     let ty = crate::body::ty_of(f.ctx(), node)?;
     if ty.shape.is_empty() {
         used.push(node);
@@ -372,7 +379,7 @@ fn element_text(
 }
 
 /// One element of an elementwise operation over the element texts.
-fn operation(f: &Frame, node: u32, args: &[String]) -> Result<String, String> {
+fn operation(f: &Frame, node: u32, args: &[String]) -> Result<String, Refusal> {
     let kind = text_field(f.ctx(), node, "kind")?;
     if kind == "select" {
         return Ok(format!("({} ? {} : {})", args[0], args[1], args[2]));
@@ -385,7 +392,7 @@ fn operation(f: &Frame, node: u32, args: &[String]) -> Result<String, String> {
 }
 
 /// Element `k` of a run of reads of one plane (`fixed` its number when it is a compile-time index).
-fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<String, String> {
+fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<String, Refusal> {
     let at = match fixed {
         Some(n) => format!("static_cast<Int>({})", run.start + run.step * n as i64),
         None => format!(

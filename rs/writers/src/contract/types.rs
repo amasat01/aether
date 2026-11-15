@@ -2,6 +2,21 @@
 //! write its source text. Closed sets are enums, optional parts are `Option`, and no field holds
 //! JSON text or a name from another program. Nothing here knows how a request is recorded.
 
+/// The group of an active set whose request leaves it out.
+pub const DEFAULT_GROUP: i64 = 1;
+/// The first position of a run segment whose request leaves it out.
+pub const DEFAULT_RUN_START: i64 = 0;
+/// The threads of a thread box, and of a team, whose request leaves them out.
+pub const DEFAULT_THREADS: i64 = 1;
+/// The stride of a thread box whose request leaves it out.
+pub const DEFAULT_STRIDE: i64 = 1;
+/// The samples written per row when the request leaves it out.
+pub const DEFAULT_ROWS: i64 = 1;
+/// The warps of a team, and of a build, whose request leaves them out.
+pub const DEFAULT_WARPS: i64 = 1;
+/// The banded-mode row width when the request leaves it out: none.
+pub const DEFAULT_CELLS_ROW: i64 = 0;
+
 /// The version of the typed contract: carried in the JSON as `"v"` and checked when the library is
 /// opened. It moves whenever a field or a member is added, removed or renamed.
 pub const CONTRACT_VERSION: u32 = 1;
@@ -312,8 +327,6 @@ pub struct FusedLane {
     pub name: String,
     /// The node handles the lane writes.
     pub sinks: Vec<u32>,
-    /// The lines written before the lane's body, as finished C++ text.
-    pub prologue: String,
 }
 
 /// What the unit's body is.
@@ -343,9 +356,10 @@ pub struct FormSettings {
 }
 
 /// How a fold is written.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum FoldForm {
     /// Chosen per fold.
+    #[default]
     Auto,
     /// Unrolled.
     Static,
@@ -449,6 +463,9 @@ pub struct SelectWeight {
 pub struct Machine {
     /// The instruction set; none when the build states none, as a device build does.
     pub isa: Option<Isa>,
+    /// The vector instruction set of a host (`neon`, `sse2`, `avx2`, `avx512`); none for a device build and where the build states
+    /// none.
+    pub vector_isa: Option<String>,
     /// Whether the math library gives correctly rounded results for the vector spellings.
     pub exact_libm: bool,
     /// Whether powers go through the routed spelling the arm64 compiler needs.
@@ -468,6 +485,16 @@ pub enum Exports {
     Sizes([u64; 5]),
     /// A finished block of C++ text, written as given.
     Text(String),
+}
+
+/// Where the unit's body comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BodySource {
+    /// The writers write the body from the unit's walk.
+    Walk,
+    /// The caller's own body text, used in place of writing one. Only a replay of a recorded
+    /// body needs it: it goes when the library lowers kernels itself.
+    Given(GivenBody),
 }
 
 /// A body the caller wrote for the unit, which the writers use in place of writing one.
@@ -496,14 +523,8 @@ pub struct Unit {
     pub sinks: Vec<u32>,
     /// The unit's arguments; none for a stage that has no walk of its own.
     pub walk: Option<Walk>,
-    /// Whether the request is a source call (positional arguments, finished export text) and not
-    /// a backend call.
-    pub source_call: bool,
-    /// Whether the caller gave a body in the request.
-    pub body_given: bool,
-    /// Whether the caller supplies the body instead of the writers writing it: a given body, or a
-    /// kernel that renders per target.
-    pub prerendered_body: bool,
+    /// Where the body comes from.
+    pub body: BodySource,
     /// The active set, when the launch runs only listed samples.
     pub active: Option<Active>,
     /// The run segment, when the launch covers one run.
@@ -524,8 +545,6 @@ pub struct Unit {
     pub exports: Exports,
     /// Whether the device text is followed by its table of literals.
     pub literal_table: bool,
-    /// The body the caller supplies, when it supplies one.
-    pub given_body: Option<GivenBody>,
 }
 
 impl Role {
@@ -575,6 +594,36 @@ impl Access {
 }
 
 impl StepOp {
+    /// Every operation.
+    pub const ALL: [StepOp; 21] = [
+        StepOp::Lu,
+        StepOp::LuSolve,
+        StepOp::LuSolveT,
+        StepOp::LuInverse,
+        StepOp::LuDet,
+        StepOp::Chol,
+        StepOp::CholFrom,
+        StepOp::ChoSolve,
+        StepOp::TriLower,
+        StepOp::TriUpperT,
+        StepOp::Eigh,
+        StepOp::EighWarp,
+        StepOp::Qr,
+        StepOp::QrSolve,
+        StepOp::QrGramSolve,
+        StepOp::BlockSum,
+        StepOp::BlockPart,
+        StepOp::OrderedFold,
+        StepOp::ScatterZero,
+        StepOp::ScatterChunks,
+        StepOp::ScatterCells,
+    ];
+
+    /// The operation a step spells with the name, when there is one.
+    pub fn named(name: &str) -> Option<StepOp> {
+        StepOp::ALL.into_iter().find(|op| op.name() == name)
+    }
+
     /// The name of the operation as a step spells it.
     pub fn name(self) -> &'static str {
         match self {

@@ -4,7 +4,7 @@
 //! host can run the trips of
 //! a whole tile of samples side by side.
 use super::cut::{Carry, CutLoop};
-pub use super::model::LaneSplit;
+pub use super::model::{LaneSplit, SampleFree};
 use crate::body::frame::needs::Needs;
 use crate::body::loops::{body_fanout, int, read_head, render_scope, LoopHead};
 use crate::body::Buffer;
@@ -12,13 +12,14 @@ use crate::body::Class;
 use crate::body::{Frame, LoopEmitter, Ty};
 use crate::ir::analysis::{loops_flat, speculative_step};
 use crate::ir::door::{self, RxCtx};
+use crate::refuse::Refusal;
 use crate::spell::ident;
 use std::collections::BTreeSet;
 
 /// The one top-level loop the split admits: a tail break, counted from 0 by 1 with a static or
 /// runtime bound, no inner
 /// loop, tape or per-iteration commit, and no tape or counter anywhere in the kernel.
-pub fn candidate(ctx: *mut RxCtx, walk: u32) -> Result<Option<u32>, String> {
+pub fn candidate(ctx: *mut RxCtx, walk: u32) -> Result<Option<u32>, Refusal> {
     let order = door::walk_order(ctx, walk)?;
     let mut loops = vec![];
     for &h in &order {
@@ -75,7 +76,7 @@ fn open_split_scope(
     f: &mut Frame,
     head: &LoopHead,
     index: &str,
-) -> Result<crate::body::frame::scopes::LoopScope, String> {
+) -> Result<crate::body::frame::scopes::LoopScope, Refusal> {
     let scope = f.open_loop(head.index_h, &head.carries, &head.body)?;
     let base = scope.base;
     f.set_text(base, index.to_string());
@@ -88,7 +89,7 @@ fn open_split_scope(
 
 /// Declares the trip's results: each carry's next value and the tail break's flag; returns the next values' names and the
 /// flag's name.
-fn declare_split_results(f: &mut Frame, head: &LoopHead) -> Result<(Vec<String>, String), String> {
+fn declare_split_results(f: &mut Frame, head: &LoopHead) -> Result<(Vec<String>, String), Refusal> {
     let (pos, exit_cond) = (head.pos, head.exit_cond.unwrap());
     let next_names: Vec<String> = (0..head.names.len())
         .map(|j| f.names.next(pos, j).text)
@@ -105,7 +106,7 @@ fn declare_split_results(f: &mut Frame, head: &LoopHead) -> Result<(Vec<String>,
 
 /// Renders one trip of the split loop into its own text, the carried values read through their
 /// usual names.
-fn emit_split(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), String> {
+fn emit_split(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Refusal> {
     let ctx = f.ctx();
     let head = read_head(f, lp)?;
     let pos = head.pos;
@@ -168,7 +169,7 @@ fn emit_split(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Str
 
 /// Whether a value reads nothing per sample: parameters, sample counts, table lengths and
 /// constants by non-random ops.
-fn sample_free(f: &Frame, root: u32, random: &[String], raw: &str) -> Result<bool, String> {
+fn sample_free(f: &Frame, root: u32, random: &[String], raw: &str) -> Result<bool, Refusal> {
     let (mut stack, mut seen) = (vec![root], vec![]);
     while let Some(h) = stack.pop() {
         if seen.contains(&h) {
@@ -200,7 +201,7 @@ fn sample_free(f: &Frame, root: u32, random: &[String], raw: &str) -> Result<boo
 
 /// `(j, rises)` when the exit condition compares the next value of exactly one scalar real
 /// carry to a sample-free bound.
-fn exit_order(f: &Frame, lp: u32) -> Result<Option<(usize, bool)>, String> {
+fn exit_order(f: &Frame, lp: u32) -> Result<Option<(usize, bool)>, Refusal> {
     let cond = door::field_node_list(f.ctx(), lp, "exit_cond")?.unwrap_or_default()[0];
     if !door::class_is(f.ctx(), cond, "Op")? {
         return Ok(None);
@@ -249,7 +250,7 @@ fn live_values(
     lp: u32,
     cut: &CutLoop,
     head: &BTreeSet<String>,
-) -> Result<Option<Vec<(String, Ty)>>, String> {
+) -> Result<Option<Vec<(String, Ty)>>, Refusal> {
     let carry_count = cut.carries.len();
     let mut live_ins: Vec<(String, Ty)> = vec![];
     for &free in door::operands(f.ctx(), lp)?.iter().skip(carry_count) {
@@ -274,7 +275,7 @@ fn sample_free_lines(
     carry_count: usize,
     live_ins: &[(String, Ty)],
     pre: &Buffer,
-) -> Result<Vec<String>, String> {
+) -> Result<SampleFree, Refusal> {
     let (random, raw) = (
         door::constant_list(f.ctx(), "RANDOM_OPS")?,
         door::constant_list(f.ctx(), "RAW_KIND")?.concat(),
@@ -290,15 +291,15 @@ fn sample_free_lines(
         .map(|l| l.0.clone())
         .filter(|n| free_names.contains(n))
         .collect();
-    Ok(pre
-        .one_line_chain(&sample_free_names)
-        .iter()
-        .map(|d| pre.lines[d.line].trim().to_string())
-        .collect())
+    let chain = pre.one_line_chain(&sample_free_names);
+    Ok(SampleFree {
+        at: chain.iter().map(|d| d.line).collect(),
+        names: chain.iter().map(|d| d.name.text.clone()).collect(),
+    })
 }
 
 /// The operations of the loop's own body nodes.
-fn count_ops(f: &Frame, lp: u32) -> Result<usize, String> {
+fn count_ops(f: &Frame, lp: u32) -> Result<usize, Refusal> {
     let mut op_count = 0;
     for h in door::body_nodes(f.ctx(), lp)? {
         if door::class_is(f.ctx(), h, "Op")? {
@@ -330,10 +331,10 @@ impl SplitEmitter {
 }
 
 impl LoopEmitter for SplitEmitter {
-    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), String> {
+    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), Refusal> {
         emit_split(f, &mut self.cuts, lp)
     }
-    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), String> {
+    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), Refusal> {
         let split = assemble(f, &self.cuts, guard, self.lp)?;
         self.done = split.map(|split| (split, f.recorded_needs()));
         Ok(())
@@ -351,7 +352,7 @@ fn assemble(
     cuts: &[CutLoop],
     guard: Option<String>,
     lp: u32,
-) -> Result<Option<LaneSplit>, String> {
+) -> Result<Option<LaneSplit>, Refusal> {
     let Some(cut) = cuts.first() else {
         return Ok(None);
     };

@@ -3,6 +3,7 @@
 //! when the final binary is linked; the arm ports none of them. Handles are those of the walk's
 //! context.
 use crate::ir::door::{CtxPtr, RxCtx, RX_OK, RX_TRUNC};
+use crate::refuse::{fault, Refusal, RefusalKind};
 use std::ffi::{c_char, c_int, CString};
 
 pub use super::runtime_names;
@@ -34,9 +35,9 @@ pub struct KeyRun {
 }
 
 /// The name a node carries, as plain text.
-fn name_of(ctx: *mut RxCtx, node: u32) -> Result<String, String> {
+fn name_of(ctx: *mut RxCtx, node: u32) -> Result<String, Refusal> {
     let name = crate::ir::door::field_text(ctx, node, "name")?;
-    name.ok_or_else(|| format!("node {node} has no name"))
+    name.ok_or_else(|| fault(format!("node {node} has no name")))
 }
 
 extern "C" {
@@ -199,20 +200,19 @@ extern "C" {
 }
 
 /// The branch-mix plane of the dispatch of that name.
-pub fn mix_name(dispatch_name: &str) -> Result<String, String> {
+pub fn mix_name(dispatch_name: &str) -> Result<String, Refusal> {
     Ok(runtime_names::mix_plane(dispatch_name))
 }
 
 /// The refusal a non-OK status stands for: the reason is the text the context holds.
-fn refusal(ctx: *mut RxCtx, what: &str, st: c_int) -> String {
-    format!(
-        "analysis {what} refused ({st}): {}",
-        crate::ir::door::last_error(ctx)
-    )
+fn refusal(ctx: *mut RxCtx, what: &str, st: c_int) -> Refusal {
+    let mut refused = crate::ir::door::failed(ctx, st);
+    refused.reason = format!("analysis {what} refused ({st}): {}", refused.reason);
+    refused
 }
 
 /// How a slot of this role crosses the launch boundary: "GRefMirror", "ScalarHandle" or "value".
-pub fn mirror_of(role: &str, _dtype: &str, rank: usize) -> Result<String, String> {
+pub fn mirror_of(role: &str, _dtype: &str, rank: usize) -> Result<String, Refusal> {
     runtime_names::mirror_of(role, rank).map(String::from)
 }
 
@@ -230,7 +230,7 @@ fn text(
     ctx: *mut RxCtx,
     what: &str,
     call: impl Fn(*mut c_char, usize, *mut usize) -> c_int,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let mut len = 0usize;
     let st = call(std::ptr::null_mut(), 0, &mut len);
     if st == RX_OK {
@@ -245,11 +245,11 @@ fn text(
         return Err(refusal(ctx, what, st));
     }
     buf.truncate(len);
-    String::from_utf8(buf).map_err(|e| e.to_string())
+    String::from_utf8(buf).map_err(fault)
 }
 
 /// A yes-or-no answer of the analyses, or the refusal.
-fn flag(ctx: *mut RxCtx, what: &str, f: impl Fn(*mut c_int) -> c_int) -> Result<bool, String> {
+fn flag(ctx: *mut RxCtx, what: &str, f: impl Fn(*mut c_int) -> c_int) -> Result<bool, Refusal> {
     let mut out: c_int = 0;
     let st = f(&mut out);
     if st == RX_OK {
@@ -264,7 +264,7 @@ fn list<T: Copy + Default>(
     ctx: *mut RxCtx,
     what: &str,
     f: impl Fn(*mut T, usize, *mut usize) -> c_int,
-) -> Result<Vec<T>, String> {
+) -> Result<Vec<T>, Refusal> {
     let mut n = 0usize;
     let st = f(std::ptr::null_mut(), 0, &mut n);
     if st == RX_OK {
@@ -283,61 +283,61 @@ fn list<T: Copy + Default>(
 }
 
 /// Whether the walk is written in lane form.
-pub fn lane_form_access(ctx: impl Into<CtxPtr>, walk: u32) -> Result<bool, String> {
+pub fn lane_form_access(ctx: impl Into<CtxPtr>, walk: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "lane_form_access", |o| unsafe {
         rw_cpu_lane_form_access(ctx, walk, o)
     })
 }
 /// The top-level loops the host runs interchanged.
-pub fn interchanged_loops(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, String> {
+pub fn interchanged_loops(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     list(ctx, "interchanged_loops", |b, c, n| unsafe {
         rw_cpu_interchanged_loops(ctx, walk, runtime_names::UNROLL_LIMIT, b, c, n)
     })
 }
 /// The whole kernel's nodes and everything inside their loop bodies, in order.
-pub fn kernel_nodes(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, String> {
+pub fn kernel_nodes(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     loops_flat(ctx, &crate::ir::door::walk_order(ctx, walk)?)
 }
 /// Whether the node is a call into the math library.
-pub fn is_library_call(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_library_call(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_library_call", |o| unsafe {
         rw_cost_is_library_call(ctx, node, o)
     })
 }
 /// Whether the loop's step is speculative.
-pub fn speculative_step(ctx: impl Into<CtxPtr>, lp: u32) -> Result<bool, String> {
+pub fn speculative_step(ctx: impl Into<CtxPtr>, lp: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "speculative_step", |o| unsafe {
         rw_loops_speculative_step(ctx, lp, o)
     })
 }
 /// Whether the node's value stays resident.
-pub fn is_resident(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_resident(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_resident", |o| unsafe {
         rw_wide_is_resident(ctx, node, o)
     })
 }
 /// Whether the node is tiled.
-pub fn is_tiled(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_tiled(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_tiled", |o| unsafe {
         rw_wide_is_tiled(ctx, node, o)
     })
 }
 /// Whether the node is a scratch plane.
-pub fn is_scratch(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_scratch(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_scratch", |o| unsafe {
         rw_wide_is_scratch(ctx, node, o)
     })
 }
 /// Whether the node is a prior read.
-pub fn is_prior(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_prior(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_prior", |o| unsafe {
         rw_wide_is_prior(ctx, node, o)
@@ -345,7 +345,7 @@ pub fn is_prior(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
 }
 /// How element k of a rank-1 node is read: "proxy", "input", "parts", "splat", "elementwise" or
 /// "none".
-pub fn element_kind(ctx: impl Into<CtxPtr>, node: u32) -> Result<String, String> {
+pub fn element_kind(ctx: impl Into<CtxPtr>, node: u32) -> Result<String, Refusal> {
     let ctx = ctx.into().raw();
     let mut kind: c_int = 0;
     let st = unsafe { rw_wide_element_kind(ctx, node, &mut kind) };
@@ -357,7 +357,10 @@ pub fn element_kind(ctx: impl Into<CtxPtr>, node: u32) -> Result<String, String>
 }
 /// The width of each plane the placements of the given nodes (loop bodies included) write, by plane
 /// name.
-pub fn plane_widths(ctx: impl Into<CtxPtr>, nodes: &[u32]) -> Result<Vec<(String, usize)>, String> {
+pub fn plane_widths(
+    ctx: impl Into<CtxPtr>,
+    nodes: &[u32],
+) -> Result<Vec<(String, usize)>, Refusal> {
     let ctx = ctx.into().raw();
     let rows: Vec<PlaneRow> = list(ctx, "plane_widths", |b, c, n| unsafe {
         rw_wide_record(ctx, nodes.as_ptr(), nodes.len(), b, c, n)
@@ -374,7 +377,7 @@ pub fn warp_uniform(
     sinks: &[u32],
     warp: Option<i64>,
     nodes: &[u32],
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<bool>, Refusal> {
     let ctx = ctx.into().raw();
     let mut flags = vec![0 as c_int; nodes.len()];
     let run = warp.unwrap_or(0);
@@ -406,9 +409,9 @@ pub fn fold_rolled(
     node: u32,
     fold_min: i64,
     form: &str,
-) -> Result<bool, String> {
+) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
-    let form = CString::new(form).map_err(|e| e.to_string())?;
+    let form = CString::new(form).map_err(fault)?;
     flag(ctx, "fold_rolled", |o| unsafe {
         rw_fold_rolled(ctx, node, &fold_min, form.as_ptr(), o)
     })
@@ -428,7 +431,7 @@ pub struct Gather {
     pub clamped: bool,
 }
 /// The run of reads a vector is, when it is one.
-pub fn gather(ctx: impl Into<CtxPtr>, node: u32) -> Result<Option<Gather>, String> {
+pub fn gather(ctx: impl Into<CtxPtr>, node: u32) -> Result<Option<Gather>, Refusal> {
     let ctx = ctx.into().raw();
     let (mut found, mut clamped, mut plane, mut base, mut start, mut step) =
         (0 as c_int, 0 as c_int, 0u32, 0u32, 0i64, 0i64);
@@ -456,36 +459,36 @@ pub fn gather(ctx: impl Into<CtxPtr>, node: u32) -> Result<Option<Gather>, Strin
     }))
 }
 /// The nodes and everything inside their loop bodies, in order.
-pub fn loops_flat(ctx: impl Into<CtxPtr>, nodes: &[u32]) -> Result<Vec<u32>, String> {
+pub fn loops_flat(ctx: impl Into<CtxPtr>, nodes: &[u32]) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     list(ctx, "loops_flat", |b, c, n| unsafe {
         rw_loops_flat(ctx, nodes.as_ptr(), nodes.len(), b, c, n)
     })
 }
 /// Whether the node is a linear-algebra call.
-pub fn is_linalg(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn is_linalg(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "is_linalg", |o| unsafe {
         rw_linalg_is_linalg(ctx, node, o)
     })
 }
 /// Whether the node's switch is written as a switch.
-pub fn switch_form(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, String> {
+pub fn switch_form(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
     flag(ctx, "switch_form", |o| unsafe {
         rw_dispatch_switch_form(ctx, node, o)
     })
 }
 /// Whether the walk has a parameter plane of that name.
-pub fn param_plane(ctx: impl Into<CtxPtr>, walk: u32, name: &str) -> Result<bool, String> {
+pub fn param_plane(ctx: impl Into<CtxPtr>, walk: u32, name: &str) -> Result<bool, Refusal> {
     let ctx = ctx.into().raw();
-    let n = CString::new(name).map_err(|e| e.to_string())?;
+    let n = CString::new(name).map_err(fault)?;
     flag(ctx, "param_plane", |o| unsafe {
         rw_ir_param_plane(ctx, walk, n.as_ptr(), o)
     })
 }
 /// The companion pairs of the walk: (plane, its correction plane).
-pub fn companions(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, String)>, String> {
+pub fn companions(ctx: impl Into<CtxPtr>, walk: u32) -> Result<Vec<(String, String)>, Refusal> {
     let ctx = ctx.into().raw();
     let sinks: Vec<u32> = list(ctx, "companions", |b, c, n| unsafe {
         rw_ir_companions(ctx, walk, b, c, n)
@@ -506,7 +509,7 @@ pub fn key_run(
     sink: u32,
     run_max: i64,
     block_run: i64,
-) -> Result<Option<(String, u32, bool)>, String> {
+) -> Result<Option<(String, u32, bool)>, Refusal> {
     let ctx = ctx.into().raw();
     let mut run = KeyRun::default();
     let st = unsafe {
@@ -544,17 +547,14 @@ pub fn compensated_target(
     slot: Option<&str>,
     names: &[String],
     sinks: &[u32],
-) -> Result<Option<(String, bool)>, String> {
+) -> Result<Option<(String, bool)>, Refusal> {
     let ctx = ctx.into().raw();
     let (id, comp) = (
-        CString::new("compensated").map_err(|e| e.to_string())?,
-        CString::new(compensation).map_err(|e| e.to_string())?,
+        CString::new("compensated").map_err(fault)?,
+        CString::new(compensation).map_err(fault)?,
     );
-    let slot_c = slot
-        .map(CString::new)
-        .transpose()
-        .map_err(|e| e.to_string())?;
-    let names_c = CString::new(names.join("\n")).map_err(|e| e.to_string())?;
+    let slot_c = slot.map(CString::new).transpose().map_err(fault)?;
+    let names_c = CString::new(names.join("\n")).map_err(fault)?;
     let raw = std::cell::Cell::new(CompensatedTarget {
         found: 0,
         own_column: 0,
@@ -586,7 +586,7 @@ pub fn boxed_sinks(
     axis: usize,
     lanes: usize,
     stride: i64,
-) -> Result<Vec<u32>, String> {
+) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     let mut buf = vec![0u32; sinks.len() * lanes];
     let mut count = 0usize;
@@ -604,7 +604,7 @@ pub fn boxed_sinks(
         )
     };
     if st != RX_OK {
-        return Err(crate::ir::door::last_error(ctx));
+        return Err(crate::ir::door::failed(ctx, st));
     }
     buf.truncate(count);
     Ok(buf)
@@ -617,7 +617,7 @@ pub fn lowered_sinks(
     ctx: impl Into<CtxPtr>,
     sinks: &[u32],
     max_dim: Option<i64>,
-) -> Result<Option<Vec<u32>>, String> {
+) -> Result<Option<Vec<u32>>, Refusal> {
     let ctx = ctx.into().raw();
     let mut buf = vec![0u32; sinks.len()];
     let (mut count, mut changed) = (0usize, 0 as c_int);
@@ -639,10 +639,11 @@ pub fn lowered_sinks(
         )
     };
     if st != RX_OK {
-        return Err(crate::refuse::nib(format!(
-            "least squares ({})",
-            crate::ir::door::last_error(ctx)
-        )));
+        let reason = format!("least squares ({})", crate::ir::door::last_error(ctx));
+        return Err(match crate::ir::door::failed(ctx, st).kind {
+            RefusalKind::NotWritten => crate::refuse::nib(reason),
+            kind => Refusal { kind, reason },
+        });
     }
     buf.truncate(count);
     Ok((changed != 0).then_some(buf))

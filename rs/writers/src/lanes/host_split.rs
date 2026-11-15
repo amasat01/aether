@@ -16,7 +16,7 @@ use crate::contract::types::Unit;
 use crate::ir::door::RxCtx;
 use crate::lanes::cut::Carry;
 use crate::lanes::split::LaneSplit;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 
 /// The share of a cache level a tile's lane arrays may fill.
 const CACHE_SHARE: f64 = 0.5;
@@ -714,7 +714,7 @@ pub fn split_unit(
     walk: u32,
     unit: &Unit,
     request: &SplitRequest,
-) -> Result<Option<SplitUnit>, String> {
+) -> Result<Option<SplitUnit>, Refusal> {
     let SplitRequest {
         name,
         guards,

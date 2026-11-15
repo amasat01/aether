@@ -3,11 +3,11 @@
 use super::{Frame, Out};
 use crate::body::Class;
 use crate::ir::door;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::{self};
 
 /// A leaf: a plane or scalar read from the kernel's arguments, bound whole or as its `[i]` proxy.
-pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (role, name) = (
         text_field(f.ctx(), h, "role")?,
@@ -44,12 +44,13 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
     let proxy = rank > 0
         && !matches!(role.as_str(), "mutable" | "uniform" | "nsamples")
         && super::linalg::leaf_is_proxy(f, p);
+    let in_place = role != "mutable" || super::stores::rtstore::served_in_place(f, &name)?;
     let lazy = proxy
         || rank > 0
             && only_components
             && match role.as_str() {
                 "uniform" | "nsamples" => false,
-                "mutable" => rank == 1,
+                "mutable" => rank == 1 && in_place,
                 _ => numel > f.unit.build.form.lazy_leaf_width as usize || runtime,
             };
     f.set_lazy(p, lazy);
@@ -64,7 +65,7 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, String> {
 }
 
 /// An indexed read of a leaf at another lane or cell, spelled by the leaf's role.
-pub fn at(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let n = &f.node(p);
     let (leaf_p, ops_n, rank) = (f.opp(p)[0], n.ops.len(), n.rank());
     let leaf_h = f.node(leaf_p).h;
@@ -105,7 +106,7 @@ pub fn at(f: &mut Frame, p: usize) -> Result<Out, String> {
 }
 
 /// The extent of a plane.
-pub fn plane_extent(f: &Frame, p: usize) -> Result<Out, String> {
+pub fn plane_extent(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     Ok(Out::Value(
         spell::plane_extent(
@@ -118,7 +119,7 @@ pub fn plane_extent(f: &Frame, p: usize) -> Result<Out, String> {
 
 /// The launch position of the sample: `hawk_t` under an index map of lanes, else the lane's own
 /// index.
-pub fn sample_position(f: &Frame) -> Result<Out, String> {
+pub fn sample_position(f: &Frame) -> Result<Out, Refusal> {
     Ok(Out::Value(
         format!(
             "static_cast<Int>({})",
@@ -133,12 +134,12 @@ pub fn sample_position(f: &Frame) -> Result<Out, String> {
 }
 
 /// The index of the sample.
-pub fn sample_index() -> Result<Out, String> {
+pub fn sample_index() -> Result<Out, Refusal> {
     Ok(Out::Value(spell::SAMPLE_INDEX.to_string(), None))
 }
 
 /// A constant, spelled for its type and rank.
-pub fn constant(f: &Frame, p: usize) -> Result<Out, String> {
+pub fn constant(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let n = &f.node(p);
     Ok(Out::Value(
         spell::constant(&n.ty.dtype, n.rank(), &held_of(&literal_of(f.ctx(), n.h)?))?,
@@ -148,7 +149,7 @@ pub fn constant(f: &Frame, p: usize) -> Result<Out, String> {
 
 /// A select between two values: a conditional expression when both arms may run freely, else the
 /// library's select.
-pub fn select(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn select(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (o1, o2) = (f.node(p).ops[1], f.node(p).ops[2]);
     let host = f.unit.build.blend && evaluates_freely(f, o1, o2)?;
     let args: Vec<String> = f.opp(p).iter().map(|&q| f.text(q).clone()).collect();
@@ -173,7 +174,7 @@ pub fn select(f: &mut Frame, p: usize) -> Result<Out, String> {
 
 /// Whether both arms may run whatever the condition says: no computed-index read, tape, loop or
 /// run-time component index below them.
-fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, String> {
+fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, Refusal> {
     let (mut stack, mut seen) = (vec![a, b], vec![]);
     while let Some(h) = stack.pop() {
         if seen.contains(&h) {
@@ -208,7 +209,7 @@ fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, String> {
 /// How a leaf is read: (op kind or class, operand index) of each reader. A loop reads its carried
 /// initial values itself; what
 /// its body takes from outside is read by the body's own nodes, nested loops included.
-pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u32)>, String> {
+pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u32)>, Refusal> {
     let leaf = f.node(p).h;
     let mut uses = vec![];
     let mut loops: Vec<u32> = vec![];
@@ -266,7 +267,7 @@ pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u3
 }
 
 /// The scalar a node's `literal` field holds (a number, a flag, a tuple of integers or nothing).
-pub(crate) fn literal_of(ctx: *mut door::RxCtx, h: u32) -> Result<door::Scalar, String> {
+pub(crate) fn literal_of(ctx: *mut door::RxCtx, h: u32) -> Result<door::Scalar, Refusal> {
     door::field_scalar(ctx, h, "literal")
 }
 
@@ -283,7 +284,7 @@ fn held_of(scalar: &door::Scalar) -> spell::Held<'_> {
 
 /// The static index a `component` node reads: the integers of its `literal` field. A literal that
 /// is not integers is not in this build.
-pub(crate) fn component_index(ctx: *mut door::RxCtx, h: u32) -> Result<Vec<i64>, String> {
+pub(crate) fn component_index(ctx: *mut door::RxCtx, h: u32) -> Result<Vec<i64>, Refusal> {
     match literal_of(ctx, h)? {
         door::Scalar::Ints(index) => Ok(index),
         door::Scalar::Int(v) => Ok(vec![v]),
@@ -294,6 +295,6 @@ pub(crate) fn component_index(ctx: *mut door::RxCtx, h: u32) -> Result<Vec<i64>,
 /// A node's text field (a kind, role, name, label or the like) without quotes, read through the
 /// typed reader; a field that
 /// holds nothing reads as the empty text.
-pub(crate) fn text_field(ctx: *mut door::RxCtx, h: u32, name: &str) -> Result<String, String> {
+pub(crate) fn text_field(ctx: *mut door::RxCtx, h: u32, name: &str) -> Result<String, Refusal> {
     Ok(door::field_text(ctx, h, name)?.unwrap_or_default())
 }

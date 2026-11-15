@@ -6,6 +6,7 @@
 use crate::body::values::text_field;
 use crate::body::Class;
 use crate::body::{render_pos, Frame};
+use crate::refuse::Refusal;
 use crate::spell::binding_name;
 
 /// What the plan decided: the stores due after a position renders, the positions no longer rendered
@@ -138,7 +139,7 @@ struct Schedule {
 /// static part is stored where it is ready (a plain store before the first accumulate, else an
 /// accumulate over a zero the
 /// prologue wrote), each link where its index and value are.
-pub(crate) fn plan(f: &Frame, read: &[(String, String)]) -> Result<Plan, String> {
+pub(crate) fn plan(f: &Frame, read: &[(String, String)]) -> Result<Plan, Refusal> {
     let ready = ready_times(f);
     let planned = candidates(f, read)?;
     let schedule = schedule(f, &planned, &ready);
@@ -151,7 +152,7 @@ pub(crate) fn plan(f: &Frame, read: &[(String, String)]) -> Result<Plan, String>
 }
 
 /// The sinks that commit per component, in the order of the frame's sinks.
-fn candidates(f: &Frame, read: &[(String, String)]) -> Result<Vec<Candidate>, String> {
+fn candidates(f: &Frame, read: &[(String, String)]) -> Result<Vec<Candidate>, Refusal> {
     let mut planned = vec![];
     for &s in f.sinks() {
         if let Some(candidate) = candidate(f, s, read)? {
@@ -165,10 +166,12 @@ fn candidates(f: &Frame, read: &[(String, String)]) -> Result<Vec<Candidate>, St
 /// assign of a `vec` or `splat`,
 /// its plane read by a leaf, a plane the compensated kind commits whole, or a part or link computed
 /// inside a scope.
-fn candidate(f: &Frame, s: u32, read: &[(String, String)]) -> Result<Option<Candidate>, String> {
+fn candidate(f: &Frame, s: u32, read: &[(String, String)]) -> Result<Option<Candidate>, Refusal> {
     let p = f.at(s)?;
     let n = &f.node(p);
-    if n.class != Class::Assign || n.ops.len() != 1 {
+    // a warp store whose value every lane holds whole commits like an assign
+    let alike = n.class == Class::WarpStore && f.node(f.opp(p)[0]).ty.shape == n.ty.shape;
+    if !(n.class == Class::Assign || alike) || n.ops.len() != 1 {
         return Ok(None);
     }
     let (mut node, mut chain, mut links) = (f.opp(p)[0], vec![f.opp(p)[0]], vec![]);
@@ -313,7 +316,7 @@ fn skipped(f: &Frame, planned: &[Candidate], users: &[usize]) -> Vec<bool> {
 /// The stores due now that `pos` is rendered. A part whose inputs are all there is rendered here
 /// (with what it still needs, in walk
 /// order) rather than at its turn in the walk.
-pub(crate) fn flush(f: &mut Frame, plan: &mut Plan, pos: usize) -> Result<(), String> {
+pub(crate) fn flush(f: &mut Frame, plan: &mut Plan, pos: usize) -> Result<(), Refusal> {
     let mut mine = vec![];
     plan.due.retain(|d| {
         if d.when == pos {

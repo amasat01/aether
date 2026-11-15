@@ -4,20 +4,18 @@
 //! from the stage record.
 use crate::body::frame::needs::{Need, Needs, Rendered};
 #[cfg(feature = "old-contract")]
-use crate::contract::types::{Form, Target};
-use crate::contract::types::{MapBits, Scalar, TeamStage, Unit};
+use crate::contract::types::Form;
+use crate::contract::types::{MapBits, Scalar, Target, TeamStage, Unit};
 #[cfg(feature = "old-contract")]
 use crate::contract::Contract;
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, unknown, Refusal};
 use crate::spell::binding_name;
 
 /// The namespace of the collective calls.
 const TEAM: &str = "aether::linalg::team::";
 /// Virtual lanes one block of an ordered plain sum adds, and the blocks per key.
 const FOLD_LANES: usize = 1024;
-/// The number of groups a team stage's scratch is split into.
-const GROUPS: usize = 64;
 
 /// One collective call of the stage: its operation, sizes and the (role, plane) pairs it works on.
 struct Step {
@@ -48,12 +46,12 @@ impl Step {
         }
     }
     /// The scratch plane the step holds in `role`.
-    fn plane(&self, role: &str) -> Result<&str, String> {
+    fn plane(&self, role: &str) -> Result<&str, Refusal> {
         self.planes
             .iter()
             .find(|p| p.0 == role)
             .map(|p| p.1.as_str())
-            .ok_or_else(|| nib(format!("a team step without plane {role}")))
+            .ok_or_else(|| unknown(format!("a team step without plane {role}")))
     }
     /// Whether the step holds a plane in `role`.
     fn has(&self, role: &str) -> bool {
@@ -86,7 +84,7 @@ fn pointer(name: &str, role: &str, per_lane: i64) -> String {
 }
 
 /// The factor's view over the step's planes, as one expression.
-fn factor_view(step: &Step) -> Result<String, String> {
+fn factor_view(step: &Step) -> Result<String, Refusal> {
     let kind = match step.op.as_str() {
         "lu" | "lu_solve" | "lu_solve_t" | "lu_inverse" | "lu_det" => "lu",
         "chol" | "chol_from" | "cho_solve" | "tri_lower" | "tri_upper_t" => "chol",
@@ -104,7 +102,7 @@ fn factor_view(step: &Step) -> Result<String, String> {
 }
 
 /// The collective call of a factorisation, a solve or a determinant step.
-fn call(step: &Step) -> Result<String, String> {
+fn call(step: &Step) -> Result<String, Refusal> {
     let (n, k, m) = (step.n, step.k, step.m);
     Ok(match step.op.as_str() {
         "qr" => format!("{TEAM}qr<{n}>(hawk_tm, hawk_f, hawk_a, {m});"),
@@ -142,6 +140,29 @@ fn halving_tree(width: usize) -> Vec<String> {
         "        hawk_sh[hawk_i] += hawk_sh[hawk_i + hawk_w];", "    hawk_tm.sync();", "}"])
 }
 
+/// The declaration of a team's scratch of `width` partial sums: in shared memory on the device.
+fn partials_decl(width: usize, device: bool) -> String {
+    let shared = if device { "__shared__ " } else { "" };
+    format!("{shared}Real hawk_sh[{width}];")
+}
+
+/// The groups a team stage's scratch is split into: the width of the step's partials plane, which the plan that made the stage
+/// states. The halving tree needs a power of two.
+fn groups_of(step: &Step, per_lane: &[(String, i64)]) -> Result<usize, Refusal> {
+    let name = step.plane("gp")?;
+    let width = per_lane
+        .iter()
+        .find(|plane| plane.0 == name)
+        .map(|plane| plane.1)
+        .ok_or_else(|| unknown("a team plane without width"))?;
+    match usize::try_from(width) {
+        Ok(groups) if groups.is_power_of_two() => Ok(groups),
+        _ => Err(nib(format!(
+            "a block sum split into {width} groups (a power of two is needed)"
+        ))),
+    }
+}
+
 /// The call of a block sum (no index map): the team of key `hawk_lane` sums that key's rows into
 /// its block, then copies the
 /// block to the output plane when the sum is stored.
@@ -149,7 +170,8 @@ fn block_sum(
     step: &Step,
     per_lane: &[(String, i64)],
     active: Option<&(String, String)>,
-) -> Result<Vec<String>, String> {
+    device: bool,
+) -> Result<Vec<String>, Refusal> {
     let (p, q, per) = (step.n, step.k, step.m.max(1));
     let mut lines = strs(&[
         "const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane);",
@@ -162,7 +184,7 @@ fn block_sum(
     let stride_v = factor_pointers(step, q, &mut lines)?;
     let call_head = format!("{TEAM}blockSum<{p}, {q}>(hawk_tm, ");
     if step.has("gp") && active.is_none() {
-        lines.extend(grouped_store(step)?);
+        lines.extend(grouped_store(step, groups_of(step, per_lane)?, device)?);
         return Ok(lines);
     }
     let first = "hawk_key * hawk_rows";
@@ -184,7 +206,7 @@ fn block_sum(
         .iter()
         .find(|x| x.0 == g)
         .map(|x| x.1)
-        .ok_or_else(|| nib("a team plane without width"))?;
+        .ok_or_else(|| unknown("a team plane without width"))?;
     lines.push(pointer(g, "g", width));
     lines.push(format!("{call_head}hawk_g, hawk_u, hawk_v, {first}, hawk_rows, {p}, {stride_v}, nullptr, 0, 0, {per});"));
     if step.has("out") {
@@ -220,7 +242,7 @@ fn live_row_edges(map: &str, count: &str) -> Vec<String> {
 
 /// The pointers to the factors a block sum reads (`u`, `v`); returns the stride of `v`, zero when
 /// it is the single one.
-fn factor_pointers(step: &Step, q: i64, lines: &mut Vec<String>) -> Result<String, String> {
+fn factor_pointers(step: &Step, q: i64, lines: &mut Vec<String>) -> Result<String, Refusal> {
     if step.has("u") {
         lines.push(format!(
             "const Real* const hawk_u = {}.data();",
@@ -245,12 +267,12 @@ fn factor_pointers(step: &Step, q: i64, lines: &mut Vec<String>) -> Result<Strin
 /// The statements of a block sum whose partial groups are stored: each group's value is read,
 /// folded by the halving tree and
 /// the result written to the output plane.
-fn grouped_store(step: &Step) -> Result<Vec<String>, String> {
+fn grouped_store(step: &Step, groups: usize, device: bool) -> Result<Vec<String>, Refusal> {
     let mut lines = vec![];
-    lines.push(format!("Real hawk_sh[{GROUPS}];"));
-    lines.extend(strs(&[&format!("for (std::size_t hawk_i = static_cast<std::size_t>(hawk_tm.rank); hawk_i < {GROUPS}; hawk_i += static_cast<std::size_t>(hawk_tm.size))"),
-        &format!("    hawk_sh[hawk_i] = {}.data()[hawk_key * {GROUPS} + hawk_i];", scratch(step.plane("gp")?)), "hawk_tm.sync();"]));
-    lines.extend(halving_tree(GROUPS));
+    lines.push(partials_decl(groups, device));
+    lines.extend(strs(&[&format!("for (std::size_t hawk_i = static_cast<std::size_t>(hawk_tm.rank); hawk_i < {groups}; hawk_i += static_cast<std::size_t>(hawk_tm.size))"),
+        &format!("    hawk_sh[hawk_i] = {}.data()[hawk_key * {groups} + hawk_i];", scratch(step.plane("gp")?)), "hawk_tm.sync();"]));
+    lines.extend(halving_tree(groups));
     lines.extend(strs(&[
         &format!(
             "if (hawk_tm.rank == 0) {}.data()[hawk_key] = hawk_sh[0];",
@@ -261,15 +283,39 @@ fn grouped_store(step: &Step) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// The fold of a block part on the host: one thread adds the rows of every virtual lane in order.
+fn host_fold(term: &str, groups: usize) -> Vec<String> {
+    let virtual_lanes = FOLD_LANES * groups;
+    strs(&[&format!("for (std::size_t hawk_t = 0; hawk_t < {FOLD_LANES}; ++hawk_t) hawk_sh[hawk_t] = Real(0);"),
+        &format!("for (std::size_t hawk_b = hawk_grp * {FOLD_LANES}; hawk_b < hawk_rows; hawk_b += {virtual_lanes}) {{"),
+        &format!("    const std::size_t hawk_m = hawk_rows - hawk_b < {FOLD_LANES} ? hawk_rows - hawk_b : {FOLD_LANES};"),
+        "    for (std::size_t hawk_t = 0; hawk_t < hawk_m; ++hawk_t) {", "        const std::size_t hawk_r = hawk_b + hawk_t;",
+        &format!("        hawk_sh[hawk_t] += {term};"), "    }", "}"])
+}
+
+/// The fold of a block part on the device: each thread of the team adds the rows of its own virtual lanes in order.
+fn device_fold(term: &str, groups: usize) -> Vec<String> {
+    let virtual_lanes = FOLD_LANES * groups;
+    strs(&[&format!("for (std::size_t hawk_t = static_cast<std::size_t>(hawk_tm.rank); hawk_t < {FOLD_LANES}; hawk_t += static_cast<std::size_t>(hawk_tm.size)) {{"),
+        "    Real hawk_s = Real(0);",
+        &format!("    for (std::size_t hawk_r = hawk_grp * {FOLD_LANES} + hawk_t; hawk_r < hawk_rows; hawk_r += {virtual_lanes})"),
+        &format!("        hawk_s += {term};"), "    hawk_sh[hawk_t] = hawk_s;", "}"])
+}
+
 /// The first stage of a plain ordered sum: block `hawk_lane` folds its group of virtual lanes by
 /// the halving tree and writes
 /// the group's value to its cell of the partials plane.
-fn block_part(step: &Step, reads: &[String]) -> Result<Vec<String>, String> {
-    let virtual_lanes = FOLD_LANES * GROUPS;
+fn block_part(
+    step: &Step,
+    per_lane: &[(String, i64)],
+    reads: &[String],
+    device: bool,
+) -> Result<Vec<String>, Refusal> {
+    let groups = groups_of(step, per_lane)?;
     let mut lines = strs(&[
-        &format!("const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane) / {GROUPS};"),
-        &format!("const std::size_t hawk_grp = static_cast<std::size_t>(hawk_lane) % {GROUPS};"),
-        &format!("const std::size_t hawk_keys = static_cast<std::size_t>(count) / {GROUPS};"),
+        &format!("const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane) / {groups};"),
+        &format!("const std::size_t hawk_grp = static_cast<std::size_t>(hawk_lane) % {groups};"),
+        &format!("const std::size_t hawk_keys = static_cast<std::size_t>(count) / {groups};"),
         "const std::size_t hawk_rows = static_cast<std::size_t>(nSamples) / hawk_keys;",
         &format!(
             "const Real* const hawk_u = {}.data() + hawk_key * hawk_rows;",
@@ -285,16 +331,17 @@ fn block_part(step: &Step, reads: &[String]) -> Result<Vec<String>, String> {
     } else {
         "hawk_u[hawk_r]"
     };
-    lines.extend(strs(&[&format!("Real hawk_sh[{FOLD_LANES}];"),
-        &format!("for (std::size_t hawk_t = 0; hawk_t < {FOLD_LANES}; ++hawk_t) hawk_sh[hawk_t] = Real(0);"),
-        &format!("for (std::size_t hawk_b = hawk_grp * {FOLD_LANES}; hawk_b < hawk_rows; hawk_b += {virtual_lanes}) {{"),
-        &format!("    const std::size_t hawk_m = hawk_rows - hawk_b < {FOLD_LANES} ? hawk_rows - hawk_b : {FOLD_LANES};"),
-        "    for (std::size_t hawk_t = 0; hawk_t < hawk_m; ++hawk_t) {", "        const std::size_t hawk_r = hawk_b + hawk_t;",
-        &format!("        hawk_sh[hawk_t] += {term};"), "    }", "}", "hawk_tm.sync();"]));
+    lines.push(partials_decl(FOLD_LANES, device));
+    lines.extend(if device {
+        device_fold(term, groups)
+    } else {
+        host_fold(term, groups)
+    });
+    lines.push("hawk_tm.sync();".to_string());
     lines.extend(halving_tree(FOLD_LANES));
     lines.extend(strs(&[
         &format!(
-            "if (hawk_tm.rank == 0) {}.data()[hawk_key * {GROUPS} + hawk_grp] = hawk_sh[0];",
+            "if (hawk_tm.rank == 0) {}.data()[hawk_key * {groups} + hawk_grp] = hawk_sh[0];",
             scratch(step.plane("gp")?)
         ),
         "hawk_tm.sync();",
@@ -304,7 +351,7 @@ fn block_part(step: &Step, reads: &[String]) -> Result<Vec<String>, String> {
 
 /// The call of an ordered fold: the team of key `hawk_lane` adds the key's contributions to each of
 /// the `n` slots in lane order.
-fn ordered_fold(step: &Step) -> Result<Vec<String>, String> {
+fn ordered_fold(step: &Step) -> Result<Vec<String>, Refusal> {
     let n = step.n;
     Ok(strs(&["const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane);",
         "const std::size_t hawk_rows = static_cast<std::size_t>(nSamples) / static_cast<std::size_t>(count);",
@@ -318,9 +365,9 @@ fn ordered_fold(step: &Step) -> Result<Vec<String>, String> {
 }
 
 /// The chunks of an ordered scatter: `min(max_chunks, max(1, nSamples / cells))`.
-fn chunk_count(step: &Step) -> Result<Vec<String>, String> {
+fn chunk_count(step: &Step) -> Result<Vec<String>, Refusal> {
     if step.max_chunks == 0 {
-        return Err(nib("an ordered scatter step without max_chunks"));
+        return Err(unknown("an ordered scatter step without max_chunks"));
     }
     let m = step.max_chunks;
     Ok(strs(&[
@@ -334,7 +381,7 @@ fn chunk_count(step: &Step) -> Result<Vec<String>, String> {
 
 /// An ordered scatter's first stage: block `hawk_lane` zeroes its cell's partial sums; block 0
 /// writes the cell count.
-fn scatter_zero(step: &Step) -> Result<Vec<String>, String> {
+fn scatter_zero(step: &Step) -> Result<Vec<String>, Refusal> {
     let mut lines = chunk_count(step)?;
     lines.extend(strs(&[&format!("Real* const hawk_p = {}.data() + static_cast<std::size_t>(hawk_lane) * hawk_chunks;", scratch(step.plane("part")?)),
         &format!("std::int32_t* const hawk_m = const_cast<std::int32_t*>({}.data());", scratch(step.plane("status")?)),
@@ -345,9 +392,9 @@ fn scatter_zero(step: &Step) -> Result<Vec<String>, String> {
 
 /// An ordered scatter's middle stage: block `hawk_lane` adds the slots of its lane chunk, serially,
 /// into its own partial sums.
-fn scatter_chunks(step: &Step) -> Result<Vec<String>, String> {
+fn scatter_chunks(step: &Step, device: bool) -> Result<Vec<String>, Refusal> {
     let n = step.n;
-    Ok(strs(&["const std::size_t hawk_chunks = static_cast<std::size_t>(count);",
+    let mut lines = strs(&["const std::size_t hawk_chunks = static_cast<std::size_t>(count);",
         "const std::size_t hawk_span = (static_cast<std::size_t>(nSamples) + hawk_chunks - 1) / hawk_chunks;",
         "const std::size_t hawk_lo = static_cast<std::size_t>(hawk_lane) * hawk_span;",
         "const std::size_t hawk_hi = hawk_lo + hawk_span < static_cast<std::size_t>(nSamples) ? hawk_lo + hawk_span : static_cast<std::size_t>(nSamples);",
@@ -355,17 +402,76 @@ fn scatter_chunks(step: &Step) -> Result<Vec<String>, String> {
         &format!("const Real* const hawk_v = {}.data();", scratch(step.plane("v")?)),
         &format!("Real* const hawk_p = {}.data();", scratch(step.plane("part")?)),
         &format!("std::int32_t* const hawk_m = const_cast<std::int32_t*>({}.data());", scratch(step.plane("status")?)),
-        "const std::int64_t hawk_cells = hawk_m[0];", "if (hawk_tm.rank == 0)",
+        "const std::int64_t hawk_cells = hawk_m[0];"]);
+    lines.extend(if device {
+        device_walk(n)
+    } else {
+        serial_walk(n)
+    });
+    Ok(lines)
+}
+
+/// The slots of a chunk added serially by one thread of the team, in order.
+fn serial_walk(n: i64) -> Vec<String> {
+    strs(&["if (hawk_tm.rank == 0)",
         &format!("    for (std::size_t hawk_r = hawk_lo * {n}; hawk_r < hawk_hi * {n}; ++hawk_r) {{"),
         "        const std::int32_t hawk_key = hawk_k[hawk_r];", "        if (hawk_key == -1) continue;",
         "        if (hawk_key >= 0 && hawk_key < hawk_cells)",
         "            hawk_p[static_cast<std::size_t>(hawk_key) * hawk_chunks + static_cast<std::size_t>(hawk_lane)] += hawk_v[hawk_r];",
-        "        else", "            hawk_m[1 + hawk_lane] = 1;", "        hawk_k[hawk_r] = -1;", "    }", "hawk_tm.sync();"]))
+        "        else", "            hawk_m[1 + hawk_lane] = 1;", "        hawk_k[hawk_r] = -1;", "    }", "hawk_tm.sync();"])
+}
+
+/// The slots of a chunk on the device: up to 1024 cells, a warp takes 32 rows at a time into a shared bin, each thread owning the
+/// cells of its residue modulo 32 and adding them in row order, so every cell's sum has the order of the serial walk; a larger
+/// target walks serially.
+fn device_walk(n: i64) -> Vec<String> {
+    let mut lines = strs(&[
+        "__shared__ Real hawk_bin[1024];",
+        "if (hawk_cells <= 1024) {",
+        "    for (std::size_t hawk_j = static_cast<std::size_t>(hawk_tm.rank); hawk_j < static_cast<std::size_t>(hawk_cells); hawk_j += static_cast<std::size_t>(hawk_tm.size)) hawk_bin[hawk_j] = Real(0);",
+        "    hawk_tm.sync();",
+        "    if (hawk_tm.rank < 32) {",
+        "        const unsigned hawk_ln = static_cast<unsigned>(hawk_tm.rank);",
+        &format!("        const std::size_t hawk_end = hawk_hi * {n};"),
+        &format!("        for (std::size_t hawk_b = hawk_lo * {n}; hawk_b < hawk_end; hawk_b += 32) {{"),
+        "            const std::size_t hawk_r = hawk_b + hawk_ln;",
+        "            const bool hawk_in = hawk_r < hawk_end;",
+        "            const std::int32_t hawk_mk = hawk_in ? hawk_k[hawk_r] : -1;",
+        "            const Real hawk_mv = hawk_in ? hawk_v[hawk_r] : Real{};",
+        "            unsigned hawk_mine = 0u, hawk_bad = 0u;",
+        "            for (unsigned hawk_i = 0; hawk_i < 32; ++hawk_i) {",
+        "                const std::int32_t hawk_key = __shfl_sync(0xffffffffu, hawk_mk, hawk_i);",
+        "                if (hawk_key == -1) continue;",
+        "                if (hawk_key >= 0 && hawk_key < hawk_cells) {",
+        "                    if ((static_cast<unsigned>(hawk_key) & 31u) == hawk_ln) hawk_mine |= 1u << hawk_i;",
+        "                } else hawk_bad = 1u;",
+        "            }",
+        "            if (hawk_bad && hawk_ln == 0) hawk_m[1 + hawk_lane] = 1;",
+        "            while (__any_sync(0xffffffffu, hawk_mine != 0u)) {",
+        "                const unsigned hawk_src = hawk_mine != 0u ? static_cast<unsigned>(__ffs(hawk_mine) - 1) : 0u;",
+        "                const Real hawk_x = __shfl_sync(0xffffffffu, hawk_mv, hawk_src);",
+        "                const std::int32_t hawk_key = __shfl_sync(0xffffffffu, hawk_mk, hawk_src);",
+        "                if (hawk_mine != 0u) {",
+        "                    hawk_bin[hawk_key] += hawk_x;",
+        "                    hawk_mine &= hawk_mine - 1u;",
+        "                }",
+        "            }",
+        "            if (hawk_in && hawk_mk != -1) hawk_k[hawk_r] = -1;",
+        "        }",
+        "    }",
+        "    hawk_tm.sync();",
+        "    for (std::size_t hawk_j = static_cast<std::size_t>(hawk_tm.rank); hawk_j < static_cast<std::size_t>(hawk_cells); hawk_j += static_cast<std::size_t>(hawk_tm.size))",
+        "        hawk_p[hawk_j * hawk_chunks + static_cast<std::size_t>(hawk_lane)] += hawk_bin[hawk_j];",
+        "} else {",
+    ]);
+    lines.extend(serial_walk(n));
+    lines.push("}".to_string());
+    lines
 }
 
 /// An ordered scatter's last stage: one thread adds the cell's partial sums in chunk order and the
 /// total to the cell.
-fn scatter_cells(step: &Step) -> Result<Vec<String>, String> {
+fn scatter_cells(step: &Step) -> Result<Vec<String>, Refusal> {
     let mut lines = chunk_count(step)?;
     lines.extend(strs(&[&format!("const Real* const hawk_p = {}.data() + static_cast<std::size_t>(hawk_lane) * hawk_chunks;", scratch(step.plane("part")?)),
         &format!("Real* const hawk_out = {}.data();", scratch(step.plane("out")?)), "if (hawk_tm.rank == 0) {", "    Real hawk_s = Real(0);",
@@ -381,16 +487,17 @@ fn step_lines(
     per_lane: &[(String, i64)],
     reads: &[String],
     active: Option<&(String, String)>,
-) -> Result<Vec<String>, String> {
+    device: bool,
+) -> Result<Vec<String>, Refusal> {
     match step.op.as_str() {
         "ordered_fold" => return ordered_fold(step),
         "scatter_zero" => return scatter_zero(step),
-        "scatter_chunks" => return scatter_chunks(step),
+        "scatter_chunks" => return scatter_chunks(step, device),
         "scatter_cells" => return scatter_cells(step),
         // under an index map the partial blocks are the sums' own: this step writes nothing
         "block_part" if active.is_some() => return Ok(vec![]),
-        "block_part" => return block_part(step, reads),
-        "block_sum" => return block_sum(step, per_lane, active),
+        "block_part" => return block_part(step, per_lane, reads, device),
+        "block_sum" => return block_sum(step, per_lane, active, device),
         "eigh_warp" => return Err(nib("a team step eigh_warp")),
         _ => {}
     }
@@ -400,7 +507,7 @@ fn step_lines(
             .iter()
             .find(|x| &x.0 == name)
             .map(|x| x.1)
-            .ok_or_else(|| nib("a team plane without width"))?;
+            .ok_or_else(|| unknown("a team plane without width"))?;
         lines.push(pointer(name, role, width));
     }
     lines.push(format!("const auto hawk_f = {};", factor_view(step)?));
@@ -418,7 +525,7 @@ pub fn is_team_stage(contract: &Contract) -> bool {
 /// The body of a team stage: the team and lane bindings, then each step in a scope of its own.
 /// Written for a float stage of a
 /// host row without an index map; the banded forms and an index-set build are refused.
-pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Rendered, String> {
+pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Rendered, Refusal> {
     let active = match &stage.active {
         None => None,
         Some(a) => {
@@ -427,7 +534,7 @@ pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Ren
             }
             match &a.map_binding {
                 Some(map) => Some((map.clone(), a.count_binding.clone())),
-                None => return Err(nib("an index map record")),
+                None => return Err(unknown("an index map record")),
             }
         }
     };
@@ -451,9 +558,15 @@ pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Ren
         let step = Step::from_typed(typed);
         lines.push(format!("        {{  // {}, n = {}", step.op, step.n));
         lines.extend(
-            step_lines(&step, &per_lane, &reads, active.as_ref())?
-                .into_iter()
-                .map(|l| format!("            {l}")),
+            step_lines(
+                &step,
+                &per_lane,
+                &reads,
+                active.as_ref(),
+                unit.target == Target::Device,
+            )?
+            .into_iter()
+            .map(|l| format!("            {l}")),
         );
         lines.push("        }".to_string());
     }
@@ -461,4 +574,32 @@ pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Ren
         text: lines.join("\n"),
         needs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! The groups of a block sum are read from the partials plane's width, not baked in.
+    use super::*;
+
+    /// A step that holds a partials plane named `gp`.
+    fn step() -> Step {
+        Step {
+            op: "block_part".into(),
+            n: 1,
+            k: 1,
+            m: 1,
+            max_chunks: 0,
+            planes: vec![("gp".into(), "parts".into())],
+        }
+    }
+
+    #[test]
+    fn the_groups_are_the_width_of_the_partials_plane() {
+        let planes = |width| vec![("parts".to_string(), width)];
+        assert_eq!(groups_of(&step(), &planes(64)), Ok(64));
+        assert_eq!(groups_of(&step(), &planes(32)), Ok(32));
+        let why = groups_of(&step(), &planes(48)).unwrap_err();
+        assert!(why.reason.contains("48 groups"), "{}", why.reason);
+        assert!(groups_of(&step(), &[]).is_err());
+    }
 }

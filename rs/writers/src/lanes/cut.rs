@@ -13,11 +13,11 @@ use crate::body::loops::{
 use crate::body::{Frame, LoopEmitter, Ty};
 use crate::ir::analysis::{is_resident, is_scratch, speculative_step};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::ident;
 
 /// Refuses a loop the cut cannot write: one with a counter, a tape or sinks of its own.
-fn check_cut_loop(f: &Frame, lp: u32, pos: usize) -> Result<(), String> {
+fn check_cut_loop(f: &Frame, lp: u32, pos: usize) -> Result<(), Refusal> {
     let ctx = f.ctx();
     if f.count_names().iter().any(|c| c.0 == pos) || f.tape_names().iter().any(|t| (t.0).0 == pos) {
         return Err(nib("a cut loop with a counter or a tape"));
@@ -33,7 +33,7 @@ fn check_cut_loop(f: &Frame, lp: u32, pos: usize) -> Result<(), String> {
 
 /// Which carried slots live in a plane (no local of their own: the carry is the plane's proxy, written in place); refuses a
 /// planed carry under a head or middle break.
-fn planed_carries(ctx: *mut RxCtx, head: &LoopHead) -> Result<Vec<bool>, String> {
+fn planed_carries(ctx: *mut RxCtx, head: &LoopHead) -> Result<Vec<bool>, Refusal> {
     // a carried slot that lives in a plane has no local of its own: the carry is the plane's proxy, written in place
     let mut planed = vec![];
     for &init in &head.inits {
@@ -70,7 +70,7 @@ fn cut_bounds(
     head: &LoopHead,
     index: &str,
     trip: i64,
-) -> Result<Option<Bounds>, String> {
+) -> Result<Option<Bounds>, Refusal> {
     let (ctx, lp, start, step) = (f.ctx(), head.lp, head.start, head.step);
     let index = index.to_string();
     let mut bounds = None;
@@ -103,7 +103,7 @@ fn open_cut_scope(
     head: &LoopHead,
     t: &CutTrip,
     index: &str,
-) -> Result<crate::body::frame::scopes::LoopScope, String> {
+) -> Result<crate::body::frame::scopes::LoopScope, Refusal> {
     let scope = f.open_loop(head.index_h, &head.carries, &head.body)?;
     let base = scope.base;
     f.set_text(base, index.to_string());
@@ -125,7 +125,7 @@ fn emit_break_trip(
     t: &CutTrip,
     base: usize,
     fan: &[usize],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (pos, body, exits, edge) = (head.pos, &head.body, &head.exits, head);
     let (elems, names, flag, speculative) = (&head.elems, &t.names, &t.flag, t.speculative);
     let pre = exit_part(f, body, exits)?;
@@ -162,7 +162,7 @@ fn emit_selected_rest(
     fan: &[usize],
     pre: &[u32],
     held: &[String],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (pos, body, edge) = (head.pos, &head.body, head);
     let (elems, names, nexts, flag) = (&head.elems, &t.names, &t.nexts, &t.flag);
     render_scope(f, body, base, fan, None, pre)?;
@@ -190,7 +190,7 @@ fn emit_guarded_rest(
     fan: &[usize],
     pre: &[u32],
     held: &[String],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (pos, body, edge) = (head.pos, &head.body, head);
     let (elems, names, nexts, flag) = (&head.elems, &t.names, &t.nexts, &t.flag);
     for j in 0..names.len() {
@@ -204,12 +204,8 @@ fn emit_guarded_rest(
     f.emit(format!("if (!{flag}) {{"));
     f.buf.indent.push_str("    ");
     render_scope(f, body, base, fan, None, pre)?;
-    for j in 0..names.len() {
-        let line = format!(
-            "{} = {};",
-            f.names.write_back(pos, j).text,
-            f.arg(edge.nexts[j])?
-        );
+    for (j, &next) in edge.nexts[..names.len()].iter().enumerate() {
+        let line = format!("{} = {};", f.names.write_back(pos, j).text, f.arg(next)?);
         f.emit(line)
     }
     f.buf.indent.truncate(f.buf.indent.len() - 4);
@@ -233,7 +229,7 @@ fn emit_plain_trip(
     t: &CutTrip,
     base: usize,
     fan: &[usize],
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let (body, edge, form) = (&head.body, head, head.form);
     let (elems, names, nexts, flag, planed) = (&head.elems, &t.names, &t.nexts, &t.flag, &t.planed);
     render_scope(f, body, base, fan, None, &[])?;
@@ -283,7 +279,7 @@ fn push_cut(
     init_texts: Vec<String>,
     facts: CutFacts,
     step_text: Buffer,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let CutFacts {
         mark,
         index,
@@ -302,7 +298,7 @@ fn push_cut(
                 init_reads: f.reads_of(head.inits[j])?,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, Refusal>>()?;
     let exit = if head.exit_cond.is_none() {
         "false".to_string()
     } else {
@@ -332,7 +328,7 @@ fn push_cut(
 
 /// Marks where the segment before the loop ends and renders one trip of it into its own text. A break at the head or the
 /// middle of the body becomes a select: the trip's next values are the values at the break when the condition holds.
-fn emit_cut(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), String> {
+fn emit_cut(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Refusal> {
     let ctx = f.ctx();
     let pos = loop_pos(f, lp)?;
     check_cut_loop(f, lp, pos)?;
@@ -411,10 +407,10 @@ pub(crate) struct CutEmitter {
 }
 
 impl LoopEmitter for CutEmitter {
-    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), String> {
+    fn emit(&mut self, f: &mut Frame, lp: u32) -> Result<(), Refusal> {
         emit_cut(f, &mut self.cuts, lp)
     }
-    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), String> {
+    fn finish(&mut self, f: &Frame, guard: Option<String>) -> Result<(), Refusal> {
         let mut segs = segments_of(f, &self.cuts, guard)?;
         segs.loops = std::mem::take(&mut self.cuts);
         self.done = Some((segs, f.recorded_needs()));
@@ -423,7 +419,11 @@ impl LoopEmitter for CutEmitter {
 }
 
 /// The segments of a finished render.
-fn segments_of(f: &Frame, cuts: &[CutLoop], guard: Option<String>) -> Result<LaneSegments, String> {
+fn segments_of(
+    f: &Frame,
+    cuts: &[CutLoop],
+    guard: Option<String>,
+) -> Result<LaneSegments, Refusal> {
     let (start, end) = if guard.is_some() {
         (1, f.buf.lines.len() - 1)
     } else {

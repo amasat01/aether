@@ -4,17 +4,19 @@ use crate::body::Class;
 use crate::body::{linalg, Frame, Out};
 use crate::ir::door;
 use crate::ir::door::Scalar;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
 /// A component read at a runtime index: `plane[i].at(k)` straight from the view of a read-only
 /// input row, else
 /// `item(k)` of the value held once as an item.
-pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (source, index) = (f.opp(p)[0], f.text(f.opp(p)[1]).clone());
-    if literal_of(f.ctx(), f.node(p).h)? != Scalar::Absent {
-        return Err(nib("a runtime-index read with a literal (warp read)"));
-    }
+    let warp = match literal_of(f.ctx(), f.node(p).h)? {
+        Scalar::Absent => false,
+        Scalar::Text(name) if name == "warp_read" => true,
+        _ => return Err(nib("a runtime-index read with a literal")),
+    };
     // an element-wise source is rewritten first: the read moves to its operands (a rewrite of the
     // walk, not written)
     if f.node(source).class == Class::Op && f.node(source).rank() == 1 {
@@ -48,10 +50,13 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, String> {
             text_field(f.ctx(), f.node(source).h, "role")?,
             text_field(f.ctx(), f.node(source).h, "name")?,
         );
-        if role == "mutable" {
+        if role == "mutable" && !warp {
             return mutable_read(f, p, source, &name, &index);
         }
-        if f.node(source).rank() == 1 && matches!(role.as_str(), "vec_in" | "per_sample") {
+        // a read of one element of a plane the warp holds goes to the view at the run-time index
+        let in_place =
+            f.node(source).rank() == 1 && matches!(role.as_str(), "vec_in" | "per_sample");
+        if warp || in_place {
             return Ok(Out::Value(
                 format!("{}[i].at({index})", binding_name(&role, &name)?),
                 None,
@@ -66,7 +71,7 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, String> {
 /// Whether a mutable plane is stored by the kernel, when every store to it is a plain own-column
 /// store (an error otherwise:
 /// the plane is then not served in place).
-pub(crate) fn plane_is_stored(f: &Frame, name: &str) -> Result<bool, String> {
+pub(crate) fn plane_is_stored(f: &Frame, name: &str) -> Result<bool, Refusal> {
     let mut stored = false;
     for &s in f.sinks() {
         let sink = &f.node(f.at(s)?);
@@ -83,6 +88,12 @@ pub(crate) fn plane_is_stored(f: &Frame, name: &str) -> Result<bool, String> {
     Ok(stored)
 }
 
+/// Whether the plane's runtime-index reads may come straight from it: every store to it is a plain own-column store of the body,
+/// and no loop stores into it.
+pub(crate) fn served_in_place(f: &Frame, name: &str) -> Result<bool, Refusal> {
+    Ok(plane_is_stored(f, name).is_ok() && !stored_inside_a_loop(f, name)?)
+}
+
 /// Names a read of a mutable plane served in place at its own position (`t<pos>`): it happens
 /// before the stores, which the
 /// final phase writes after every value.
@@ -96,7 +107,7 @@ pub(crate) fn named_before_store(f: &mut Frame, p: usize, text: &str) -> Out {
 /// Whether a loop of the kernel (nested ones too) stores into the mutable plane of that name from
 /// its body: such a plane is
 /// not served in place.
-fn stored_inside_a_loop(f: &Frame, name: &str) -> Result<bool, String> {
+fn stored_inside_a_loop(f: &Frame, name: &str) -> Result<bool, Refusal> {
     let loops: Vec<u32> = f
         .nodes()
         .filter(|n| n.class == Class::Loop)
@@ -127,7 +138,7 @@ fn mutable_read(
     source: usize,
     name: &str,
     index: &str,
-) -> Result<Out, String> {
+) -> Result<Out, Refusal> {
     if f.node(source).rank() != 1 {
         return Err(nib("a runtime-index read of a mutable plane"));
     }

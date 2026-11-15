@@ -11,12 +11,9 @@ use std::collections::BTreeSet;
 pub enum Need {
     /// `hawk_abi::store_compensated(`: a store through a correction plane.
     StoreCompensated,
-    /// `hawk_abi::tiled<`: the tiled load helper. No writer emits this call; only a body the
-    /// caller gave can name it, so only
-    /// `Needs::scan` ever sets it.
+    /// `hawk_abi::tiled<`: the tiled load helper, named by the read of a placed plane on a device.
     Tiled,
-    /// `hawk_abi::warp_sum<`: the warp-wide sum helper. No writer emits this call; only a body the
-    /// caller gave can name it, so only `Needs::scan` ever sets it.
+    /// `hawk_abi::warp_sum<`: the warp-wide sum helper, named by the sum over the lanes of a warp.
     WarpSum,
     /// `hawk_abi::spacing(`: the spacing helper.
     Spacing,

@@ -9,6 +9,7 @@ use super::host_text::{
 use crate::body::frame::namer::NameKind;
 use crate::body::Ty;
 use crate::lanes::cut::{Carry, CutLoop, LaneSegments};
+use crate::refuse::{nib, Refusal};
 use crate::spell::carry_type;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -129,12 +130,9 @@ pub(super) fn independent_loop(lines: &mut Vec<String>, head: &str) {
     lines.extend([INDEPENDENT_ITERATIONS.to_string(), head.to_string()]);
 }
 
-/// The refusal for a value that crosses a cut with no recorded type.
-const UNTYPED_CROSSING: &str = "not in this build: a value crossing a cut with no recorded type";
-
 /// The refusal for a lane row whose element has no spelling.
-fn unspelled(_: Declines) -> String {
-    "not in this build: a lane row of an unspelled type".into()
+fn unspelled(_: Declines) -> Refusal {
+    nib("a lane row of an unspelled type")
 }
 
 /// The text of the interchanged loops over `[base, base + count)`, per tile of samples. Refused when a value crossing a cut
@@ -142,7 +140,7 @@ fn unspelled(_: Declines) -> String {
 pub fn loop_interchange_text(
     segs: &LaneSegments,
     needs: &mut crate::body::frame::needs::Needs,
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     // the lane proxies read their rows through the tile-lane helper
     if !segs.proxies.is_empty() {
         needs.record(crate::body::frame::needs::Need::TileLane)
@@ -207,7 +205,7 @@ fn cut_names(segs: &LaneSegments) -> CutNames {
 
 /// The values that cross a cut (a later segment or step reads what an earlier segment declares) and the carries, each in the
 /// lane row it lives in; refused when a crossing value has no recorded type.
-fn crossing_rows(segs: &LaneSegments, names: &CutNames) -> Result<Rows, String> {
+fn crossing_rows(segs: &LaneSegments, names: &CutNames) -> Result<Rows, Refusal> {
     let n = segs.loops.len();
     let type_of = |name: &str| segs.types.iter().find(|t| t.0 == name).map(|t| t.1.clone());
     let mut rows = Rows {
@@ -226,7 +224,7 @@ fn crossing_rows(segs: &LaneSegments, names: &CutNames) -> Result<Rows, String> 
             .filter(|x| later.contains(x) && !names.views.contains_key(*x))
         {
             let Some(ty) = type_of(name) else {
-                return Err(UNTYPED_CROSSING.into());
+                return Err(nib("a value crossing a cut with no recorded type"));
             };
             rows.map.insert(name.clone(), (ty, Origin::Segment(s)));
         }
@@ -240,7 +238,7 @@ fn crossing_rows(segs: &LaneSegments, names: &CutNames) -> Result<Rows, String> 
 }
 
 /// The declarations ahead of the tile loop: the tile bounds, the lane rows, the plane rows and the runtime bounds' arrays.
-fn tile_decls(segs: &LaneSegments, rows: &Rows) -> Result<Vec<String>, String> {
+fn tile_decls(segs: &LaneSegments, rows: &Rows) -> Result<Vec<String>, Refusal> {
     let mut lines: Vec<String> = vec![
         "    constexpr aether::offset_t hawk_tile = hawk_abi::kHostLoopTile;".into(),
         "    const aether::offset_t hawk_lo = static_cast<aether::offset_t>(base);".into(),
@@ -289,7 +287,7 @@ fn segment_loop(
     proxy_lines: &[String],
     s: usize,
     lines: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     segment_prologue(segs, names, proxy_lines, s, lines);
     segment_body(segs, names, rows, s, lines)
 }
@@ -337,7 +335,7 @@ fn segment_body(
     rows: &Rows,
     s: usize,
     lines: &mut Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let n = segs.loops.len();
     let seg_words = &names.seg_words;
     let pad = LANE_PAD;
@@ -393,7 +391,7 @@ fn segment_body(
 }
 
 /// The text of the interchanged loops.
-fn build(segs: &LaneSegments) -> Result<String, String> {
+fn build(segs: &LaneSegments) -> Result<String, Refusal> {
     let n = segs.loops.len();
     let names = cut_names(segs);
     let rows = crossing_rows(segs, &names)?;

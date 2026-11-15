@@ -11,7 +11,7 @@ use crate::body::Class;
 use crate::ir::analysis::switch_form;
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::{self};
 
 /// The positions some path from a sink reaches without following the branches of a switch
@@ -22,7 +22,7 @@ pub fn outside(
     opp: &[Vec<usize>],
     sinks: &[u32],
     walk: u32,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<bool>, Refusal> {
     let mut form = vec![false; nodes.len()];
     for (p, n) in nodes.iter().enumerate() {
         if door::is_a(ctx, n.h, "dispatch")? {
@@ -57,7 +57,7 @@ pub fn outside(
 /// branches of a switch dispatch:
 /// the rest are rendered inside the cases, and the scope skips them. Left alone when the body
 /// holds no switch.
-pub fn scope_outside(f: &mut Frame, base: usize, roots: &[u32]) -> Result<(), String> {
+pub fn scope_outside(f: &mut Frame, base: usize, roots: &[u32]) -> Result<(), Refusal> {
     let mut form = vec![false; f.count()];
     for (s, is_switch) in form.iter_mut().enumerate().skip(base) {
         if door::is_a(f.ctx(), f.node(s).h, "dispatch")? {
@@ -92,7 +92,7 @@ pub fn scope_outside(f: &mut Frame, base: usize, roots: &[u32]) -> Result<(), St
 }
 
 /// Whether the selector is an integer literal in `0..k`, or a select between such values.
-fn in_range(f: &Frame, q: usize, k: usize) -> Result<bool, String> {
+fn in_range(f: &Frame, q: usize, k: usize) -> Result<bool, Refusal> {
     let n = &f.node(q);
     if n.class == Class::Const {
         return Ok(
@@ -112,7 +112,7 @@ fn in_range(f: &Frame, q: usize, k: usize) -> Result<bool, String> {
 }
 
 /// The selector clamped to the branches, bound once; its name.
-fn selector(f: &mut Frame, p: usize, tag: &str) -> Result<String, String> {
+fn selector(f: &mut Frame, p: usize, tag: &str) -> Result<String, Refusal> {
     let (k, kname, sel) = (f.opp(p).len() - 1, f.names.selector(tag).text, f.opp(p)[0]);
     let text = f.text(sel).clone();
     let spelled = if in_range(f, sel, k)? {
@@ -144,7 +144,7 @@ fn tag_of(f: &mut Frame, p: usize) -> String {
 
 /// A dispatch node's text: the switch form is written as a switch statement, the predicated form
 /// as a chain.
-pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     if switch_form(f.ctx(), f.node(p).h)? {
         return Ok(Out::Value(switch(f, &[p])?.remove(0), None));
     }
@@ -167,7 +167,7 @@ pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, String> {
 }
 
 /// The C++ element type of a dtype.
-fn element(dtype: &str) -> Result<&'static str, String> {
+fn element(dtype: &str) -> Result<&'static str, Refusal> {
     match dtype {
         "f64" | "f32" => Ok("Real"),
         "i32" | "i64" => Ok("Int"),
@@ -177,7 +177,7 @@ fn element(dtype: &str) -> Result<&'static str, String> {
 }
 
 /// The literal zero (or a splat of one): a branch the switch need not render.
-fn is_zero(f: &Frame, q: usize) -> Result<bool, String> {
+fn is_zero(f: &Frame, q: usize) -> Result<bool, Refusal> {
     let n = &f.node(q);
     if n.class == Class::Const {
         return Ok(match literal_of(f.ctx(), n.h)? {
@@ -194,7 +194,7 @@ fn is_zero(f: &Frame, q: usize) -> Result<bool, String> {
 }
 
 /// The C++ type of a member's output local and the typed zero its elided branches write.
-fn member_types(f: &Frame, p: usize) -> Result<(String, String), String> {
+fn member_types(f: &Frame, p: usize) -> Result<(String, String), Refusal> {
     let (dtype, shape) = (&f.node(p).ty.dtype, &f.node(p).ty.shape);
     let elem = element(dtype)?;
     if shape.is_empty() {
@@ -213,7 +213,7 @@ fn member_types(f: &Frame, p: usize) -> Result<(String, String), String> {
 
 /// Whether a dispatch node is one of the two kinds the switch form writes: a declared dispatch,
 /// or an automatic one (its kind name is compared as the door states it).
-fn declared_switch(f: &Frame, m: usize) -> Result<bool, String> {
+fn declared_switch(f: &Frame, m: usize) -> Result<bool, Refusal> {
     let h = f.node(m).h;
     if door::is_a(f.ctx(), h, "auto_dispatch")? {
         return Ok(true);
@@ -228,7 +228,7 @@ fn declared_switch(f: &Frame, m: usize) -> Result<bool, String> {
 /// Each case renders every member's branch in one scope; a member with an elided branch writes
 /// its typed zero in
 /// `default:`. Returns each member's output name.
-fn switch(f: &mut Frame, members: &[usize]) -> Result<Vec<String>, String> {
+fn switch(f: &mut Frame, members: &[usize]) -> Result<Vec<String>, Refusal> {
     for &m in members {
         if !declared_switch(f, m)? {
             return Err(nib("a dispatch of a strategy kind"));
@@ -310,7 +310,7 @@ fn case_body(
     members: &[usize],
     elided: &[Vec<bool>],
     j: usize,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     f.in_case(|f| {
         f.buf.indent.push_str("    ");
         let live: Vec<usize> = (0..members.len()).filter(|&i| !elided[i][j]).collect();
@@ -328,7 +328,7 @@ fn case_body(
 
 /// Post-order over the roots' dependencies, leaving out what the enclosing scopes already bind.
 /// A nested switch contributes its selector.
-fn branch_order(f: &Frame, roots: &[usize]) -> Result<Vec<usize>, String> {
+fn branch_order(f: &Frame, roots: &[usize]) -> Result<Vec<usize>, Refusal> {
     let (mut seen, mut order) = (vec![false; f.count()], vec![]);
     let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&r| (r, false)).collect();
     while let Some((n, expanded)) = stack.pop() {
@@ -364,7 +364,7 @@ fn tally_operands(f: &Frame, p: usize, tally: &mut [usize]) {
 }
 
 /// Renders the nodes one branch of a switch case needs, naming those the case reads twice.
-fn render_branch(f: &mut Frame, roots: &[usize]) -> Result<(), String> {
+fn render_branch(f: &mut Frame, roots: &[usize]) -> Result<(), Refusal> {
     let order = branch_order(f, roots)?;
     let mut tally = vec![0usize; f.count()];
     for &p in &order {
@@ -377,7 +377,7 @@ fn render_branch(f: &mut Frame, roots: &[usize]) -> Result<(), String> {
 }
 
 /// A node that may run in a case that does not need it: it cannot fault and has no effect.
-fn speculable(f: &Frame, p: usize) -> Result<bool, String> {
+fn speculable(f: &Frame, p: usize) -> Result<bool, Refusal> {
     let n = &f.node(p);
     if n.class == Class::Loop {
         return Ok(false);
@@ -414,7 +414,7 @@ fn speculable(f: &Frame, p: usize) -> Result<bool, String> {
 /// Renders above the switch every node all cases reach, or with three or more cases all but
 /// one, when it is safe to run anywhere.
 /// A case with nothing to render makes any hoist speculative: then nothing is hoisted.
-fn hoist_common(f: &mut Frame, case_roots: &[Vec<usize>]) -> Result<(), String> {
+fn hoist_common(f: &mut Frame, case_roots: &[Vec<usize>]) -> Result<(), Refusal> {
     if case_roots.len() < 2 || case_roots.iter().any(|r| r.is_empty()) {
         return Ok(());
     }
@@ -474,7 +474,7 @@ fn hoist_common(f: &mut Frame, case_roots: &[Vec<usize>]) -> Result<(), String> 
 }
 
 /// Renders the nodes into the open scope, naming one the tally says is read twice.
-fn render_nodes(f: &mut Frame, order: &[usize], tally: &[usize]) -> Result<(), String> {
+fn render_nodes(f: &mut Frame, order: &[usize], tally: &[usize]) -> Result<(), Refusal> {
     for &p in order {
         let class = f.node(p).class.clone();
         if matches!(
@@ -512,7 +512,7 @@ struct SelectorGroups {
 /// The group of switch dispatches, in walk order, that position `p` renders with (the greedy
 /// grouping of dispatches
 /// sharing a selector and branch count, none reading a member), or none when it renders alone.
-pub fn group_of(f: &Frame, p: usize) -> Result<Vec<usize>, String> {
+pub fn group_of(f: &Frame, p: usize) -> Result<Vec<usize>, Refusal> {
     if !door::is_a(f.ctx(), f.node(p).h, "dispatch")?
         || !f.is_outside(p)
         || f.is_slot(f.node(p).h)
@@ -577,7 +577,7 @@ fn closure(f: &Frame, root: usize) -> Vec<bool> {
 /// A fused group at its first member: what a later member's branches read that the walk has not
 /// reached is rendered
 /// first, then one switch for all, then each member is bound to its output.
-pub fn emit_group(f: &mut Frame, plan: &mut Plan, group: &[usize]) -> Result<(), String> {
+pub fn emit_group(f: &mut Frame, plan: &mut Plan, group: &[usize]) -> Result<(), Refusal> {
     let (mut seen, mut stack, mut need) = (vec![false; f.count()], vec![], vec![]);
     for &m in group {
         stack.extend(f.opp(m)[1..].iter())
@@ -610,7 +610,7 @@ pub fn emit_group(f: &mut Frame, plan: &mut Plan, group: &[usize]) -> Result<(),
 /// The plane an `auto` dispatch counts the branch it picks into (`lut_dispatch<n>_mix`, n the
 /// dispatch's place among the walk's
 /// dispatches, those inside loop bodies last), or none for a declared strategy.
-fn mix_plane(f: &Frame, p: usize) -> Result<Option<String>, String> {
+fn mix_plane(f: &Frame, p: usize) -> Result<Option<String>, Refusal> {
     if !door::is_a(f.ctx(), f.node(p).h, "auto_dispatch")? {
         return Ok(None);
     }

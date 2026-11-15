@@ -6,10 +6,9 @@ use crate::body::frame::needs::{Needs, Rendered};
 use crate::body::render_body_over_with_needs;
 use crate::contract::types::{Form, Unit};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 
-/// The body of a fused group: per lane, the open comment, the lane's prologue (if any) one level
-/// in, the lane's body rendered
+/// The body of a fused group: per lane, the open comment, the lane's body rendered
 /// over its own sinks and walk, and the close comment. A lane name given twice is refused, as the
 /// old composer does.
 pub fn fused_body(
@@ -17,7 +16,7 @@ pub fn fused_body(
     walk: u32,
     unit: &Unit,
     indent: &str,
-) -> Result<Rendered, String> {
+) -> Result<Rendered, Refusal> {
     let Form::Fused(lanes) = &unit.form else {
         return Err(nib("a fused group without lanes"));
     };
@@ -37,9 +36,6 @@ pub fn fused_body(
         let lane_walk = door::canonical_over(ctx, sinks, walk)?;
         let inner = format!("{indent}    ");
         chunks.push(format!("{indent}{{  // lane {name}"));
-        for line in lane.prologue.lines() {
-            chunks.push(format!("{inner}{line}"))
-        }
         let lane_body = render_body_over_with_needs(ctx, lane_walk, unit, &inner, sinks)?;
         needs.merge(&lane_body.needs);
         chunks.push(lane_body.text);

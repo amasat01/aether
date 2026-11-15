@@ -3,12 +3,12 @@ use super::{linalg, Frame, Out};
 use crate::body::frame::needs::Need;
 use crate::body::values::text_field;
 use crate::body::Class;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
 /// A team node met in the walk: a read renders its value here; a store or copy is a sink, written
 /// with the other sinks.
-pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn stmt(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     if f.node(p).class == Class::TeamRead {
         read(f, p)
     } else {
@@ -25,7 +25,7 @@ fn slice_base(index: &str, size: usize) -> String {
 /// A vector or matrix a team stage left in the lane's own slice of its scratch plane: one loop
 /// ahead of the line that uses
 /// it copies it row-major into a fresh item, whose name is the value.
-fn read(f: &mut Frame, p: usize) -> Result<Out, String> {
+fn read(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (plane_p, index_p) = (f.opp(p)[0], f.opp(p)[1]);
     let plane = binding_name(
         &text_field(f.ctx(), f.node(plane_p).h, "role")?,
@@ -61,7 +61,7 @@ fn element(held: &str, shape: &[usize]) -> String {
 /// A store of a value into the lane's own slice of a team stage's scratch plane. A scalar is one
 /// assignment; a vector or
 /// matrix is one loop over its elements, or (for a copy) a loop its team's threads share.
-pub fn store(f: &mut Frame, p: usize) -> Result<(), String> {
+pub fn store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let (value_p, index_p) = (f.opp(p)[0], f.opp(p)[1]);
     let h = f.node(p).h;
     let target = binding_name(

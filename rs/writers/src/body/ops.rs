@@ -5,7 +5,7 @@ use crate::body::values::{component_index, literal_of, text_field};
 use crate::body::Class;
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::{self};
 
 /// The text of the operation at position `p`: a statement bound ahead of the line (`Out::Bound`) or
@@ -14,12 +14,25 @@ use crate::spell::{self};
 /// value placed in its plane,
 /// a raw block, a store), scalar spellings, and tensor spellings (library calls, rays, expression
 /// methods).
-pub fn op(f: &mut Frame, p: usize) -> Result<Out, String> {
+pub fn op(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let kind = text_field(f.ctx(), h, "kind")?;
     if is_absorbed(f, p)? {
         f.set_text(p, String::new());
         return Ok(Out::Bound);
+    }
+    if kind == "warp_sum" {
+        f.need(crate::body::frame::needs::Need::WarpSum);
+        let value = f.text(f.opp(p)[0]).clone();
+        let partial = if f.node(f.opp(p)[0]).rank() > 0 {
+            format!("{value}.sum()")
+        } else {
+            value
+        };
+        return Ok(Out::Value(
+            format!("hawk_abi::warp_sum<Real>(static_cast<Real>({partial}))"),
+            None,
+        ));
     }
     if let Some(out) = rolled_fold(f, p, &kind)? {
         return Ok(out);
@@ -51,7 +64,7 @@ pub fn op(f: &mut Frame, p: usize) -> Result<Out, String> {
 
 /// A product or a vector reduction past the fold threshold, spelled as its `aether::rt` twin; none
 /// for any other operation.
-fn rolled_fold(f: &mut Frame, p: usize, kind: &str) -> Result<Option<Out>, String> {
+fn rolled_fold(f: &mut Frame, p: usize, kind: &str) -> Result<Option<Out>, Refusal> {
     let h = f.node(p).h;
     let shape = |slot: usize| f.node(f.opp(p)[slot]).ty.shape.clone();
     let (fold, size) = match kind {
@@ -83,20 +96,17 @@ fn whole_value(
     p: usize,
     kind: &str,
     args: &[String],
-) -> Result<Option<Out>, String> {
+) -> Result<Option<Out>, Refusal> {
     // a value placed in its plane: the host text has no planes, so the value is its own text and is
     // never named
     if kind == "resident" && f.placed {
         return super::placed::resident(f, p).map(Some);
     }
     if kind == "resident" {
-        return if f.unit.build.blend {
-            f.record_read(f.opp(p)[0]);
-            f.set_text(p, args[0].clone());
-            Ok(Some(Out::Bound))
-        } else {
-            Err(nib("a value placed in its plane (device text)"))
-        };
+        // not placed (a device text, or a host text without lane planes): the value is its own text
+        f.record_read(f.opp(p)[0]);
+        f.set_text(p, args[0].clone());
+        return Ok(Some(Out::Bound));
     }
     if kind == "sum" && f.node(f.opp(p)[0]).rank() == 2 {
         return matrix_sum(f, p).map(Some);
@@ -124,7 +134,7 @@ fn scalar_text(
     kind: &str,
     args: &[String],
     ranks: &[usize],
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, Refusal> {
     let rank = f.node(p).rank();
     let dtype = f.node(p).ty.dtype.clone();
     if kind == "clamp_index" && rank == 0 {
@@ -191,7 +201,7 @@ fn tensor_value(
     kind: &str,
     args: &[String],
     ranks: &[usize],
-) -> Result<Out, String> {
+) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     if linalg::is_factor_kind(kind) {
         return linalg::op(f, p, kind);
@@ -245,7 +255,7 @@ fn spell_tensor(
     kind: &str,
     args: &[String],
     ranks: &[usize],
-) -> Result<Out, String> {
+) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (dtype, shape) = (f.node(p).ty.dtype.clone(), f.node(p).ty.shape.clone());
     let component = if kind == "component" {
@@ -307,8 +317,8 @@ pub fn clamp_spans(
     ctx: *mut RxCtx,
     nodes: &[Node],
     opp: &[Vec<usize>],
-) -> Result<Vec<Option<Span>>, String> {
-    let int = |q: usize| -> Result<Option<i64>, String> {
+) -> Result<Vec<Option<Span>>, Refusal> {
+    let int = |q: usize| -> Result<Option<i64>, Refusal> {
         if nodes[q].class != Class::Const {
             return Ok(None);
         }
@@ -403,7 +413,7 @@ fn expression_method(kind: &str, args: &[String], ranks: &[usize]) -> Option<Str
 /// A product past the fold threshold, as its `aether::rt` twin written into a fresh item ahead of
 /// the line that uses it.
 /// A transposed operand is read through its own operand, so the transposed value is never built.
-fn rolled_product(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
+fn rolled_product(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
     let out = linalg::fresh_item(f, p)?;
     let (left, right) = (
         product_operand(f, f.opp(p)[0])?,
@@ -422,7 +432,7 @@ fn rolled_product(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
 
 /// A fold over a vector past the threshold, as its `aether::rt` twin reading its operands per
 /// sample.
-fn rolled_reduction(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
+fn rolled_reduction(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
     let mut operands = vec![];
     for k in 0..f.opp(p).len() {
         let q = f.opp(p)[k];
@@ -438,7 +448,7 @@ fn rolled_reduction(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> 
 
 /// The full reduction of a matrix: the Frobenius inner product with a matrix of ones, which is held
 /// once ahead of the line.
-fn matrix_sum(f: &mut Frame, p: usize) -> Result<Out, String> {
+fn matrix_sum(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let q = f.opp(p)[0];
     let ty = f.node(q).ty.clone();
     let extents = ty
@@ -456,7 +466,7 @@ fn matrix_sum(f: &mut Frame, p: usize) -> Result<Out, String> {
 
 /// An operand of a rolled product as a per-sample operand: a transpose is `aether::rt::transposed`
 /// of its operand.
-fn product_operand(f: &mut Frame, q: usize) -> Result<String, String> {
+fn product_operand(f: &mut Frame, q: usize) -> Result<String, Refusal> {
     if f.node(q).class == Class::Op && text_field(f.ctx(), f.node(q).h, "kind")? == "transpose" {
         let inner = product_operand(f, f.opp(q)[0])?;
         f.need(Need::Rt);
@@ -468,7 +478,7 @@ fn product_operand(f: &mut Frame, q: usize) -> Result<String, String> {
 
 /// A matrix built from more entries than the fold threshold: a fresh item its entries are stored
 /// into, one statement each.
-fn assembled(f: &mut Frame, p: usize) -> Result<Out, String> {
+fn assembled(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let out = linalg::fresh_item(f, p)?;
     let columns = f.node(p).ty.shape[1];
     for (k, &entry) in f.opp(p).clone().iter().enumerate() {
@@ -520,7 +530,7 @@ pub(super) fn is_rolled_product(f: &Frame, p: usize) -> bool {
 /// a rolled product (which
 /// reads through it), or the identity matrix a solve replaces by an inverse. No statement renders
 /// such a value.
-pub(super) fn is_absorbed(f: &Frame, p: usize) -> Result<bool, String> {
+pub(super) fn is_absorbed(f: &Frame, p: usize) -> Result<bool, Refusal> {
     if f.node(p).class != Class::Op || f.users(p).is_empty() {
         return Ok(false);
     }
@@ -547,7 +557,7 @@ fn ray_call(
     kind: &str,
     args: &[String],
     ranks: &[usize],
-) -> Result<String, String> {
+) -> Result<String, Refusal> {
     let function = match kind {
         "ray_tri" => "rayTriangle",
         "ray_aabb" => "rayAabb",
@@ -585,7 +595,7 @@ fn ray_call(
 /// first block that has operands declares them in the kernel's own scope, a later one inside its
 /// own lambda so two blocks never
 /// redefine the names.
-fn raw_block(f: &mut Frame, p: usize, args: &[String]) -> Result<Out, String> {
+fn raw_block(f: &mut Frame, p: usize, args: &[String]) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let language = text_field(f.ctx(), h, "language")?;
     if language != "aether" {

@@ -4,14 +4,18 @@
 //! lanes together.
 use crate::contract::types::Build;
 use crate::ir::door::{self, RxCtx};
+use crate::refuse::{bad, Refusal};
 use crate::spell::binding_name;
 
 /// The narrowest vector held sliced for scalars of `dtype` on the device of the build: the card's
 /// default. A card row of the
 /// dtype (chosen by the nearest device features) or a forced override would change it, and neither
 /// is read here.
-fn slice_min(build: &Build, dtype: &str) -> Result<i64, String> {
-    let card = build.wide_card.as_ref().ok_or("spec: no wide card")?;
+fn slice_min(build: &Build, dtype: &str) -> Result<i64, Refusal> {
+    let card = build
+        .wide_card
+        .as_ref()
+        .ok_or_else(|| bad("spec: no wide card"))?;
     let scalar = match dtype {
         "f32" => "float32",
         "f64" => "float64",
@@ -22,8 +26,7 @@ fn slice_min(build: &Build, dtype: &str) -> Result<i64, String> {
             "staged rows over a card row or a forced wide setting",
         ));
     }
-    card.slice_min
-        .ok_or_else(|| "spec: no SLICE_MIN".to_string())
+    card.slice_min.ok_or_else(|| bad("spec: no SLICE_MIN"))
 }
 
 /// The `(opened, closed)` frame of a block that serves `rows` lanes, one warp each, around the
@@ -33,7 +36,7 @@ pub fn frame(
     sinks: &[u32],
     rows: i64,
     build: &Build,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     let mut stages: Vec<(String, usize)> = vec![];
     for &sink in sinks {
         if !door::is_a(ctx, sink, "warp_store")? {

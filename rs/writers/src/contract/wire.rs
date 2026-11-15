@@ -4,7 +4,7 @@
 //! not know are refused by name.
 use super::types::*;
 use super::Json;
-use crate::refuse::nib;
+use crate::refuse::{unknown, Refusal};
 
 /// An object's members in order, as the writer builds them.
 type Obj = Vec<(String, Json)>;
@@ -15,13 +15,13 @@ trait Wire: Sized {
     /// The value as JSON.
     fn write(&self) -> Json;
     /// The value from JSON; a wrong shape is refused naming the key.
-    fn read(j: &Json, key: &str) -> Result<Self, String>;
+    fn read(j: &Json, key: &str) -> Result<Self, Refusal>;
     /// Adds the value to an object being written under the key.
     fn put(&self, o: &mut Obj, key: &str) {
         o.push((key.to_string(), self.write()))
     }
     /// Reads the value of a key of an object; a required key that is missing is refused.
-    fn get(f: &mut Fields, key: &'static str) -> Result<Self, String> {
+    fn get(f: &mut Fields, key: &'static str) -> Result<Self, Refusal> {
         Self::read(f.req(key)?, key)
     }
 }
@@ -33,10 +33,10 @@ macro_rules! members {
             fn write(&self) -> Json {
                 Json::Str(match self { $($ty::$member => stringify!($member)),* }.to_string())
             }
-            fn read(j: &Json, key: &str) -> Result<$ty, String> {
+            fn read(j: &Json, key: &str) -> Result<$ty, Refusal> {
                 match j.str().ok_or_else(|| wrong(key, "not a name"))? {
                     $(stringify!($member) => Ok($ty::$member),)*
-                    other => Err(nib(format!("member {other} of {key}"))),
+                    other => Err(unknown(format!("member {other} of {key}"))),
                 }
             }
         }
@@ -53,7 +53,7 @@ macro_rules! record {
                 $(Wire::put(&self.$field, o, stringify!($field));)*
             }
             /// Reads each field from the object, in the order stated.
-            fn get_fields(f: &mut Fields) -> Result<$ty, String> {
+            fn get_fields(f: &mut Fields) -> Result<$ty, Refusal> {
                 Ok($ty { $($field: Wire::get(f, stringify!($field))?,)* })
             }
         }
@@ -63,7 +63,7 @@ macro_rules! record {
                 self.put_fields(&mut o);
                 Json::Obj(o)
             }
-            fn read(j: &Json, _key: &str) -> Result<$ty, String> {
+            fn read(j: &Json, _key: &str) -> Result<$ty, Refusal> {
                 let mut f = fields(j, $scope)?;
                 let value = $ty::get_fields(&mut f)?;
                 f.done()?;
@@ -86,7 +86,7 @@ impl Wire for i64 {
     fn write(&self) -> Json {
         num(self)
     }
-    fn read(j: &Json, key: &str) -> Result<i64, String> {
+    fn read(j: &Json, key: &str) -> Result<i64, Refusal> {
         j.int().ok_or_else(|| wrong(key, "not an integer"))
     }
 }
@@ -95,7 +95,7 @@ impl Wire for u32 {
     fn write(&self) -> Json {
         num(self)
     }
-    fn read(j: &Json, key: &str) -> Result<u32, String> {
+    fn read(j: &Json, key: &str) -> Result<u32, Refusal> {
         j.int()
             .and_then(|n| u32::try_from(n).ok())
             .ok_or_else(|| wrong(key, "not a node handle"))
@@ -105,7 +105,7 @@ impl Wire for bool {
     fn write(&self) -> Json {
         Json::Bool(*self)
     }
-    fn read(j: &Json, key: &str) -> Result<bool, String> {
+    fn read(j: &Json, key: &str) -> Result<bool, Refusal> {
         match j {
             Json::Bool(b) => Ok(*b),
             _ => Err(wrong(key, "not a flag")),
@@ -116,7 +116,7 @@ impl Wire for String {
     fn write(&self) -> Json {
         Json::Str(self.clone())
     }
-    fn read(j: &Json, key: &str) -> Result<String, String> {
+    fn read(j: &Json, key: &str) -> Result<String, Refusal> {
         j.str()
             .map(String::from)
             .ok_or_else(|| wrong(key, "not text"))
@@ -126,7 +126,7 @@ impl<T: Wire> Wire for Vec<T> {
     fn write(&self) -> Json {
         Json::Arr(self.iter().map(T::write).collect())
     }
-    fn read(j: &Json, key: &str) -> Result<Vec<T>, String> {
+    fn read(j: &Json, key: &str) -> Result<Vec<T>, Refusal> {
         j.arr().iter().map(|item| T::read(item, key)).collect()
     }
 }
@@ -135,7 +135,7 @@ impl<A: Wire, B: Wire> Wire for (A, B) {
     fn write(&self) -> Json {
         Json::Arr(vec![self.0.write(), self.1.write()])
     }
-    fn read(j: &Json, key: &str) -> Result<(A, B), String> {
+    fn read(j: &Json, key: &str) -> Result<(A, B), Refusal> {
         match j.arr() {
             [a, b] => Ok((A::read(a, key)?, B::read(b, key)?)),
             _ => Err(wrong(key, "not a pair")),
@@ -147,7 +147,7 @@ impl<T: Wire> Wire for Option<T> {
     fn write(&self) -> Json {
         self.as_ref().map_or(Json::Null, T::write)
     }
-    fn read(j: &Json, key: &str) -> Result<Option<T>, String> {
+    fn read(j: &Json, key: &str) -> Result<Option<T>, Refusal> {
         T::read(j, key).map(Some)
     }
     fn put(&self, o: &mut Obj, key: &str) {
@@ -155,7 +155,7 @@ impl<T: Wire> Wire for Option<T> {
             value.put(o, key)
         }
     }
-    fn get(f: &mut Fields, key: &'static str) -> Result<Option<T>, String> {
+    fn get(f: &mut Fields, key: &'static str) -> Result<Option<T>, Refusal> {
         f.opt(key).map(|j| T::read(j, key)).transpose()
     }
 }
@@ -185,7 +185,7 @@ record!(Active, "active", [map_binding, count_binding, group, map_bits, lane_set
 record!(Step, "step", [op, n, k, m, max_chunks, planes]);
 #[rustfmt::skip]
 record!(TeamStage, "team stage", [grid, planes, reads, steps, active]);
-record!(FusedLane, "fused lane", [name, sinks, prologue]);
+record!(FusedLane, "fused lane", [name, sinks]);
 #[rustfmt::skip]
 record!(FormSettings, "form settings", [lazy_leaf_width, rolled_fold_min, lean_width,
     uniform_run]);
@@ -198,16 +198,16 @@ record!(Build, "build", [form, fold_form, lanes, linalg_max_dim, cells_row, blen
     launch_bounds, fold_k, fold_limits, wide_card]);
 record!(Caches, "caches", [l1d_bytes, l2_bytes, source]);
 #[rustfmt::skip]
-record!(Machine, "machine", [isa, exact_libm, routed_pow, caches, select_weight]);
+#[rustfmt::skip]
+record!(Machine, "machine", [isa, vector_isa, exact_libm, routed_pow, caches, select_weight]);
 record!(Segment, "segment", [offsets_binding, j]);
 record!(ThreadBox, "thread box", [axis, t, stride]);
 record!(OneStep, "one step", [sinks, walk]);
 record!(TeamShape, "team", [threads, warps]);
 record!(GivenBody, "given body", [text, draws_random]);
 #[rustfmt::skip]
-record!(Unit, "unit", [name, target, scalar, kind, form, sinks, walk, source_call, body_given,
-    prerendered_body, active, segment, thread_box, one_step, rows, team, build, machine, exports,
-    literal_table, given_body]);
+record!(Unit, "unit", [name, target, scalar, kind, form, sinks, walk, body, active, segment,
+    thread_box, one_step, rows, team, build, machine, exports, literal_table]);
 
 // The shapes below are irregular, so each has a short hand-written pair: a data member is a
 // one-member object `{"Name": payload}` and a member without data is its plain name.
@@ -220,13 +220,13 @@ impl Wire for Guard {
             Guard::Masks(masks) => tag("Masks", masks.write()),
         }
     }
-    fn read(j: &Json, _key: &str) -> Result<Guard, String> {
+    fn read(j: &Json, _key: &str) -> Result<Guard, Refusal> {
         match j {
             Json::Str(s) if s == "Default" => Ok(Guard::Default),
             Json::Str(s) if s == "DataOnly" => Ok(Guard::DataOnly),
             other => match tagged(other, "guard")? {
                 ("Masks", masks) => Ok(Guard::Masks(Wire::read(masks, "masks")?)),
-                (name, _) => Err(nib(format!("member {name} of guard"))),
+                (name, _) => Err(unknown(format!("member {name} of guard"))),
             },
         }
     }
@@ -249,7 +249,7 @@ impl Wire for SinkPolicy {
             }
         }
     }
-    fn read(j: &Json, _key: &str) -> Result<SinkPolicy, String> {
+    fn read(j: &Json, _key: &str) -> Result<SinkPolicy, Refusal> {
         match j {
             Json::Str(s) if s == "Plain" => Ok(SinkPolicy::Plain),
             other => match tagged(other, "sink")? {
@@ -263,7 +263,7 @@ impl Wire for SinkPolicy {
                     g.done()?;
                     Ok(policy)
                 }
-                (name, _) => Err(nib(format!("member {name} of sink"))),
+                (name, _) => Err(unknown(format!("member {name} of sink"))),
             },
         }
     }
@@ -278,14 +278,32 @@ impl Wire for Form {
             Form::TeamStage(stage) => tag("TeamStage", stage.write()),
         }
     }
-    fn read(j: &Json, _key: &str) -> Result<Form, String> {
+    fn read(j: &Json, _key: &str) -> Result<Form, Refusal> {
         match j {
             Json::Str(s) if s == "Plain" => Ok(Form::Plain),
             Json::Str(s) if s == "WarpStage" => Ok(Form::WarpStage),
             other => match tagged(other, "form")? {
                 ("TeamStage", body) => Ok(Form::TeamStage(Wire::read(body, "form")?)),
                 ("Fused", lanes) => Ok(Form::Fused(Wire::read(lanes, "form")?)),
-                (name, _) => Err(nib(format!("member {name} of form"))),
+                (name, _) => Err(unknown(format!("member {name} of form"))),
+            },
+        }
+    }
+}
+
+impl Wire for BodySource {
+    fn write(&self) -> Json {
+        match self {
+            BodySource::Walk => Json::Str("Walk".into()),
+            BodySource::Given(given) => tag("Given", given.write()),
+        }
+    }
+    fn read(j: &Json, _key: &str) -> Result<BodySource, Refusal> {
+        match j {
+            Json::Str(s) if s == "Walk" => Ok(BodySource::Walk),
+            other => match tagged(other, "body")? {
+                ("Given", given) => Ok(BodySource::Given(Wire::read(given, "body")?)),
+                (name, _) => Err(unknown(format!("member {name} of body"))),
             },
         }
     }
@@ -299,7 +317,7 @@ impl Wire for Exports {
             Exports::Text(text) => tag("Text", text.write()),
         }
     }
-    fn read(j: &Json, _key: &str) -> Result<Exports, String> {
+    fn read(j: &Json, _key: &str) -> Result<Exports, Refusal> {
         match j {
             Json::Str(s) if s == "Derived" => Ok(Exports::Derived),
             other => match tagged(other, "exports")? {
@@ -319,7 +337,7 @@ impl Wire for Exports {
                         .map_err(|_| wrong("exports", "not five sizes"))?;
                     Ok(Exports::Sizes(sizes))
                 }
-                (name, _) => Err(nib(format!("member {name} of exports"))),
+                (name, _) => Err(unknown(format!("member {name} of exports"))),
             },
         }
     }
@@ -336,7 +354,7 @@ impl Wire for SelectWeight {
         }
         Json::Obj(o)
     }
-    fn read(j: &Json, _key: &str) -> Result<SelectWeight, String> {
+    fn read(j: &Json, _key: &str) -> Result<SelectWeight, Refusal> {
         let mut g = fields(j, "select weight")?;
         let mut number = |key: &'static str| match g.opt(key) {
             Some(Json::Num(n)) => n
@@ -355,10 +373,10 @@ impl Wire for SelectWeight {
 }
 
 /// The name and payload of a data member written as `{"Name": payload}`.
-fn tagged<'a>(j: &'a Json, field: &str) -> Result<(&'a str, &'a Json), String> {
+fn tagged<'a>(j: &'a Json, field: &str) -> Result<(&'a str, &'a Json), Refusal> {
     match j {
         Json::Obj(items) if items.len() == 1 => Ok((items[0].0.as_str(), &items[0].1)),
-        _ => Err(nib(format!("member of {field}"))),
+        _ => Err(unknown(format!("member of {field}"))),
     }
 }
 
@@ -373,16 +391,16 @@ impl Unit {
 
     /// The unit a typed JSON text describes. The version is checked first; a key, a member or a
     /// version this build does not know is refused by name.
-    pub fn from_json(source: &str) -> Result<Unit, String> {
+    pub fn from_json(source: &str) -> Result<Unit, Refusal> {
         Unit::from_value(&super::Contract::parse(source)?.0)
     }
 
     /// The unit a parsed typed JSON value describes.
-    pub fn from_value(j: &Json) -> Result<Unit, String> {
+    pub fn from_value(j: &Json) -> Result<Unit, Refusal> {
         let mut f = fields(j, "unit")?;
         let version = i64::get(&mut f, "v")?;
         if version != i64::from(CONTRACT_VERSION) {
-            return Err(nib(format!("contract version {version}")));
+            return Err(unknown(format!("contract version {version}")));
         }
         let unit = Unit::get_fields(&mut f)?;
         f.done()?;
@@ -445,20 +463,20 @@ struct Fields<'a> {
 }
 
 /// Starts reading an object; a value that is not an object is refused by name.
-fn fields<'a>(j: &'a Json, scope: &'static str) -> Result<Fields<'a>, String> {
+fn fields<'a>(j: &'a Json, scope: &'static str) -> Result<Fields<'a>, Refusal> {
     match j {
         Json::Obj(items) => Ok(Fields {
             items,
             asked: vec![],
             scope,
         }),
-        _ => Err(nib(format!("contract key {scope}: not an object"))),
+        _ => Err(unknown(format!("contract key {scope}: not an object"))),
     }
 }
 
 /// The refusal for a key whose value has the wrong shape.
-fn wrong(key: &str, what: &str) -> String {
-    nib(format!("contract key {key}: {what}"))
+fn wrong(key: &str, what: &str) -> Refusal {
+    unknown(format!("contract key {key}: {what}"))
 }
 
 impl<'a> Fields<'a> {
@@ -469,19 +487,19 @@ impl<'a> Fields<'a> {
         found.filter(|v| **v != Json::Null)
     }
     /// The value under a required key.
-    fn req(&mut self, key: &'static str) -> Result<&'a Json, String> {
+    fn req(&mut self, key: &'static str) -> Result<&'a Json, Refusal> {
         let scope = self.scope;
         self.opt(key)
-            .ok_or_else(|| nib(format!("contract key {key} missing in {scope}")))
+            .ok_or_else(|| unknown(format!("contract key {key} missing in {scope}")))
     }
     /// Refuses a key that was not asked for.
-    fn done(self) -> Result<(), String> {
+    fn done(self) -> Result<(), Refusal> {
         match self
             .items
             .iter()
             .find(|(k, _)| !self.asked.contains(&k.as_str()))
         {
-            Some((k, _)) => Err(nib(format!("contract key {k}"))),
+            Some((k, _)) => Err(unknown(format!("contract key {k}"))),
             None => Ok(()),
         }
     }
@@ -505,9 +523,10 @@ mod tests {
             form,
             sinks: vec![1, 2],
             walk,
-            source_call: false,
-            body_given: false,
-            prerendered_body: false,
+            body: BodySource::Given(GivenBody {
+                text: "x\n".into(),
+                draws_random: true,
+            }),
             active: None,
             segment: Some(Segment {
                 offsets_binding: "o".into(),
@@ -548,6 +567,7 @@ mod tests {
             },
             machine: Machine {
                 isa: Some(Isa::Arm64),
+                vector_isa: Some("neon".into()),
                 exact_libm: true,
                 routed_pow: false,
                 caches: Some(Caches {
@@ -562,10 +582,6 @@ mod tests {
             },
             exports: Exports::Sizes([1, 2, 3, 4, 5]),
             literal_table: false,
-            given_body: Some(GivenBody {
-                text: "x\n".into(),
-                draws_random: true,
-            }),
         }
     }
 
@@ -599,7 +615,6 @@ mod tests {
         let fused = Form::Fused(vec![FusedLane {
             name: "l".into(),
             sinks: vec![1],
-            prologue: "".into(),
         }]);
         for u in [
             unit(Form::Plain, Some(walk)),
@@ -616,22 +631,22 @@ mod tests {
         let extra = good.replacen("{\"v\":1,", "{\"v\":1,\"surprise\":1,", 1);
         assert_eq!(
             Unit::from_json(&extra),
-            Err("not in this build: contract key surprise".to_string())
+            Err(unknown("contract key surprise"))
         );
         let member = good.replacen("\"Float32\"", "\"Float16\"", 1);
         assert_eq!(
             Unit::from_json(&member),
-            Err("not in this build: member Float16 of scalar".to_string())
+            Err(unknown("member Float16 of scalar"))
         );
         let missing = good.replacen("\"rows\":1,", "", 1);
         assert_eq!(
             Unit::from_json(&missing),
-            Err("not in this build: contract key rows missing in unit".to_string())
+            Err(unknown("contract key rows missing in unit"))
         );
         let version = good.replacen("{\"v\":1,", "{\"v\":2,", 1);
         assert_eq!(
             Unit::from_json(&version),
-            Err("not in this build: contract version 2".to_string())
+            Err(unknown("contract version 2"))
         );
     }
 }

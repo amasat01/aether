@@ -3,6 +3,7 @@
 //! lane past the launch's count still takes part in its warp's sum with zero terms.
 use super::prologue::{index_prologue, Geometry};
 use crate::contract::types::Build;
+use crate::refuse::{bad, Refusal};
 use crate::unit::sums::{identity_fill, op_code, store_lambda, SumSink};
 
 /// The name of the lane's terms array, which the body writes its sums into.
@@ -11,14 +12,14 @@ const TERMS: &str = "hawk_ss";
 /// The rows one warp folds in one batched sum, for sinks of `width` columns: the largest power of
 /// two up to the wing's limit whose columns keep the warp under the residency line; the build's
 /// forced value wins when set.
-fn fold_rows(build: &Build, width: i64) -> Result<i64, String> {
+fn fold_rows(build: &Build, width: i64) -> Result<i64, Refusal> {
     if let Some(forced) = build.fold_k {
         return Ok(forced);
     }
     let fold = build
         .fold_limits
         .as_ref()
-        .ok_or_else(|| "the device wing has no fold k_max".to_string())?;
+        .ok_or_else(|| bad("the device wing has no fold k_max"))?;
     let mut rows = fold.k_max;
     while rows > 1 && fold.regs_base + fold.regs_column * (rows * width - 1) > fold.residency_regs {
         rows /= 2;
@@ -43,7 +44,7 @@ fn single_row_frame(
     sinks: &[SumSink],
     store: &str,
     live_count: Option<&str>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     let (width, first) = (sinks.len() as i64, &sinks[0]);
     let exit_line = "    if (hawk_flat >= count) return;\n    {";
     let plain = index_prologue(&Geometry::default());
@@ -72,7 +73,7 @@ fn folded_rows_frame(
     rows: i64,
     store: &str,
     live_count: Option<&str>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     let (width, first) = (sinks.len() as i64, &sinks[0]);
     let (columns, element) = (rows * width, &first.element);
     let plain = index_prologue(&Geometry::default());
@@ -114,7 +115,7 @@ pub fn frame(
     sinks: &[SumSink],
     cells: bool,
     live_count: Option<&str>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     let rows = fold_rows(build, sinks.len() as i64)?;
     let store = store_lambda(sinks, rows, build.cells_row, cells)?;
     if rows > 1 {

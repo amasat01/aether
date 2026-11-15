@@ -6,13 +6,13 @@ use super::text::*;
 use crate::body::frame::needs::Need;
 use crate::body::frame::needs::Needs as BodyNeeds;
 use crate::body::Class;
-use crate::contract::types::{Active, Machine, SinkPolicy, Unit};
+use crate::contract::types::{Active, Form, Machine, SinkPolicy, Unit};
 use crate::ir::analysis as an;
 use crate::ir::door::{self, RxCtx};
 use crate::lanes::host_interchange as interchange;
 use crate::lanes::host_split as split;
 use crate::lanes::host_text::{HOST_MASK_HELPERS, INDEPENDENT_ITERATIONS};
-use crate::refuse::nib;
+use crate::refuse::{bad, fault, nib, Refusal};
 use crate::spell::binding_name;
 use crate::unit::entry::{HostSource, Render};
 use crate::unit::sums::*;
@@ -36,7 +36,7 @@ const HOST_ARMS: Arms = Arms {
 };
 
 /// The `params[k]` cast one slot's by-value mirror is read through.
-fn deref(s: &Slot) -> Result<String, String> {
+fn deref(s: &Slot) -> Result<String, Refusal> {
     let shape = an::mirror_of(&s.role, &s.dtype, s.shape.len())?;
     Ok(if shape == "value" {
         format!(
@@ -54,8 +54,8 @@ fn deref(s: &Slot) -> Result<String, String> {
 
 /// The entry's argument bindings: each slot read from `params[k]`, a rank-0 mask bound through the
 /// host's mask type.
-fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, String> {
-    let mask = |s: &Slot| -> Result<Option<String>, String> {
+fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, Refusal> {
+    let mask = |s: &Slot| -> Result<Option<String>, Refusal> {
         if !is_mask(w, s) {
             return Ok(None);
         }
@@ -153,7 +153,7 @@ fn loop_keeps_lanes(
     node: u32,
     lanes: &[u32],
     inner_of_lanes: &[u32],
-) -> Result<bool, String> {
+) -> Result<bool, Refusal> {
     if lanes.contains(&node) {
         if !an::speculative_step(ctx, node)? {
             return Ok(false);
@@ -177,15 +177,15 @@ fn loop_keeps_lanes(
     // a loop with a run-time trip count, or more trips than the compiler fully unrolls, stays its
     // lane's own `for`
     let dynamic = door::field_text(ctx, node, "dynamic")?.is_some();
-    let trip = door::field_int(ctx, node, "trip")?
-        .ok_or_else(|| "loop trip is not a number".to_string())?;
+    let trip =
+        door::field_int(ctx, node, "trip")?.ok_or_else(|| fault("loop trip is not a number"))?;
     Ok(!(dynamic
         || (trip > crate::ir::runtime_names::UNROLL_LIMIT && !inner_of_lanes.contains(&node))))
 }
 
 /// Whether the host loop over samples vectorises: the verdict of the host's rules, over the IR
 /// answers it asks for.
-fn vectorises(ctx: *mut RxCtx, walk: u32, w: &Walk, machine: &Machine) -> Result<bool, String> {
+fn vectorises(ctx: *mut RxCtx, walk: u32, w: &Walk, machine: &Machine) -> Result<bool, Refusal> {
     let lanes = an::interchanged_loops(ctx, walk)?;
     if w.cls != "sample_local" && !(w.cls == "cross_sample_read" && !lanes.is_empty()) {
         return Ok(false);
@@ -295,11 +295,11 @@ struct SplitExtra {
 
 /// Refuses the unit shapes the host text does not write: a two-path entry the unit does not
 /// support, staged rows and the banded mode.
-fn refuse_unwritten(unit: &Unit, m: &Mode, two_path: bool) -> Result<(), String> {
+fn refuse_unwritten(unit: &Unit, m: &Mode, two_path: bool) -> Result<(), Refusal> {
     for (set, what) in [
         (unit.one_step.is_some() && !two_path, "two-path entry"),
         (
-            two_path && (unit.thread_box.is_some() || (unit.source_call && unit.team.is_some())),
+            two_path && (unit.thread_box.is_some() || unit.team.is_some()),
             "two-path entry with a box or a team",
         ),
         (unit.rows != 1, "staged rows"),
@@ -338,7 +338,7 @@ fn extra_prelude(interchange: &Interchange, masks: bool, blend: bool) -> String 
 /// body and loop, with no
 /// active set, box, segment, run commits or sample sums.
 fn is_plain_frame(unit: &Unit, scanned: &BodyNeeds, sums: &[u32]) -> bool {
-    !unit.prerendered_body
+    matches!(unit.form, Form::Plain)
         && unit.active.is_none()
         && unit.thread_box.is_none()
         && unit.segment.is_none()
@@ -355,7 +355,7 @@ fn lane_split_form(
     shape: &EntryShape,
     fin: &FinishLanes,
     m: &Mode,
-) -> Result<Option<Interchange>, String> {
+) -> Result<Option<Interchange>, Refusal> {
     let real_bytes = if m.real == "float" { 4 } else { 8 };
     let slots: Vec<(String, String)> = shape
         .walk
@@ -396,7 +396,7 @@ fn interchange_of(
     input: &Render,
     shape: &EntryShape,
     sums: &[u32],
-) -> Result<Interchange, String> {
+) -> Result<Interchange, Refusal> {
     let unit = input.unit;
     let scanned = &input.needs;
     let eligible = is_plain_frame(unit, scanned, sums)
@@ -476,7 +476,7 @@ fn entry_lines(
     frame: Option<(String, String)>,
     tiled: &Option<String>,
     sums: &[u32],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let runs = &input.needs.runs;
     let (prologue, epilogue) = loop_frame(&shape.lane, &shape.active, &shape.segment, shape.boxed)?;
     if shape.two_path {
@@ -511,7 +511,7 @@ fn entry_lines(
 /// The export lines of the unit: its exported sizes, and the lane split's export or the blank line
 /// the interchanged text
 /// follows.
-fn export_lines(unit: &Unit, interchange: &Interchange) -> Result<String, String> {
+fn export_lines(unit: &Unit, interchange: &Interchange) -> Result<String, Refusal> {
     let base = exports(&unit.exports, false)?;
     Ok(match &interchange.split {
         Some(split) => format!("{base}\n{}", split.export),
@@ -529,7 +529,7 @@ fn companion_folds(
     w: &Walk,
     name: &str,
     companions: &[(String, String)],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let mut lines = vec![];
     for (comp, target) in companions {
         lines.extend([signature(&format!("{name}__fold_{target}")), "{".into(), unpack(ctx, walk, w)?,
@@ -539,17 +539,9 @@ fn companion_folds(
     Ok(lines)
 }
 
-/// The unit's facts as JSON: the target, the scalar mode and whether the lane loop vectorises.
-fn meta_of(mode: &Mode, vectorised: bool) -> String {
-    format!(
-        "{{\"target\":\"host\",\"mode\":\"{}\",\"vectorised\":{vectorised},\"box\":null}}",
-        mode.id
-    )
-}
-
 /// The text of the unit and its facts, from the unit, the body written for it and the contract the
 /// frame reads.
-pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, String> {
+pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, Refusal> {
     let unit = input.unit;
     let name = unit.name.clone();
     let m = mode_of(unit.scalar);
@@ -629,7 +621,12 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         entry: name,
         #[cfg(feature = "shadow")]
         needs_diffs,
-        meta: meta_of(&m, vectorised),
+        meta: Meta {
+            target: "host",
+            mode: m.id,
+            vectorised,
+            thread_box: unit.thread_box.clone(),
+        },
     })
 }
 
@@ -642,7 +639,7 @@ fn lane_shape(
     w: &Walk,
     team: bool,
     active: &Option<Active>,
-) -> Result<LaneShape, String> {
+) -> Result<LaneShape, Refusal> {
     let reads_position = active.is_some() && reads_sample_position(ctx, walk)?;
     let simd = w.cls == "sample_local"
         && !team
@@ -674,7 +671,7 @@ fn lane_shape(
 }
 
 /// Whether any node of the walk reads the sample's position.
-fn reads_sample_position(ctx: *mut RxCtx, walk: u32) -> Result<bool, String> {
+fn reads_sample_position(ctx: *mut RxCtx, walk: u32) -> Result<bool, Refusal> {
     for node in door::walk_order(ctx, walk)? {
         if door::class_is(ctx, node, "SamplePosition")? {
             return Ok(true);
@@ -691,7 +688,7 @@ fn loop_frame(
     active: &Option<Active>,
     segment: &Option<(String, i64)>,
     boxed: Option<(i64, i64)>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     let (simd, guards, finish) = (shape.simd, &shape.guards, &shape.finish);
     let loop_head = "        const std::int64_t hawk_i = static_cast<std::int64_t>(hawk_j);\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_j));\n        (void)hawk_i;\n        (void)nSamples;";
     let index = |p: i64| format!("aether::SampleIndex::make(static_cast<std::size_t>({p}))");
@@ -761,7 +758,7 @@ fn two_path_lines(
     single: PathLines,
     fused: PathLines,
     tiled: &Option<String>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let word = format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
         binding_name("lookup", "fused_steps")?
@@ -799,11 +796,11 @@ fn sample_sum_frame(
     w: &Walk,
     row: i64,
     live: Option<String>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), Refusal> {
     if row < 1 || row & (row - 1) != 0 {
-        return Err(format!(
+        return Err(bad(format!(
             "the host wing's cells.row must be a power of two; it is {row}"
-        ));
+        )));
     }
     let sinks = sum_sinks(ctx, sums, w)?;
     let width = sums.len() as i64;

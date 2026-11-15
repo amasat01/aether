@@ -3,15 +3,18 @@
 //! eight spaces. The entry joins them under a branch on the fused-steps word.
 use crate::body::frame::needs::{Needs, Rendered};
 use crate::body::render_body_over_with_needs;
-use crate::contract::types::{OneStep, SinkPolicy, Unit};
+use crate::contract::types::{Form, OneStep, SinkPolicy, Unit};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::nib;
+use crate::refuse::{bad, nib, Refusal};
 
-/// The single step of a unit written as two paths: not when a caller's body or a segment is given,
-/// nor for a compensated kind.
+/// The single step of a unit written as two paths: not for a team stage or a fused group (each has a body of its own), nor
+/// when a segment is given, nor for a compensated kind.
 pub fn step_of(unit: &Unit) -> Option<&OneStep> {
     let compensated = matches!(unit.kind.sink, SinkPolicy::Compensated { .. });
-    if unit.body_given || unit.segment.is_some() || compensated {
+    if matches!(unit.form, Form::TeamStage(_) | Form::Fused(_))
+        || unit.segment.is_some()
+        || compensated
+    {
         return None;
     }
     unit.one_step.as_ref()
@@ -20,7 +23,7 @@ pub fn step_of(unit: &Unit) -> Option<&OneStep> {
 /// The single step's body, or `None` when the unit has no single step. Its walk is taken over the
 /// step's sinks with the
 /// slots the unit's own walk declares.
-pub fn single_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<Rendered>, String> {
+pub fn single_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<Rendered>, Refusal> {
     let Some(step) = step_of(unit) else {
         return Ok(None);
     };
@@ -29,12 +32,12 @@ pub fn single_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<Ren
 }
 
 /// The single step's walk handle and the walk record the unit holds for it.
-pub fn step_walk(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<(u32, super::Walk), String> {
+pub fn step_walk(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<(u32, super::Walk), Refusal> {
     let step = step_of(unit).ok_or_else(|| nib("a two-path unit without a single step"))?;
     let record = step
         .walk
         .as_ref()
-        .ok_or("contract: one_step without a walk")?;
+        .ok_or_else(|| bad("contract: one_step without a walk"))?;
     Ok((
         door::canonical_over(ctx, &step.sinks, walk)?,
         super::walk_from(record),
@@ -59,7 +62,11 @@ impl BodyParts {
 }
 
 /// The two bodies of a two-path unit, or `None` when the unit has no single step.
-pub fn two_path_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<BodyParts>, String> {
+pub fn two_path_body(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+) -> Result<Option<BodyParts>, Refusal> {
     let Some(single) = single_body(ctx, walk, unit)? else {
         return Ok(None);
     };
@@ -74,7 +81,7 @@ pub fn two_path_body(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<B
 }
 
 /// The two bodies of a two-path unit that has a single step; a refusal when it has none.
-pub fn parts(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<BodyParts, String> {
+pub fn parts(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<BodyParts, Refusal> {
     let parts = two_path_body(ctx, walk, unit)?
         .ok_or_else(|| nib("a two-path unit without a single step"))?;
     Ok(parts)

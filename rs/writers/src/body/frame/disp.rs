@@ -2,6 +2,7 @@
 //! tells whether a rendered value is named, in each of the three scopes.
 use crate::body::frame::table::Disp;
 use crate::body::{placed, Class, Frame};
+use crate::refuse::Refusal;
 
 /// Where a value is being named.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,7 @@ impl Frame<'_> {
                 matches!(
                     class,
                     Class::Assign
+                        | Class::WarpStore
                         | Class::SampleSum
                         | Class::AccumWrite
                         | Class::Finish
@@ -51,7 +53,7 @@ impl Frame<'_> {
         scope: ScopeKind,
         role: Option<&str>,
         readers: usize,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Refusal> {
         let class = &self.node(p).class;
         let leaf_valued = self.leaf_valued(p)?;
         let inline = self.disp(p) == Disp::Inline;

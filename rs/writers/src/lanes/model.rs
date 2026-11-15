@@ -64,6 +64,16 @@ pub struct LaneSegments {
     pub proxies: Vec<(String, String, usize)>,
 }
 
+/// The head's declarations of the values no sample changes: what a wrapper evaluates once at entry. Empty when a live value
+/// that reads nothing per sample is not a one-line declaration.
+#[derive(Default)]
+pub struct SampleFree {
+    /// The indexes in `LaneSplit::pre` of the one-line declarations, in the head's order.
+    pub at: Vec<usize>,
+    /// The names those declarations introduce.
+    pub names: Vec<String>,
+}
+
 /// A fused-step body cut at its one loop: `pre` and `post` exclude the guard, `step` is one trip.
 pub struct LaneSplit {
     /// The body-wide mask condition, when the kernel is guarded.
@@ -94,7 +104,7 @@ pub struct LaneSplit {
     /// The carry the exit condition compares to a sample-free bound, and whether it rises
     /// towards it.
     pub exit_order: Option<(usize, bool)>,
-    /// The one-line declarations, in `pre`'s order, of the live values that read nothing per sample and of the values they read:
-    /// a wrapper may evaluate them once instead of carrying them. Empty when one of them is not a one-line declaration.
-    pub sample_free: Vec<String>,
+    /// The live values that read nothing per sample and the values they read, as the one-line declarations of `pre`: a wrapper
+    /// may evaluate them once instead of carrying them.
+    pub sample_free: SampleFree,
 }

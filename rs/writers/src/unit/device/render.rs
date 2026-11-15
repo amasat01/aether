@@ -10,12 +10,12 @@ use crate::contract::types::{SinkPolicy, Unit};
 use crate::ir::analysis as an;
 use crate::ir::door::RxCtx;
 use crate::lanes::device as persist;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 use crate::unit::entry::{HostSource, Render};
 use crate::unit::sums;
 use crate::unit::two_path;
-use crate::unit::{self, Arms, Walk};
+use crate::unit::{self, Arms, Meta, Walk};
 
 /// The device's spellings of the helpers that have one arm per target.
 const DEVICE_ARMS: Arms = Arms {
@@ -34,7 +34,7 @@ const DEVICE_ARMS: Arms = Arms {
 };
 
 /// Refuses the forms of the call the device arm does not write yet, by name.
-fn refuse_unwritten(unit: &Unit) -> Result<(), String> {
+fn refuse_unwritten(unit: &Unit) -> Result<(), Refusal> {
     // a unit with a single step the entry does not write as two paths (a caller's body, a segment,
     // a compensated kind)
     let two_path = unit.one_step.is_some() && two_path::step_of(unit).is_none();
@@ -48,7 +48,7 @@ fn refuse_unwritten(unit: &Unit) -> Result<(), String> {
 /// The entry lines of a two-path unit: a branch on the fused-steps word between the single step's
 /// lane loop and the fused
 /// one, each opened by its own marker statement so the compiler keeps the two sides apart.
-fn two_path_lines(geometry: &Geometry, single: &str, fused: &str) -> Result<Vec<String>, String> {
+fn two_path_lines(geometry: &Geometry, single: &str, fused: &str) -> Result<Vec<String>, Refusal> {
     let word = format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
         binding_name("lookup", "fused_steps")?
@@ -69,28 +69,25 @@ fn two_path_lines(geometry: &Geometry, single: &str, fused: &str) -> Result<Vec<
     Ok(lines)
 }
 
-/// The lane split a two-path unit's fast entries are cut from. Only the finishing, sample-local
-/// kernel with the fused-steps
-/// word and a runtime trip count has them; any other two-path unit is refused by name (no recorded
-/// unit is written).
+/// The lane split a two-path unit's fast entries are cut from: only the finishing, sample-local kernel with the fused-steps
+/// word whose fused body cuts into head, one trip with a runtime count, and tail has them. `None` for any other two-path unit,
+/// which has no fast entries.
 fn lane_split_of(
     ctx: *mut RxCtx,
     walk: u32,
     unit: &Unit,
     w: &Walk,
-) -> Result<crate::lanes::split::LaneSplit, String> {
+) -> Result<Option<crate::lanes::split::LaneSplit>, Refusal> {
     let has_word = w.slots.iter().any(|slot| slot.name == "fused_steps");
     if w.finish.is_none() || w.cls != "sample_local" || !has_word {
-        return Err(nib(
-            "a two-path unit that is not a finishing sample-local kernel with the fused-steps word",
-        ));
+        return Ok(None);
     }
-    match crate::lanes::lane_split(ctx, walk, unit, "        ")? {
-        Some((split, _)) if split.count.is_some() => Ok(split),
-        _ => Err(nib(
-            "a two-path unit whose fused body does not cut into head, one trip and tail",
-        )),
-    }
+    Ok(
+        match crate::lanes::lane_split(ctx, walk, unit, "        ")? {
+            Some((split, _)) if split.count.is_some() => Some(split),
+            _ => None,
+        },
+    )
 }
 
 /// The lines of one fold entry per companion: the kernel's own signature and arguments, one lane
@@ -101,7 +98,7 @@ fn fold_entries(
     w: &Walk,
     name: &str,
     bounds: Option<(i64, i64)>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let mut lines = vec![];
     for (companion, target) in an::companions(ctx, walk)? {
         let fold_name = format!("{name}__fold_{target}");
@@ -128,7 +125,7 @@ fn fold_entries(
 }
 
 /// The entry's argument bindings: each slot is a by-value parameter of the entry.
-fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, String> {
+fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, Refusal> {
     let source = |slot: &unit::Slot| prologue::param_name(slot);
     unit::unpack_lines(ctx, walk, w, &source, &|_| Ok(None))
 }
@@ -141,7 +138,7 @@ fn sample_sum_sinks(
     unit: &Unit,
     w: &Walk,
     mode: &unit::Mode,
-) -> Result<Vec<sums::SumSink>, String> {
+) -> Result<Vec<sums::SumSink>, Refusal> {
     let sum_nodes = sums::sample_sum_nodes(ctx, &unit.sinks)?;
     let mut sum_sinks = sums::sum_sinks(ctx, &sum_nodes, w)?;
     if mode.cells {
@@ -208,7 +205,7 @@ fn framed_lines(
     geometry: &Geometry,
     sum_sinks: &[sums::SumSink],
     mode: &unit::Mode,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Refusal> {
     let unit = input.unit;
     let body = input.body.clone();
     if unit.rows > 1 {
@@ -238,10 +235,12 @@ fn two_path_entry(
     input: &Render,
     w: &Walk,
     geometry: &Geometry,
-) -> Result<(Vec<String>, Vec<String>), String> {
+) -> Result<(Vec<String>, Vec<String>), Refusal> {
     let unit = input.unit;
     let two_path::BodyParts { single, fused, .. } = two_path::parts(ctx, walk, unit)?;
-    let split = lane_split_of(ctx, walk, unit, w)?;
+    let Some(split) = lane_split_of(ctx, walk, unit, w)? else {
+        return Ok((two_path_lines(geometry, &single, &fused)?, vec![]));
+    };
     let signature = prologue::entry_signature(w, &unit.name, unit.build.launch_bounds)?;
     let counts_finished = split.guard.is_some();
     let cut = persist::Cut {
@@ -256,18 +255,9 @@ fn two_path_entry(
     Ok((two_path_lines(geometry, &single, &fused)?, fast))
 }
 
-/// The unit's facts as JSON: the target and the scalar mode; the device text is never vectorised by
-/// the host's rules.
-fn meta_of(mode: &unit::Mode) -> String {
-    format!(
-        "{{\"target\":\"cuda\",\"mode\":\"{}\",\"vectorised\":false,\"box\":null}}",
-        mode.id
-    )
-}
-
 /// The unit's text and facts, from the unit, the body written for it and the contract the frame
 /// reads.
-pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, String> {
+pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, Refusal> {
     let unit = input.unit;
     let name = unit.name.clone();
     let mode = unit::mode_of(unit.scalar);
@@ -322,7 +312,12 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         text,
         body: input.body.clone(),
         entry: name,
-        meta: meta_of(&mode),
+        meta: Meta {
+            target: "cuda",
+            mode: mode.id,
+            vectorised: false,
+            thread_box: unit.thread_box.clone(),
+        },
         #[cfg(feature = "shadow")]
         needs_diffs: None,
     })

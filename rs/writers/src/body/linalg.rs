@@ -5,7 +5,7 @@ use crate::body::values::{literal_of, text_field};
 use crate::body::Class;
 use crate::ir::door;
 use crate::ir::door::Scalar;
-use crate::refuse::nib;
+use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
 /// The op kinds that are written through the library.
@@ -53,7 +53,7 @@ fn triangular_name(kind: &str) -> Option<&'static str> {
 }
 
 /// The element type the library is instantiated with.
-fn element(dtype: &str) -> Result<&'static str, String> {
+fn element(dtype: &str) -> Result<&'static str, Refusal> {
     match dtype {
         "f64" | "f32" => Ok("Real"),
         d => Err(nib(format!("linear algebra over dtype {d}"))),
@@ -102,7 +102,7 @@ pub fn leaf_is_proxy(f: &Frame, p: usize) -> bool {
 /// The plane target a library result is written into directly: the own-column store of the only
 /// reader, when the kernel has
 /// no loop and never reads that plane's prior value. None when the result goes to a fresh local.
-fn direct_target(f: &Frame, p: usize) -> Result<Option<String>, String> {
+fn direct_target(f: &Frame, p: usize) -> Result<Option<String>, Refusal> {
     if f.fanout(p) != 1 || f.nodes().any(|n| n.class == Class::Loop) {
         return Ok(None);
     }
@@ -139,7 +139,7 @@ fn direct_target(f: &Frame, p: usize) -> Result<Option<String>, String> {
 
 /// Declares an unset `aether::Item` for library calls to fill, named by the shared counter; returns
 /// its name.
-pub(super) fn fresh_item(f: &mut Frame, p: usize) -> Result<String, String> {
+pub(super) fn fresh_item(f: &mut Frame, p: usize) -> Result<String, Refusal> {
     let name = f.names.fresh_item();
     let node = &f.node(p);
     let cty = format!(
@@ -193,7 +193,7 @@ fn held_item_of(f: &Frame, text: &str) -> Option<String> {
 /// (the leaf's own local
 /// when bound as one, else `plane[i]`), a named item itself, any other value an item held once and
 /// declared ahead.
-pub(super) fn operand(f: &mut Frame, source: usize, arg: &str) -> Result<String, String> {
+pub(super) fn operand(f: &mut Frame, source: usize, arg: &str) -> Result<String, Refusal> {
     let (class, rank) = (f.node(source).class.clone(), f.node(source).rank());
     // a value that lives in a plane: its proxy
     if f.proxies.iter().any(|x| x.name == arg) {
@@ -237,7 +237,7 @@ pub(super) fn operand(f: &mut Frame, source: usize, arg: &str) -> Result<String,
 
 /// The name of a value materialised once as a const item, declared ahead of the line on first use
 /// (`arg` is its expression).
-pub(super) fn held_item(f: &mut Frame, source: usize, arg: &str) -> Result<String, String> {
+pub(super) fn held_item(f: &mut Frame, source: usize, arg: &str) -> Result<String, Refusal> {
     if declared_as_item(f, arg) {
         return Ok(arg.to_string());
     }
@@ -275,7 +275,7 @@ fn call(name: &str, targs: &[usize], args: &[&str]) -> String {
 /// A factorisation: declares the struct (`hawk_lf<k>`) and fills it in place from the matrix
 /// operand; the value is its name.
 /// Eigenvalues alone use the cheaper struct when no `eigh_v` reads this factor.
-fn factorisation(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
+fn factorisation(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
     let n = f.node(f.opp(p)[0]).ty.shape[0];
     let factor = f.names.factor();
     let name = factor.text.clone();
@@ -308,7 +308,7 @@ fn factorisation(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
 
 /// Whether a value is the literal identity matrix (an assembled square matrix of ones on the
 /// diagonal and zeros elsewhere).
-pub(super) fn is_identity(f: &Frame, q: usize) -> Result<bool, String> {
+pub(super) fn is_identity(f: &Frame, q: usize) -> Result<bool, Refusal> {
     let node = &f.node(q);
     if node.class != Class::Op
         || text_field(f.ctx(), node.h, "kind")? != "vec"
@@ -339,7 +339,7 @@ pub(super) fn is_identity(f: &Frame, q: usize) -> Result<bool, String> {
 /// fields): written by
 /// statements ahead of the line into the plane directly or into a fresh item; the value is that
 /// target.
-fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
+fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
     let n = f.node(f.opp(p)[0]).ty.shape[0];
     let out = match direct_target(f, p)? {
         Some(target) => target,
@@ -392,7 +392,7 @@ fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
 
 /// The text of a factor kind: a factorisation, a solve or field read, `<factor>.info`, or the
 /// determinant call.
-pub fn op(f: &mut Frame, p: usize, kind: &str) -> Result<Out, String> {
+pub fn op(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
     match kind {
         "lu" | "chol" | "chol_from" | "eigh" => factorisation(f, p, kind),
         _ if is_info_kind(kind) => Ok(Out::Value(format!("{}.info", f.text(f.opp(p)[0])), None)),
