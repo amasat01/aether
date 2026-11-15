@@ -120,7 +120,7 @@ pub(super) fn render_frame_over<'e>(
     Ok((f, guard.cond))
 }
 
-/// Refuses the units this render does not write: no walk, a banded scalar, a fused
+/// Refuses the units this render does not write: no walk, a fused
 /// kernel without given sinks, and a boxed or two-path unit whose wrapper composes the body.
 fn check_unit(
     walk: u32,
@@ -131,9 +131,6 @@ fn check_unit(
 ) -> Result<(), Refusal> {
     if walk == u32::MAX {
         return Err(nib("a unit with no walk (team stage)"));
-    }
-    if unit.scalar == Scalar::Banded {
-        return Err(nib("scalar mode BANDED"));
     }
     match &unit.form {
         Form::Fused(_) if given_sinks.is_none() => return Err(nib("kernel record FusedKernel")),

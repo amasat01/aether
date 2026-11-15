@@ -125,6 +125,25 @@ fn whole_value(
     Ok(None)
 }
 
+/// Refuses, in a banded unit, the operations whose banded spelling is not written: the raw
+/// forms of `exp`, `sin` and `cos`, and an add of a product (written as a fused multiply-add).
+fn refuse_banded_forms(f: &Frame, p: usize, kind: &str) -> Result<(), Refusal> {
+    if !f.banded() {
+        return Ok(());
+    }
+    if matches!(kind, "fma" | "exp" | "sin" | "cos") {
+        return Err(nib(format!("a banded {kind} (the raw band forms)")));
+    }
+    let product = |&q: &usize| {
+        f.node(q).class == Class::Op
+            && text_field(f.ctx(), f.node(q).h, "kind").is_ok_and(|k| k == "mul")
+    };
+    if kind == "add" && f.opp(p).iter().any(product) {
+        return Err(nib("a banded multiply-add (the fused form)"));
+    }
+    Ok(())
+}
+
 /// The text of a scalar operation (every operand of rank 0, or the index clamp, sign and cast of
 /// one scalar); none when the
 /// operation is a tensor one.
@@ -150,6 +169,7 @@ fn scalar_text(
         f.hold_needs(p, &used);
         return Ok(Some(text));
     }
+    refuse_banded_forms(f, p, kind)?;
     if rank == 0 && ranks.iter().all(|&r| r == 0) {
         let mut used = vec![];
         let text = spell::scalar_op(kind, args, &dtype, &mut used)?;

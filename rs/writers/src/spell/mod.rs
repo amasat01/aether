@@ -384,10 +384,28 @@ fn ext(shape: &[usize]) -> String {
         .join(", ")
 }
 
-/// The C++ type `declare` gives a local: `auto`, or the `aether::Item` of a held vector.
-pub fn declared_type(dtype: &str, shape: &[usize], held: bool) -> Result<String, Refusal> {
+/// The scalar mode a local is spelled for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    /// A plain float: the type of a local is inferred.
+    Plain,
+    /// A banded float: a float scalar local is a band.
+    Banded,
+}
+
+/// The C++ type `declare` gives a local: `auto`, the `aether::Item` of a held vector, or the band
+/// of a float scalar in the banded mode.
+pub fn declared_type(
+    dtype: &str,
+    shape: &[usize],
+    held: bool,
+    mode: Mode,
+) -> Result<String, Refusal> {
     if held && shape.len() == 1 {
         return Ok(format!("aether::Item<{}, {}>", element(dtype)?, shape[0]));
+    }
+    if mode == Mode::Banded && shape.is_empty() && matches!(dtype, "f64" | "f32") {
+        return Ok("aether::banded::Band".to_string());
     }
     Ok("auto".to_string())
 }
@@ -400,6 +418,7 @@ pub fn declare(
     shape: &[usize],
     text: &str,
     held: bool,
+    mode: Mode,
 ) -> Result<String, Refusal> {
     if held && shape.len() == 1 {
         return Ok(format!(
@@ -408,7 +427,8 @@ pub fn declare(
             shape[0]
         ));
     }
-    Ok(format!("const auto {name} = {text};"))
+    let cty = declared_type(dtype, shape, held, mode)?;
+    Ok(format!("const {cty} {name} = {text};"))
 }
 
 /// A leaf of rank >= 1 read whole (a row of the sample): materialised as an Item.

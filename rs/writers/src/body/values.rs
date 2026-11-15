@@ -141,6 +141,9 @@ pub fn sample_index() -> Result<Out, Refusal> {
 /// A constant, spelled for its type and rank.
 pub fn constant(f: &Frame, p: usize) -> Result<Out, Refusal> {
     let n = &f.node(p);
+    if f.banded() && matches!(n.ty.dtype.as_str(), "f64" | "f32") {
+        return Err(nib("a banded literal"));
+    }
     Ok(Out::Value(
         spell::constant(&n.ty.dtype, n.rank(), &held_of(&literal_of(f.ctx(), n.h)?))?,
         None,

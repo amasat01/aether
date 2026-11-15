@@ -229,6 +229,13 @@ fn declared_switch(f: &Frame, m: usize) -> Result<bool, Refusal> {
 /// its typed zero in
 /// `default:`. Returns each member's output name.
 fn switch(f: &mut Frame, members: &[usize]) -> Result<Vec<String>, Refusal> {
+    if f.banded()
+        && members
+            .iter()
+            .any(|&m| matches!(f.node(m).ty.dtype.as_str(), "f64" | "f32"))
+    {
+        return Err(nib("a banded dispatch"));
+    }
     for &m in members {
         if !declared_switch(f, m)? {
             return Err(nib("a dispatch of a strategy kind"));

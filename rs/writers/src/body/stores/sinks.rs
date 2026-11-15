@@ -7,6 +7,16 @@ use crate::ir::door;
 use crate::refuse::{fault, nib, Refusal};
 use crate::spell::binding_name;
 
+/// The text of a value stored into a plane element: a banded unit's plane element is a `Real`
+/// built from the band.
+fn plane_value(f: &Frame, text: &str) -> String {
+    if f.banded() {
+        format!("Real({text})")
+    } else {
+        text.to_string()
+    }
+}
+
 /// One own-column store (early, right after the value, or at the end).
 pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let p = f.at(sink)?;
@@ -51,7 +61,8 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         f.need(Need::Rt);
         f.emit(format!("aether::rt::store({target}[i], {});", f.text(v)))
     } else {
-        f.emit(format!("{target}[i] = {};", f.text(v)))
+        let value = f.text(v).clone();
+        f.emit(format!("{target}[i] = {};", plane_value(f, &value)))
     }
     Ok(())
 }
@@ -104,7 +115,10 @@ pub(crate) fn warp_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
         return Ok(());
     }
     if held == width {
-        f.emit(format!("if (hawk_wl == 0) {target}[i] = {text};"));
+        f.emit(format!(
+            "if (hawk_wl == 0) {target}[i] = {};",
+            plane_value(f, &text)
+        ));
         return Ok(());
     }
     let n = held[0];
@@ -128,7 +142,17 @@ pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Refus
             seen += 1
         }
     }
-    f.emit(format!("hawk_ss[{column}] = {};", f.text(f.opp(p)[0])));
+    let sink_h = f.node(f.at(sink)?).h;
+    if f.banded() && text_field(f.ctx(), sink_h, "op")? == "sum" {
+        return Err(nib("a banded sample sum (the accumulator form)"));
+    }
+    let value = f.text(f.opp(p)[0]).clone();
+    let value = if f.banded() {
+        format!("aether::banded::Band({value})")
+    } else {
+        value
+    };
+    f.emit(format!("hawk_ss[{column}] = {value};"));
     Ok(())
 }
 

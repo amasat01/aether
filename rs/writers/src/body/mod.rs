@@ -16,7 +16,7 @@ mod team;
 mod values;
 mod wide;
 
-use crate::contract::types::{Form, Guard, Scalar, SinkPolicy, Unit};
+use crate::contract::types::{Form, Guard, SinkPolicy, Unit};
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;

@@ -411,6 +411,9 @@ pub(crate) fn read_head(f: &mut Frame, lp: u32) -> Result<LoopHead, Refusal> {
     let (mut elems, mut names, mut types) = (vec![], vec![], vec![]);
     for (j, &c) in carries.iter().enumerate() {
         let t = crate::body::ty_of(ctx, c)?;
+        if f.banded() && matches!(t.dtype.as_str(), "f64" | "f32") {
+            return Err(nib("a banded loop-carried float value"));
+        }
         elems.push(spell::carry_type(&t.dtype, &t.shape)?);
         types.push(t);
         names.push(

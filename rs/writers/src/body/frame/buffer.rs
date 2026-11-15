@@ -4,6 +4,7 @@
 //! so do their declarations); a buffer scope puts both aside together.
 use super::namer::Name;
 use crate::body::Frame;
+use crate::contract::types::Scalar;
 use crate::refuse::Refusal;
 use crate::spell;
 use std::collections::BTreeSet;
@@ -186,6 +187,11 @@ pub(crate) fn tokens(text: &str) -> impl Iterator<Item = &str> {
 }
 
 impl Frame<'_> {
+    /// Whether the unit's scalar mode is the banded one.
+    pub(crate) fn banded(&self) -> bool {
+        self.unit.scalar == Scalar::Banded
+    }
+
     /// Declares a typed local through `spell::declare` and records it in the buffer.
     pub(crate) fn declare(
         &mut self,
@@ -195,8 +201,13 @@ impl Frame<'_> {
         value: &str,
         held: bool,
     ) -> Result<(), Refusal> {
-        let line = spell::declare(&name.text, dtype, shape, value, held)?;
-        let cty = spell::declared_type(dtype, shape, held)?;
+        let mode = if self.banded() {
+            spell::Mode::Banded
+        } else {
+            spell::Mode::Plain
+        };
+        let line = spell::declare(&name.text, dtype, shape, value, held, mode)?;
+        let cty = spell::declared_type(dtype, shape, held, mode)?;
         self.record(name, cty, Some(value.to_string()), line, true);
         Ok(())
     }
