@@ -45,20 +45,46 @@ fn refuse_unwritten(unit: &Unit) -> Result<(), Refusal> {
     }
 }
 
+/// The lines around the body of one path of a two-path unit: the staged-rows frame over the
+/// path's own sinks when the unit serves several rows per block, else the plain lane loop.
+fn path_frame(
+    ctx: *mut RxCtx,
+    input: &Render,
+    geometry: &Geometry,
+    sinks: &[u32],
+) -> Result<(String, String), Refusal> {
+    let unit = input.unit;
+    if unit.rows > 1 {
+        return super::staged::frame(ctx, sinks, unit.rows, &unit.build);
+    }
+    Ok((
+        prologue::index_prologue(geometry),
+        prologue::index_epilogue().to_string(),
+    ))
+}
+
+/// One path of a two-path unit: its frame (opened, closed) and its body.
+struct Path<'a> {
+    /// The lines that open and close the path's lane loop.
+    frame: &'a (String, String),
+    /// The path's body.
+    body: &'a str,
+}
+
 /// The entry lines of a two-path unit: a branch on the fused-steps word between the single step's
 /// lane loop and the fused
 /// one, each opened by its own marker statement so the compiler keeps the two sides apart.
-fn two_path_lines(geometry: &Geometry, single: &str, fused: &str) -> Result<Vec<String>, Refusal> {
+fn two_path_lines(single: &Path, fused: &Path) -> Result<Vec<String>, Refusal> {
     let word = format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
         binding_name("lookup", "fused_steps")?
     );
-    let path = |label: &str, body: &str| {
+    let path = |label: &str, p: &Path| {
         vec![
             format!("    asm volatile(\"// hawk: {label}\");"),
-            prologue::index_prologue(geometry),
-            body.to_string(),
-            prologue::index_epilogue().to_string(),
+            p.frame.0.clone(),
+            p.body.to_string(),
+            p.frame.1.clone(),
         ]
     };
     let mut lines = vec![format!("    if ({word} == 1) {{")];
@@ -238,8 +264,21 @@ fn two_path_entry(
 ) -> Result<(Vec<String>, Vec<String>), Refusal> {
     let unit = input.unit;
     let two_path::BodyParts { single, fused, .. } = two_path::parts(ctx, walk, unit)?;
+    let step_sinks = two_path::step_of(unit).map_or(&[][..], |step| &step.sinks[..]);
+    let single_frame = path_frame(ctx, input, geometry, step_sinks)?;
+    let fused_frame = path_frame(ctx, input, geometry, &unit.sinks)?;
+    let lines = two_path_lines(
+        &Path {
+            frame: &single_frame,
+            body: &single,
+        },
+        &Path {
+            frame: &fused_frame,
+            body: &fused,
+        },
+    )?;
     let Some(split) = lane_split_of(ctx, walk, unit, w)? else {
-        return Ok((two_path_lines(geometry, &single, &fused)?, vec![]));
+        return Ok((lines, vec![]));
     };
     let signature = prologue::entry_signature(w, &unit.name, unit.build.launch_bounds)?;
     let counts_finished = split.guard.is_some();
@@ -252,7 +291,7 @@ fn two_path_entry(
         plain_prologue: prologue::index_prologue(&Geometry::default()),
     };
     let fast = persist::fast_entries(&cut, &single, geometry.active.is_some())?;
-    Ok((two_path_lines(geometry, &single, &fused)?, fast))
+    Ok((lines, fast))
 }
 
 /// The unit's text and facts, from the unit, the body written for it and the contract the frame
@@ -270,15 +309,13 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
     let geometry = geometry_of(unit);
     let runs = &input.needs.runs;
     let step = two_path::step_of(unit).is_some();
-    if step && (unit.rows > 1 || !runs.is_empty() || !sum_sinks.is_empty()) {
-        return Err(nib(
-            "a two-path unit with staged rows, run commits or sample sums",
-        ));
+    if step && (!runs.is_empty() || !sum_sinks.is_empty()) {
+        return Err(nib("a two-path unit with run commits or sample sums"));
     }
-    let framed = framed_lines(ctx, input, &geometry, &sum_sinks, &mode)?;
     let (looped, fast) = if step {
         two_path_entry(ctx, walk, input, &w, &geometry)?
     } else {
+        let framed = framed_lines(ctx, input, &geometry, &sum_sinks, &mode)?;
         (unit::with_runs(framed, runs), vec![])
     };
     let exports = unit::exports(&unit.exports, true)?;
