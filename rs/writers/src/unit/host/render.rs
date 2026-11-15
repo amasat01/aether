@@ -550,7 +550,7 @@ fn companion_folds(
 ) -> Result<Vec<String>, Refusal> {
     let mut lines = vec![];
     for (comp, target) in companions {
-        lines.extend([signature(&format!("{name}__fold_{target}")), "{".into(), unpack(ctx, walk, w)?,
+        lines.extend([signature(&fold_name(name, target)), "{".into(), unpack(ctx, walk, w)?,
             "    const std::int64_t hawk_end = base + count;\n    for (std::int64_t hawk_i = base; hawk_i < hawk_end; ++hawk_i) {\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));\n        (void)hawk_i;\n        (void)nSamples;".into(),
             format!("        hawk_abi::fold_companion({}, {}, i);", binding_name("accum_out", target)?, binding_name("accum_out", comp)?), "    }".into(), "}".into(), String::new()]);
     }
@@ -849,6 +849,17 @@ fn sample_sum_frame(
     };
     let closed = format!("{skip}        if ((hawk_i & 31) == 31 || hawk_i + 1 == hawk_hi) {{\n            hawk_row = hawk_i >> 5;\n            hawk_abi::sampleSumRow_<{width}, {code}>(hawk_ss_rows, hawk_ss_store);\n        }}\n    }}");
     Ok((opened, closed))
+}
+
+/// The name of the entry that folds the companion plane of `target` into it, for the unit's entry `name`.
+fn fold_name(name: &str, target: &str) -> String {
+    format!("{name}__fold_{target}")
+}
+
+/// The symbol the host text exports for the entry that folds a companion plane into `target`, for the unit's
+/// entry `name`.
+pub fn fold_entry(name: &str, target: &str) -> String {
+    exported(&fold_name(name, target))
 }
 
 /// The symbol the host text exports for the entry named `name`: the one place that names it.

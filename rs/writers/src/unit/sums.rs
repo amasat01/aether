@@ -56,6 +56,39 @@ pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumS
     Ok(sinks)
 }
 
+/// The row plane of one sample-sum sink: the cell it fills and the plane's position among the entry's
+/// arguments.
+pub struct RowPlane {
+    /// The name of the cell the sink fills.
+    pub cell: String,
+    /// The position of the plane in the argument list.
+    pub slot: usize,
+}
+
+/// The row planes of the sample-sum sinks among `sinks`, in order; `slots` are the entry's arguments.
+pub fn row_planes(
+    ctx: *mut RxCtx,
+    sinks: &[u32],
+    slots: &[crate::contract::types::Slot],
+) -> Result<Vec<RowPlane>, Refusal> {
+    let text =
+        |node: u32, field: &str| door::field_text(ctx, node, field).map(Option::unwrap_or_default);
+    sample_sum_nodes(ctx, sinks)?
+        .into_iter()
+        .map(|node| {
+            let name = text(node, "name")?;
+            let slot = slots
+                .iter()
+                .position(|slot| slot.name == name)
+                .ok_or_else(|| fault("sample-sum sink without a slot"))?;
+            Ok(RowPlane {
+                cell: text(node, "cell")?,
+                slot,
+            })
+        })
+        .collect()
+}
+
 /// The code of the operation the row sum takes as a template argument.
 pub fn op_code(op: &str) -> Result<i64, Refusal> {
     match op {
