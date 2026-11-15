@@ -2,10 +2,11 @@
 //! moved to the operands, `component_at(op(a, b), k)` becomes `op(component_at(a, k), b')` (a
 //! rank-0 operand stays), so one element is computed and the vector is never built. The new nodes
 //! are made through the door and the unit renders over the new canonical walk.
-use crate::body::values::{literal_of, text_field};
+use crate::body::values::literal_of;
 use crate::body::Class;
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, rx_make_op_like, rx_rebuild, rx_substitute, RxCtx};
+use crate::kind::OpKind;
 use crate::refuse::{fault, Refusal};
 use std::collections::HashMap;
 use std::ffi::c_int;
@@ -13,12 +14,66 @@ use std::ffi::c_int;
 /// The sink classes whose value operand the rewrite may replace.
 const VALUE_SINKS: [&str; 4] = ["Finish", "SampleSum", "AccumWrite", "Assign"];
 
-/// The element-wise kinds the manifest lists, and the nodes made so far (by value and index).
+/// Whether an operation acts on each element alone: the binary and unary math and the ternary
+/// forms.
+fn is_elementwise(kind: OpKind) -> bool {
+    use OpKind::*;
+    matches!(
+        kind,
+        Add | Sub
+            | Mul
+            | Div
+            | Pow
+            | Min
+            | Max
+            | Atan2
+            | Hypot
+            | Copysign
+            | Fmod
+            | Remainder
+            | Fdim
+            | Neg
+            | Abs
+            | Sqrt
+            | Rsqrt
+            | Exp
+            | Log
+            | Sin
+            | Cos
+            | Tan
+            | Tanh
+            | Asin
+            | Acos
+            | Atan
+            | Floor
+            | Exp2
+            | Expm1
+            | Log2
+            | Log10
+            | Log1p
+            | Cbrt
+            | Sinh
+            | Cosh
+            | Asinh
+            | Acosh
+            | Atanh
+            | Ceil
+            | Trunc
+            | Round
+            | Rint
+            | Sign
+            | Erf
+            | Erfc
+            | Spacing
+            | Fma
+            | Clip
+    )
+}
+
+/// The rewrite of reads over element-wise values: the nodes made so far (by value and index).
 struct Pusher {
     /// The IR context the rewrite builds nodes in.
     ctx: *mut RxCtx,
-    /// The operation kinds that act on each element alone.
-    elementwise: Vec<String>,
     /// Nodes already rewritten, by (node, read) pair.
     memo: HashMap<(u32, u32), u32>,
 }
@@ -40,19 +95,15 @@ impl Pusher {
 
     /// An element-wise operation over a vector.
     fn is_elementwise_vector(&self, node: u32) -> Result<bool, Refusal> {
-        if !door::class_is(self.ctx, node, "Op")? || self.rank(node)? != 1 {
+        let Some(kind) = OpKind::of_op(self.ctx, node)? else {
             return Ok(false);
-        }
-        Ok(self
-            .elementwise
-            .contains(&text_field(self.ctx, node, "kind")?))
+        };
+        Ok(self.rank(node)? == 1 && is_elementwise(kind))
     }
 
     /// A runtime-index read, without a literal, of an element-wise vector.
     fn is_pushable(&self, node: u32) -> Result<bool, Refusal> {
-        if !door::class_is(self.ctx, node, "Op")?
-            || text_field(self.ctx, node, "kind")? != "component_at"
-        {
+        if OpKind::of_op(self.ctx, node)? != Some(OpKind::ComponentAt) {
             return Ok(false);
         }
         let operands = door::operands(self.ctx, node)?;
@@ -62,8 +113,8 @@ impl Pusher {
 
     /// A new operation node of the given kind over the operands, carrying the literal of the node
     /// `like` (none when `None`).
-    fn make_op(&self, kind: &str, operands: &[u32], like: Option<u32>) -> Result<u32, Refusal> {
-        let kind = std::ffi::CString::new(kind).map_err(fault)?;
+    fn make_op(&self, kind: OpKind, operands: &[u32], like: Option<u32>) -> Result<u32, Refusal> {
+        let kind = std::ffi::CString::new(kind.name()).map_err(fault)?;
         let mut out = 0u32;
         let code = unsafe {
             rx_make_op_like(
@@ -94,10 +145,10 @@ impl Pusher {
             for operand in door::operands(self.ctx, value)? {
                 parts.push(self.element(operand, index)?);
             }
-            let kind = text_field(self.ctx, value, "kind")?;
-            self.make_op(&kind, &parts, Some(value))?
+            let kind = OpKind::of(self.ctx, value)?;
+            self.make_op(kind, &parts, Some(value))?
         } else {
-            self.make_op("component_at", &[value, index], None)?
+            self.make_op(OpKind::ComponentAt, &[value, index], None)?
         };
         self.memo.insert((value, index), made);
         Ok(made)
@@ -130,11 +181,6 @@ pub(crate) fn push_reads(
 ) -> Result<(u32, Vec<u32>), Refusal> {
     let mut pusher = Pusher {
         ctx,
-        elementwise: ["ELEMENTWISE_BINARY", "UNARY_MATH", "ELEMENTWISE_TERNARY"]
-            .iter()
-            .map(|name| door::constant_list(ctx, name))
-            .collect::<Result<Vec<_>, _>>()?
-            .concat(),
         memo: HashMap::new(),
     };
     let mut reads = vec![];

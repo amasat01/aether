@@ -12,7 +12,7 @@ use crate::unit::Meta;
 
 /// The result of a render: the text, the body inside it, the entry name and the rest (target, mode,
 /// vectorised, box) as JSON.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HostSource {
     /// The unit's whole translation-unit text.
     pub text: String,
@@ -31,7 +31,7 @@ pub struct HostSource {
 impl HostSource {
     /// The symbol the text exports for its entry: a host entry carries the host writer's suffix, a device kernel is its name.
     pub fn symbol(&self) -> String {
-        if self.meta.target == "host" {
+        if self.meta.target == Target::Host {
             crate::unit::host::render::exported(&self.entry)
         } else {
             self.entry.clone()
@@ -92,6 +92,15 @@ fn body_of(ctx: *mut RxCtx, prepared: &Prepared) -> Result<(String, bool, Option
     Ok((rendered.text, random, Some(rendered.needs)))
 }
 
+/// The target a binding names in text: `cuda` is the device, anything else the host.
+fn target_named(text: &str) -> Target {
+    if text == "cuda" {
+        Target::Device
+    } else {
+        Target::Host
+    }
+}
+
 /// The unit a request describes: its typed JSON (it carries `"v"`), or, in a build with the
 /// `old-contract` feature, the old shape.
 fn read_unit(json: &str, target: Target) -> Result<Unit, Refusal> {
@@ -129,13 +138,9 @@ fn lowered(
     ctx: *mut RxCtx,
     walk: u32,
     contract_json: &str,
-    target: &str,
+    target: Target,
 ) -> Result<Prepared, Refusal> {
-    let device = target == "device";
-    let mut unit = read_unit(
-        contract_json,
-        if device { Target::Device } else { Target::Host },
-    )?;
+    let mut unit = read_unit(contract_json, target)?;
     let supplied = match &unit.body {
         BodySource::Walk => None,
         BodySource::Given(given) => Some((given.text.clone(), given.draws_random)),
@@ -165,12 +170,7 @@ pub fn entry_body(
     contract_json: &str,
     target: &str,
 ) -> Result<String, Refusal> {
-    let prepared = lowered(
-        ctx,
-        walk,
-        contract_json,
-        if target == "cuda" { "device" } else { "host" },
-    )?;
+    let prepared = lowered(ctx, walk, contract_json, target_named(target))?;
     Ok(body_of(ctx, &prepared)?.0)
 }
 
@@ -194,13 +194,13 @@ fn render_with(
 
 /// The host unit of a walk and a build contract.
 pub fn host_render(ctx: *mut RxCtx, walk: u32, contract_json: &str) -> Result<HostSource, Refusal> {
-    let prepared = lowered(ctx, walk, contract_json, "host")?;
+    let prepared = lowered(ctx, walk, contract_json, Target::Host)?;
     render_with(ctx, prepared, crate::unit::host::render::render)
 }
 
 /// The device unit of a walk and a build contract.
 pub fn cuda_render(ctx: *mut RxCtx, walk: u32, contract_json: &str) -> Result<HostSource, Refusal> {
-    let prepared = lowered(ctx, walk, contract_json, "device")?;
+    let prepared = lowered(ctx, walk, contract_json, Target::Device)?;
     render_with(ctx, prepared, crate::unit::device::render::render)
 }
 
@@ -209,14 +209,11 @@ pub fn cuda_render(ctx: *mut RxCtx, walk: u32, contract_json: &str) -> Result<Ho
 #[cfg(feature = "old-contract")]
 pub fn typed_refusal(contract_json: &str, target: &str) -> Result<Option<String>, String> {
     let recorded = Contract::parse(contract_json).map_err(|refusal| refusal.reason)?;
-    let target = if target == "cuda" {
-        Target::Device
-    } else {
-        Target::Host
-    };
-    Ok(crate::contract::old::typed_of(&recorded, target)
-        .err()
-        .map(|refusal| refusal.reason))
+    Ok(
+        crate::contract::old::typed_of(&recorded, target_named(target))
+            .err()
+            .map(|refusal| refusal.reason),
+    )
 }
 
 /// The shadow check of the recorded needs: for a body the walk's own render wrote, the differences
@@ -230,6 +227,11 @@ pub fn needs_check(
     contract_json: &str,
     target: &str,
 ) -> Result<Option<Vec<String>>, Refusal> {
+    let target = if target == "device" {
+        Target::Device
+    } else {
+        Target::Host
+    };
     let prepared = lowered(ctx, walk, contract_json, target)?;
     let (body, _, recorded) = body_of(ctx, &prepared)?;
     Ok(recorded.map(|recorded| {
@@ -258,13 +260,8 @@ pub fn needs_check(
 #[cfg(feature = "old-contract")]
 pub fn wire_refusal(contract_json: &str, target: &str) -> Result<Option<String>, String> {
     let recorded = Contract::parse(contract_json).map_err(|refusal| refusal.reason)?;
-    let target = if target == "cuda" {
-        Target::Device
-    } else {
-        Target::Host
-    };
-    let unit =
-        crate::contract::old::typed_of(&recorded, target).map_err(|refusal| refusal.reason)?;
+    let unit = crate::contract::old::typed_of(&recorded, target_named(target))
+        .map_err(|refusal| refusal.reason)?;
     Ok(match Unit::from_json(&unit.to_json()) {
         Ok(again) if again == unit => None,
         Ok(_) => Some("the unit changed on the wire".to_string()),

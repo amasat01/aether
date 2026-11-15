@@ -13,6 +13,7 @@ use crate::body::{placed, Frame, Out};
 use crate::body::{Class, Name, NameKind};
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, same_index, through, RxCtx};
+use crate::kind::OpKind;
 use crate::refuse::{fault, nib, Refusal};
 use crate::spell::carry_type;
 use std::collections::{HashMap, HashSet};
@@ -96,18 +97,18 @@ fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), Refusal> {
     if class != Class::Op {
         return Ok(unknown);
     }
-    let kind = text_field(ctx, h, "kind")?;
-    if !matches!(kind.as_str(), "add" | "min" | "max" | "cast") {
+    let kind = OpKind::of(ctx, h)?;
+    if !matches!(kind, OpKind::Add | OpKind::Min | OpKind::Max | OpKind::Cast) {
         return Ok(unknown);
     }
     let parts = door::operands(ctx, h)?
         .into_iter()
         .map(|o| interval(ctx, o))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(match kind.trim_matches('\'') {
-        "add" => (parts[0].0 + parts[1].0, parts[0].1 + parts[1].1),
-        "min" => (parts[0].0.min(parts[1].0), parts[0].1.min(parts[1].1)),
-        "max" => (parts[0].0.max(parts[1].0), parts[0].1.max(parts[1].1)),
+    Ok(match kind {
+        OpKind::Add => (parts[0].0 + parts[1].0, parts[0].1 + parts[1].1),
+        OpKind::Min => (parts[0].0.min(parts[1].0), parts[0].1.min(parts[1].1)),
+        OpKind::Max => (parts[0].0.max(parts[1].0), parts[0].1.max(parts[1].1)),
         _ => (
             if parts[0].0.is_finite() {
                 parts[0].0.trunc()
@@ -126,7 +127,7 @@ fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), Refusal> {
 /// `(base, offset)` of `key = base + constants`; the base is none when the key is all constant.
 fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), Refusal> {
     let (mut key, mut offset) = (through(ctx, key)?, 0i64);
-    while door::class_is(ctx, key, "Op")? && text_field(ctx, key, "kind")? == "add" {
+    while OpKind::of_op(ctx, key)? == Some(OpKind::Add) {
         let operands = door::operands(ctx, key)?;
         let (a, b) = (through(ctx, operands[0])?, through(ctx, operands[1])?);
         if door::class_is(ctx, b, "Const")? {
@@ -147,11 +148,10 @@ fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), Refusal> {
 
 /// Whether a node is a store at a runtime index.
 fn is_store(f: &Frame, h: u32) -> Result<bool, Refusal> {
-    Ok(door::class_is(f.ctx(), h, "Op")?
-        && matches!(
-            text_field(f.ctx(), h, "kind")?.as_str(),
-            "set_component_at" | "add_at"
-        ))
+    Ok(matches!(
+        OpKind::of_op(f.ctx(), h)?,
+        Some(OpKind::SetComponentAt | OpKind::AddAt)
+    ))
 }
 
 impl Plan {
@@ -223,14 +223,15 @@ impl Plan {
     /// by link.
     fn is_committed(&self, f: &Frame, node: u32) -> Result<bool, Refusal> {
         let (mut chain, mut base) = (false, node);
-        while door::class_is(f.ctx(), base, "Op")? && text_field(f.ctx(), base, "kind")? == "add_at"
-        {
+        while OpKind::of_op(f.ctx(), base)? == Some(OpKind::AddAt) {
             chain = true;
             base = through(f.ctx(), door::operands(f.ctx(), base)?[0])?;
         }
         Ok(chain
-            && door::class_is(f.ctx(), base, "Op")?
-            && matches!(text_field(f.ctx(), base, "kind")?.as_str(), "vec" | "splat"))
+            && matches!(
+                OpKind::of_op(f.ctx(), base)?,
+                Some(OpKind::Vec | OpKind::Splat)
+            ))
     }
 
     /// The loop-body sinks that accumulate per iteration (an own-column assign of an `add_at` chain
@@ -286,7 +287,7 @@ impl Plan {
             through(ctx, operands[1])?,
             through(ctx, operands[2])?,
         );
-        let mut acc = text_field(f.ctx(), node, "kind")? == "add_at";
+        let mut acc = OpKind::of_op(f.ctx(), node)? == Some(OpKind::AddAt);
         let (mut read, mut add) = (None, None);
         if !acc {
             if let Some((x, r, a)) = self.accumulate(f, node, base, key, value)? {
@@ -341,10 +342,7 @@ impl Plan {
         value: u32,
     ) -> Result<Option<(u32, u32, u32)>, Refusal> {
         let ctx = f.ctx();
-        if !(door::class_is(ctx, value, "Op")?
-            && text_field(f.ctx(), value, "kind")? == "add"
-            && self.users(value) == [node])
-        {
+        if !(OpKind::of_op(ctx, value)? == Some(OpKind::Add) && self.users(value) == [node]) {
             return Ok(None);
         }
         let operands = door::operands(ctx, value)?;
@@ -356,10 +354,10 @@ impl Plan {
             {
                 continue;
             }
-            let kind = text_field(f.ctx(), read, "kind")?;
-            let same = if kind == "component_at" {
+            let kind = OpKind::of(f.ctx(), read)?;
+            let same = if kind == OpKind::ComponentAt {
                 same_index(ctx, through(ctx, door::operands(ctx, read)?[1])?, key)?
-            } else if kind == "component" && door::class_is(ctx, key, "Const")? {
+            } else if kind == OpKind::Component && door::class_is(ctx, key, "Const")? {
                 let wanted = number(ctx, key)?;
                 matches!(component_index(ctx, read)?.as_slice(), [only] if *only as f64 == wanted)
             } else {
@@ -450,7 +448,7 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
         return Ok(None);
     }
     let (mut node, mut links) = (door::operands(ctx, sink)?[0], vec![]);
-    while door::class_is(ctx, node, "Op")? && text_field(f.ctx(), node, "kind")? == "add_at" {
+    while OpKind::of_op(ctx, node)? == Some(OpKind::AddAt) {
         let operands = door::operands(ctx, node)?;
         links.push((operands[1], operands[2]));
         node = operands[0];
@@ -459,8 +457,8 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
     if links.is_empty() || !door::class_is(ctx, node, "Op")? {
         return Ok(None);
     }
-    let slots = match text_field(f.ctx(), node, "kind")?.as_str() {
-        "splat" | "vec" => door::operands(ctx, node)?,
+    let slots = match OpKind::of(f.ctx(), node)? {
+        OpKind::Splat | OpKind::Vec => door::operands(ctx, node)?,
         _ => return Ok(None),
     };
     for slot in slots {
@@ -603,7 +601,7 @@ pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         let name = copy.text.clone();
         let args: Vec<String> = f.opp(p).iter().map(|&q| f.text(q).clone()).collect();
         f.declare_var(copy, carry_type(&ty.dtype, &ty.shape)?, Some(&args[0]));
-        let op = if text_field(f.ctx(), h, "kind")? == "add_at" {
+        let op = if OpKind::of(f.ctx(), h)? == OpKind::AddAt {
             "+="
         } else {
             "="

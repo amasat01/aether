@@ -1,6 +1,7 @@
 //! The C++ expression spelling of the aether writer (rank-0 subset): literals, leaves, scalar
 //! operations, stores. A construct
 //! it does not spell yet is a refusal "not in this build: <construct>".
+use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
 
 /// The prefix of the names a role's slots are bound under, none for a role that has no binding.
@@ -228,65 +229,68 @@ pub fn select(
 }
 
 /// The names of the unary math functions the emitted code calls through the library.
-const MATH_UNARY: [&str; 33] = [
-    "abs", "sqrt", "rsqrt", "exp", "log", "sin", "cos", "tan", "tanh", "asin", "acos", "atan",
-    "floor", "exp2", "expm1", "log2", "log10", "log1p", "cbrt", "sinh", "cosh", "asinh", "acosh",
-    "atanh", "ceil", "trunc", "round", "rint", "erf", "erfc", "isnan", "isinf", "isfinite",
-];
+const MATH_UNARY: [OpKind; 33] = {
+    use OpKind::*;
+    [
+        Abs, Sqrt, Rsqrt, Exp, Log, Sin, Cos, Tan, Tanh, Asin, Acos, Atan, Floor, Exp2, Expm1,
+        Log2, Log10, Log1p, Cbrt, Sinh, Cosh, Asinh, Acosh, Atanh, Ceil, Trunc, Round, Rint, Erf,
+        Erfc, Isnan, Isinf, Isfinite,
+    ]
+};
 /// The binary math functions, as (operation, library function).
-const MATH_BINARY: [(&str, &str); 9] = [
-    ("pow", "pow"),
-    ("min", "fmin"),
-    ("max", "fmax"),
-    ("atan2", "atan2"),
-    ("hypot", "hypot"),
-    ("copysign", "copysign"),
-    ("fmod", "fmod"),
-    ("remainder", "remainder"),
-    ("fdim", "fdim"),
+const MATH_BINARY: [(OpKind, &str); 9] = [
+    (OpKind::Pow, "pow"),
+    (OpKind::Min, "fmin"),
+    (OpKind::Max, "fmax"),
+    (OpKind::Atan2, "atan2"),
+    (OpKind::Hypot, "hypot"),
+    (OpKind::Copysign, "copysign"),
+    (OpKind::Fmod, "fmod"),
+    (OpKind::Remainder, "remainder"),
+    (OpKind::Fdim, "fdim"),
 ];
 /// The infix operators, as (operation, C++ operator).
-const INFIX: [(&str, &str); 12] = [
-    ("add", "+"),
-    ("sub", "-"),
-    ("mul", "*"),
-    ("div", "/"),
-    ("lt", "<"),
-    ("le", "<="),
-    ("gt", ">"),
-    ("ge", ">="),
-    ("eq", "=="),
-    ("ne", "!="),
-    ("land", "&&"),
-    ("lor", "||"),
+const INFIX: [(OpKind, &str); 12] = [
+    (OpKind::Add, "+"),
+    (OpKind::Sub, "-"),
+    (OpKind::Mul, "*"),
+    (OpKind::Div, "/"),
+    (OpKind::Lt, "<"),
+    (OpKind::Le, "<="),
+    (OpKind::Gt, ">"),
+    (OpKind::Ge, ">="),
+    (OpKind::Eq, "=="),
+    (OpKind::Ne, "!="),
+    (OpKind::Land, "&&"),
+    (OpKind::Lor, "||"),
 ];
 
 /// A rank-0 floating-point operation over the operand texts.
 /// One element of an operation over scalar texts; the helpers its text calls are pushed on `used`.
 pub fn scalar_op(
-    kind: &str,
+    kind: OpKind,
     args: &[String],
     dtype: &str,
     used: &mut Vec<Helper>,
 ) -> Result<String, Refusal> {
     let int_call = [
-        ("floordiv", "int_floordiv"),
-        ("mod", "int_mod"),
-        ("band", "int_and"),
-        ("bor", "int_or"),
-        ("bxor", "int_xor"),
-        ("shl", "int_shl"),
-        ("shr", "int_shr"),
-        ("invert", "int_invert"),
+        (OpKind::Floordiv, "int_floordiv"),
+        (OpKind::Mod, "int_mod"),
+        (OpKind::Band, "int_and"),
+        (OpKind::Bor, "int_or"),
+        (OpKind::Bxor, "int_xor"),
+        (OpKind::Shl, "int_shl"),
+        (OpKind::Shr, "int_shr"),
+        (OpKind::Invert, "int_invert"),
     ];
     let int_wrap = [
-        ("add", "int_add"),
-        ("sub", "int_sub"),
-        ("mul", "int_mul"),
-        ("neg", "int_neg"),
-        ("abs", "int_abs"),
-        ("min", "int_min"),
-        ("max", "int_max"),
+        (OpKind::Add, "int_add"),
+        (OpKind::Sub, "int_sub"),
+        (OpKind::Mul, "int_mul"),
+        (OpKind::Neg, "int_neg"),
+        (OpKind::Abs, "int_abs"),
+        (OpKind::Min, "int_min"),
+        (OpKind::Max, "int_max"),
     ];
     if let Some((_, f)) = int_call.iter().find(|m| m.0 == kind) {
         used.push(Helper::Integers);
@@ -298,14 +302,14 @@ pub fn scalar_op(
             return Ok(format!("hawk_abi::{f}({})", args.join(", ")));
         }
     }
-    if (kind == "min" || kind == "max") && (dtype == "i32" || dtype == "i64") {
+    if matches!(kind, OpKind::Min | OpKind::Max) && (dtype == "i32" || dtype == "i64") {
         used.push(Helper::Integers);
         return Ok(format!("hawk_abi::int_{kind}<Int>({})", args.join(", ")));
     }
     // HAWK's (seed, counter) draw: aether's stateless detail::uniform01 / standardNormal under the
     // seed XOR-ed with a per-kind salt
-    if args.len() == 2 && matches!(kind, "random_uniform" | "random_normal") {
-        let (f, salt) = if kind == "random_uniform" {
+    if args.len() == 2 && matches!(kind, OpKind::RandomUniform | OpKind::RandomNormal) {
+        let (f, salt) = if kind == OpKind::RandomUniform {
             ("uniform01", "0x243F6A8885A308D3ULL")
         } else {
             ("standardNormal", "0x13198A2E03707344ULL")
@@ -313,14 +317,23 @@ pub fn scalar_op(
         used.push(Helper::Random);
         return Ok(format!("aether::random::detail::{f}<Real>(static_cast<std::uint64_t>({}) ^ {salt}, static_cast<aether::offset_t>(hawk_i), static_cast<std::uint64_t>({}))", args[0], args[1]));
     }
-    if kind == "spacing" && args.len() == 1 {
+    if kind == OpKind::Spacing && args.len() == 1 {
         used.push(Helper::Spacing);
         return Ok(format!("hawk_abi::spacing({})", args[0]));
     }
-    if matches!(kind, "dot" | "norm" | "sum" | "component" | "sign") || kind.starts_with("random") {
+    if matches!(
+        kind,
+        OpKind::Dot
+            | OpKind::Norm
+            | OpKind::Sum
+            | OpKind::Component
+            | OpKind::Sign
+            | OpKind::RandomUniform
+            | OpKind::RandomNormal
+    ) {
         return Err(nib(format!("scalar op {kind}")));
     }
-    if MATH_UNARY.contains(&kind) && args.len() == 1 && kind != "sign" {
+    if MATH_UNARY.contains(&kind) && args.len() == 1 {
         return Ok(format!("aether::math::{kind}({})", args[0]));
     }
     if let Some((_, f)) = MATH_BINARY.iter().find(|m| m.0 == kind) {
@@ -334,13 +347,15 @@ pub fn scalar_op(
         }
     }
     match (kind, args.len()) {
-        ("spacing", 1) => {
+        (OpKind::Spacing, 1) => {
             used.push(Helper::Spacing);
             Ok(format!("hawk_abi::spacing({})", args[0]))
         }
-        ("neg", 1) => Ok(format!("(-{})", args[0])),
-        ("lnot", 1) => Ok(format!("(!{})", args[0])),
-        ("fma", 3) | ("clip", 3) => Ok(format!("aether::math::{kind}({})", args.join(", "))),
+        (OpKind::Neg, 1) => Ok(format!("(-{})", args[0])),
+        (OpKind::Lnot, 1) => Ok(format!("(!{})", args[0])),
+        (OpKind::Fma, 3) | (OpKind::Clip, 3) => {
+            Ok(format!("aether::math::{kind}({})", args.join(", ")))
+        }
         _ => Err(nib(format!("op {kind}"))),
     }
 }
@@ -444,8 +459,8 @@ pub fn row_leaf(role: &str, name: &str) -> Result<String, Refusal> {
 /// type and the
 /// proxy source of a component read.
 pub struct TensorOp<'a> {
-    /// The op's name.
-    pub kind: &'a str,
+    /// The op's kind.
+    pub kind: OpKind,
     /// The operands, already spelled.
     pub args: &'a [String],
     /// The rank of each operand.
@@ -490,7 +505,7 @@ pub fn tensor_op(
 fn structure_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let (args, shape, dtype) = (op.args, op.shape, op.dtype);
     Some(match op.kind {
-        "component" => {
+        OpKind::Component => {
             let ks: Vec<String> = op.component.iter().map(i64::to_string).collect();
             // a proxy source is read in place: `.at` on a mutable plane, `.eval` on a read-only one
             Ok(match op.lazy_source {
@@ -499,9 +514,9 @@ fn structure_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
                 None => format!("{}.eval<{}>(i)", args[0], ks.join(", ")),
             })
         }
-        "splat" => cast(&args[0], dtype)
+        OpKind::Splat => cast(&args[0], dtype)
             .map(|c| format!("aether::constant<aether::extents<{}>>({c})", ext(shape))),
-        "vec" if !args.is_empty() => element(dtype)
+        OpKind::Vec if !args.is_empty() => element(dtype)
             .map(|e| format!("aether::Item<{e}, {}>{{{}}}", ext(shape), args.join(", "))),
         _ => return None,
     })
@@ -518,8 +533,8 @@ fn arithmetic_op(
         return None;
     }
     Some(match kind {
-        "add" | "sub" => (|| {
-            let sym = if kind == "add" { "+" } else { "-" };
+        OpKind::Add | OpKind::Sub => (|| {
+            let sym = if kind == OpKind::Add { "+" } else { "-" };
             let l = if ranks[0] == 0 {
                 broadcast(op, hoist, &args[0])?
             } else {
@@ -532,11 +547,11 @@ fn arithmetic_op(
             };
             Ok(format!("({l} {sym} {r})"))
         })(),
-        "mul" | "div" => product_or_quotient(op, hoist),
-        "min" | "max" | "pow" => (|| {
+        OpKind::Mul | OpKind::Div => product_or_quotient(op, hoist),
+        OpKind::Min | OpKind::Max | OpKind::Pow => (|| {
             let f = match kind {
-                "min" => "cwiseMin",
-                "max" => "cwiseMax",
+                OpKind::Min => "cwiseMin",
+                OpKind::Max => "cwiseMax",
                 _ => "cwisePow",
             };
             let l = if ranks[0] > 0 {
@@ -556,17 +571,17 @@ fn product_or_quotient(
     hoist: &mut dyn FnMut(String) -> String,
 ) -> Result<String, Refusal> {
     let (kind, args, ranks) = (op.kind, op.args, op.ranks);
-    let sym = if kind == "mul" { "*" } else { "/" };
-    if ranks[0] == 0 && kind == "mul" {
+    let sym = if kind == OpKind::Mul { "*" } else { "/" };
+    if ranks[0] == 0 && kind == OpKind::Mul {
         return Ok(format!("({} * {})", cast(&args[0], op.dtype)?, args[1]));
     }
     if ranks[1] == 0 {
         return Ok(format!("({} {sym} {})", args[0], cast(&args[1], op.dtype)?));
     }
-    if kind == "mul" && ranks[0] == ranks[1] {
+    if kind == OpKind::Mul && ranks[0] == ranks[1] {
         return Ok(format!("{}.cwiseMul({})", args[0], args[1]));
     }
-    if kind == "div" {
+    if kind == OpKind::Div {
         let left = if ranks[0] > 0 {
             args[0].clone()
         } else {
@@ -581,12 +596,22 @@ fn product_or_quotient(
 fn unary_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let (kind, args) = (op.kind, op.args);
     Some(match kind {
-        "neg" => Ok(format!("({} * static_cast<Real>(-1))", args[0])),
-        "abs" => Ok(format!("aether::cwiseAbs({})", args[0])),
-        "sqrt" | "rsqrt" | "exp" | "log" | "sin" | "cos" | "asin" | "acos" | "atan" | "tan"
-        | "tanh" => {
-            let mut f = kind.to_string();
-            f.replace_range(..1, &kind[..1].to_uppercase());
+        OpKind::Neg => Ok(format!("({} * static_cast<Real>(-1))", args[0])),
+        OpKind::Abs => Ok(format!("aether::cwiseAbs({})", args[0])),
+        OpKind::Sqrt
+        | OpKind::Rsqrt
+        | OpKind::Exp
+        | OpKind::Log
+        | OpKind::Sin
+        | OpKind::Cos
+        | OpKind::Asin
+        | OpKind::Acos
+        | OpKind::Atan
+        | OpKind::Tan
+        | OpKind::Tanh => {
+            let name = kind.name();
+            let mut f = name.to_string();
+            f.replace_range(..1, &name[..1].to_uppercase());
             Ok(format!("aether::cwise{f}({})", args[0]))
         }
         _ => return None,
@@ -599,12 +624,14 @@ fn product_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     let one = args.len() == 1;
     let two = args.len() == 2;
     Some(Ok(match kind {
-        "norm" | "sum" | "transpose" if one && !(kind == "sum" && ranks[0] == 2) => {
+        OpKind::Norm | OpKind::Sum | OpKind::Transpose
+            if one && !(kind == OpKind::Sum && ranks[0] == 2) =>
+        {
             format!("{}.{kind}()", args[0])
         }
-        "mv" | "mm" if two => format!("({} * {})", args[0], args[1]),
-        "outer" if two => format!("aether::outer({}, {})", args[0], args[1]),
-        "dot" | "cross" if two => format!("{}.{kind}({})", args[0], args[1]),
+        OpKind::Mv | OpKind::Mm if two => format!("({} * {})", args[0], args[1]),
+        OpKind::Outer if two => format!("aether::outer({}, {})", args[0], args[1]),
+        OpKind::Dot | OpKind::Cross if two => format!("{}.{kind}({})", args[0], args[1]),
         _ => return None,
     }))
 }

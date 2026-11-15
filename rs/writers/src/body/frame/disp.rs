@@ -1,7 +1,7 @@
 //! The disposition of every position, computed once before it renders, and the one function that
 //! tells whether a rendered value is named, in each of the three scopes.
 use crate::body::frame::table::Disp;
-use crate::body::{placed, Class, Frame};
+use crate::body::{placed, Class, Frame, OpKind};
 use crate::refuse::Refusal;
 
 /// Where a value is being named.
@@ -57,9 +57,8 @@ impl Frame<'_> {
         let class = &self.node(p).class;
         let leaf_valued = self.leaf_valued(p)?;
         let inline = self.disp(p) == Disp::Inline;
-        let proxy_read = *class == Class::Op
-            && self.field_text(self.node(p).h, "kind")? == "component"
-            && self.is_lazy(self.opp(p)[0]);
+        let proxy_read =
+            self.node(p).kind == Some(OpKind::Component) && self.is_lazy(self.opp(p)[0]);
         Ok(match scope {
             ScopeKind::Top => {
                 let crossed = role == Some("mat_in")

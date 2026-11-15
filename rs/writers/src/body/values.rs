@@ -1,7 +1,7 @@
 //! Values that are read, not computed: leaves, indexed reads, literals, plane extents, the sample
 //! index and selects.
 use super::{Frame, Out};
-use crate::body::Class;
+use crate::body::{kind_of, Class, OpKind};
 use crate::ir::door;
 use crate::refuse::{nib, Refusal};
 use crate::spell::{self};
@@ -33,13 +33,15 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let uses = reader_kinds(f, p)?;
     let only_components = !uses.is_empty()
         && uses.iter().all(|(kind, slot, _)| {
-            *slot == 0 && matches!(kind.as_str(), "component" | "component_at")
+            *slot == 0 && matches!(kind, Some(OpKind::Component | OpKind::ComponentAt))
         });
     // a read-only row read at a runtime index is served by the plane's own view, at any width
     let runtime = only_components
         && matches!(role.as_str(), "vec_in" | "per_sample")
         && rank == 1
-        && uses.iter().any(|(kind, _, _)| kind == "component_at");
+        && uses
+            .iter()
+            .any(|(kind, _, _)| *kind == Some(OpKind::ComponentAt));
     // a plane a library call or a team store reads is bound as its proxy too
     let proxy = rank > 0
         && !matches!(role.as_str(), "mutable" | "uniform" | "nsamples")
@@ -196,12 +198,10 @@ fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, Refusal> {
         ) {
             return Ok(false);
         }
-        if class == Class::Op
-            && matches!(
-                text_field(f.ctx(), h, "kind")?.as_str(),
-                "raw_device" | "component_at" | "set_component_at" | "add_at"
-            )
-        {
+        if matches!(
+            kind_of(f.ctx(), h, &class)?,
+            Some(OpKind::RawDevice | OpKind::ComponentAt | OpKind::SetComponentAt | OpKind::AddAt)
+        ) {
             return Ok(false);
         }
         stack.extend(door::operands(f.ctx(), h)?);
@@ -209,10 +209,13 @@ fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, Refusal> {
     Ok(true)
 }
 
-/// How a leaf is read: (op kind or class, operand index) of each reader. A loop reads its carried
+/// How a leaf is read: (op kind, none for another class; operand index) of each reader. A loop reads its carried
 /// initial values itself; what
 /// its body takes from outside is read by the body's own nodes, nested loops included.
-pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u32)>, Refusal> {
+pub(super) fn reader_kinds(
+    f: &Frame,
+    p: usize,
+) -> Result<Vec<(Option<OpKind>, usize, u32)>, Refusal> {
     let leaf = f.node(p).h;
     let mut uses = vec![];
     let mut loops: Vec<u32> = vec![];
@@ -224,36 +227,24 @@ pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u3
                     .unwrap_or_default()
                     .len()
             {
-                uses.push(("Loop".to_string(), slot, node.h))
+                uses.push((None, slot, node.h))
             }
             loops.push(node.h);
         } else {
-            uses.push((
-                if node.class == Class::Op {
-                    text_field(f.ctx(), node.h, "kind")?
-                } else {
-                    node.class.to_string()
-                },
-                slot,
-                node.h,
-            ))
+            uses.push((node.kind, slot, node.h))
         }
     }
     while let Some(lp) = loops.pop() {
         for h in door::body_nodes(f.ctx(), lp)? {
             let class = Class::of(f.ctx(), h)?;
-            let kind = if class == Class::Op {
-                text_field(f.ctx(), h, "kind")?
-            } else {
-                class.to_string()
-            };
+            let kind = kind_of(f.ctx(), h, &class)?;
             if class == Class::Loop {
                 let carries = door::field_refs(f.ctx(), h, "carries")?
                     .unwrap_or_default()
                     .len();
                 for (slot, o) in door::operands(f.ctx(), h)?.into_iter().enumerate() {
                     if o == leaf && slot < carries {
-                        uses.push((kind.clone(), slot, h))
+                        uses.push((kind, slot, h))
                     }
                 }
                 loops.push(h);
@@ -261,7 +252,7 @@ pub(super) fn reader_kinds(f: &Frame, p: usize) -> Result<Vec<(String, usize, u3
             }
             for (slot, o) in door::operands(f.ctx(), h)?.into_iter().enumerate() {
                 if o == leaf {
-                    uses.push((kind.clone(), slot, h))
+                    uses.push((kind, slot, h))
                 }
             }
         }

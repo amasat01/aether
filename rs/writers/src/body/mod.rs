@@ -18,7 +18,8 @@ mod wide;
 
 use crate::contract::types::{Form, Guard, SinkPolicy, Unit};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::{nib, Refusal};
+pub(crate) use crate::kind::OpKind;
+use crate::refuse::{fault, nib, Refusal};
 use crate::spell::binding_name;
 pub(crate) use frame::buffer::{Buffer, Mark};
 pub(crate) use frame::class::Class;
@@ -63,12 +64,21 @@ pub(crate) fn field_text(ctx: *mut RxCtx, h: u32, f: &str) -> Result<String, Ref
     Ok(door::field_text(ctx, h, f)?.unwrap_or_default())
 }
 
+/// The kind of a node of class `class`: read for an operation, none for any other class.
+pub(crate) fn kind_of(ctx: *mut RxCtx, h: u32, class: &Class) -> Result<Option<OpKind>, Refusal> {
+    (*class == Class::Op)
+        .then(|| OpKind::of(ctx, h))
+        .transpose()
+}
+
 /// A node of the walk: its handle, class, type and operand handles.
 pub struct Node {
     /// The node's handle in the IR.
     pub h: u32,
     /// The node's class, as the writers tell classes apart.
     pub class: Class,
+    /// The kind of an operation node, read once; none for any other class.
+    pub kind: Option<OpKind>,
     /// The node's type.
     pub ty: Ty,
     /// The handles of the node's operands, in order.
@@ -212,6 +222,12 @@ impl Frame<'_> {
     pub fn field_text(&self, h: u32, f: &str) -> Result<String, Refusal> {
         field_text(self.ctx(), h, f)
     }
+    /// The kind of the operation at position `p`; a node of another class is a fault.
+    pub fn op_kind(&self, p: usize) -> Result<OpKind, Refusal> {
+        self.node(p)
+            .kind
+            .ok_or_else(|| fault(format!("node {} is not an operation", self.node(p).h)))
+    }
     /// The canonical position of a node in the walk (a node inside a loop body is refused by name).
     pub fn at(&self, h: u32) -> Result<usize, Refusal> {
         walk_position(self.ctx(), self.walk(), h)
@@ -275,8 +291,7 @@ impl Frame<'_> {
         let n = &self.node(s);
         Ok(
             ((n.class == Class::Leaf || n.class == Class::At) && n.rank() > 0)
-                || (n.class == Class::Op
-                    && matches!(self.field_text(n.h, "kind")?.as_str(), "splat" | "vec")),
+                || matches!(n.kind, Some(OpKind::Splat | OpKind::Vec)),
         )
     }
     /// Records a need of the text being written; the helper call it names is written next to this

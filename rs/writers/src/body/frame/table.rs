@@ -529,6 +529,7 @@ mod tests {
         Node {
             h,
             class: Class::Op,
+            kind: None,
             ty: Ty {
                 dtype: "f64".into(),
                 shape: vec![],

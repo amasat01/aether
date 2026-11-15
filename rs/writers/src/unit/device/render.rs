@@ -6,7 +6,7 @@
 use super::prologue::{self, Geometry, QUALIFIER};
 use super::text::*;
 use crate::body::frame::needs::Need;
-use crate::contract::types::{SinkPolicy, Unit};
+use crate::contract::types::{SinkPolicy, Target, Unit};
 use crate::ir::analysis as an;
 use crate::ir::door::RxCtx;
 use crate::lanes::device as persist;
@@ -362,7 +362,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         body: input.body.clone(),
         entry: name,
         meta: Meta {
-            target: "cuda",
+            target: Target::Device,
             mode: mode.id,
             vectorised: false,
             thread_box: unit.thread_box.clone(),

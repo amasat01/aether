@@ -2,7 +2,7 @@
 use super::{linalg, Frame, Name, NameKind, Node, Out, Span};
 use crate::body::frame::needs::Need;
 use crate::body::values::{component_index, literal_of, text_field};
-use crate::body::Class;
+use crate::body::{Class, OpKind};
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{nib, Refusal};
@@ -15,13 +15,12 @@ use crate::spell::{self};
 /// a raw block, a store), scalar spellings, and tensor spellings (library calls, rays, expression
 /// methods).
 pub fn op(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
-    let h = f.node(p).h;
-    let kind = text_field(f.ctx(), h, "kind")?;
+    let kind = f.op_kind(p)?;
     if is_absorbed(f, p)? {
         f.set_text(p, String::new());
         return Ok(Out::Bound);
     }
-    if kind == "warp_sum" {
+    if kind == OpKind::WarpSum {
         f.need(crate::body::frame::needs::Need::WarpSum);
         let value = f.text(f.opp(p)[0]).clone();
         let partial = if f.node(f.opp(p)[0]).rank() > 0 {
@@ -34,10 +33,10 @@ pub fn op(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
             None,
         ));
     }
-    if let Some(out) = rolled_fold(f, p, &kind)? {
+    if let Some(out) = rolled_fold(f, p, kind)? {
         return Ok(out);
     }
-    if kind == "vec"
+    if kind == OpKind::Vec
         && f.node(p).rank() == 2
         && f.node(p).numel() > f.unit.build.form.rolled_fold_min as usize
     {
@@ -45,31 +44,35 @@ pub fn op(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     }
     // a runtime-index read spells its own form of the plane it reads, so it records only what it embeds
     let args: Vec<String> = if matches!(
-        kind.as_str(),
-        "component_at" | "resident" | "ray_tri" | "ray_aabb" | "ray_sphere"
+        kind,
+        OpKind::ComponentAt
+            | OpKind::Resident
+            | OpKind::RayTri
+            | OpKind::RayAabb
+            | OpKind::RaySphere
     ) {
         f.opp(p).iter().map(|&q| f.peek(q).clone()).collect()
     } else {
         f.opp(p).iter().map(|&q| f.text(q).clone()).collect()
     };
-    if let Some(out) = whole_value(f, p, &kind, &args)? {
+    if let Some(out) = whole_value(f, p, kind, &args)? {
         return Ok(out);
     }
     let ranks: Vec<usize> = f.opp(p).iter().map(|&q| f.node(q).rank()).collect();
-    match scalar_text(f, p, &kind, &args, &ranks)? {
+    match scalar_text(f, p, kind, &args, &ranks)? {
         Some(text) => Ok(Out::Value(text, None)),
-        None => tensor_value(f, p, &kind, &args, &ranks),
+        None => tensor_value(f, p, kind, &args, &ranks),
     }
 }
 
 /// A product or a vector reduction past the fold threshold, spelled as its `aether::rt` twin; none
 /// for any other operation.
-fn rolled_fold(f: &mut Frame, p: usize, kind: &str) -> Result<Option<Out>, Refusal> {
+fn rolled_fold(f: &mut Frame, p: usize, kind: OpKind) -> Result<Option<Out>, Refusal> {
     let h = f.node(p).h;
     let shape = |slot: usize| f.node(f.opp(p)[slot]).ty.shape.clone();
     let (fold, size) = match kind {
-        "mv" | "mm" => (shape(0).get(1).copied().unwrap_or(0), f.node(p).numel()),
-        "dot" | "sum" | "norm" if shape(0).len() == 1 => (shape(0)[0], 1),
+        OpKind::Mv | OpKind::Mm => (shape(0).get(1).copied().unwrap_or(0), f.node(p).numel()),
+        OpKind::Dot | OpKind::Sum | OpKind::Norm if shape(0).len() == 1 => (shape(0)[0], 1),
         _ => (0, 0),
     };
     let rolled = fold + size > 0
@@ -82,7 +85,7 @@ fn rolled_fold(f: &mut Frame, p: usize, kind: &str) -> Result<Option<Out>, Refus
     if !rolled {
         return Ok(None);
     }
-    if matches!(kind, "dot" | "sum" | "norm") {
+    if matches!(kind, OpKind::Dot | OpKind::Sum | OpKind::Norm) {
         return rolled_reduction(f, p, kind).map(Some);
     }
     rolled_product(f, p, kind).map(Some)
@@ -94,32 +97,35 @@ fn rolled_fold(f: &mut Frame, p: usize, kind: &str) -> Result<Option<Out>, Refus
 fn whole_value(
     f: &mut Frame,
     p: usize,
-    kind: &str,
+    kind: OpKind,
     args: &[String],
 ) -> Result<Option<Out>, Refusal> {
     // a value placed in its plane: the host text has no planes, so the value is its own text and is
     // never named
-    if kind == "resident" && f.placed {
+    if kind == OpKind::Resident && f.placed {
         return super::placed::resident(f, p).map(Some);
     }
-    if kind == "resident" {
+    if kind == OpKind::Resident {
         // not placed (a device text, or a host text without lane planes): the value is its own text
         f.record_read(f.opp(p)[0]);
         f.set_text(p, args[0].clone());
         return Ok(Some(Out::Bound));
     }
-    if kind == "sum" && f.node(f.opp(p)[0]).rank() == 2 {
+    if kind == OpKind::Sum && f.node(f.opp(p)[0]).rank() == 2 {
         return matrix_sum(f, p).map(Some);
     }
-    if kind == "raw_device" {
+    if kind == OpKind::RawDevice {
         return raw_block(f, p, args).map(Some);
     }
-    if kind.starts_with("lstsq") {
+    if matches!(
+        kind,
+        OpKind::Lstsq | OpKind::LstsqGramSolve | OpKind::LstsqInfo
+    ) {
         return Err(nib(format!(
             "op {kind}: least squares is lowered by raptor.wings.base.lstsq before the seam"
         )));
     }
-    if matches!(kind, "set_component_at" | "add_at") {
+    if matches!(kind, OpKind::SetComponentAt | OpKind::AddAt) {
         return super::stores::storeplan::store(f, p).map(Some);
     }
     Ok(None)
@@ -128,19 +134,16 @@ fn whole_value(
 /// Refuses, in a banded unit, the operations whose banded spelling is not written: the raw
 /// forms of `exp`, `sin` and `cos`, and a float add of a product (written as a fused multiply-add);
 /// an integer add of a product is an index and has no banded form.
-fn refuse_banded_forms(f: &Frame, p: usize, kind: &str) -> Result<(), Refusal> {
+fn refuse_banded_forms(f: &Frame, p: usize, kind: OpKind) -> Result<(), Refusal> {
     if !f.banded() {
         return Ok(());
     }
-    if matches!(kind, "fma" | "exp" | "sin" | "cos") {
+    if matches!(kind, OpKind::Fma | OpKind::Exp | OpKind::Sin | OpKind::Cos) {
         return Err(nib(format!("a banded {kind} (the raw band forms)")));
     }
-    let product = |&q: &usize| {
-        f.node(q).class == Class::Op
-            && text_field(f.ctx(), f.node(q).h, "kind").is_ok_and(|k| k == "mul")
-    };
+    let product = |&q: &usize| f.node(q).kind == Some(OpKind::Mul);
     let float = matches!(f.node(p).ty.dtype.as_str(), "f64" | "f32");
-    if kind == "add" && float && f.opp(p).iter().any(product) {
+    if kind == OpKind::Add && float && f.opp(p).iter().any(product) {
         return Err(nib("a banded multiply-add (the fused form)"));
     }
     Ok(())
@@ -152,19 +155,19 @@ fn refuse_banded_forms(f: &Frame, p: usize, kind: &str) -> Result<(), Refusal> {
 fn scalar_text(
     f: &mut Frame,
     p: usize,
-    kind: &str,
+    kind: OpKind,
     args: &[String],
     ranks: &[usize],
 ) -> Result<Option<String>, Refusal> {
     let rank = f.node(p).rank();
     let dtype = f.node(p).ty.dtype.clone();
-    if kind == "clamp_index" && rank == 0 {
+    if kind == OpKind::ClampIndex && rank == 0 {
         return Ok(Some(clamp_index_text(f, p, args)));
     }
-    if kind == "sign" && rank == 0 && ranks == [0] {
+    if kind == OpKind::Sign && rank == 0 && ranks == [0] {
         return Ok(Some(sign_text(f, &args[0])));
     }
-    if kind == "cast" && rank == 0 && ranks == [0] {
+    if kind == OpKind::Cast && rank == 0 && ranks == [0] {
         let source = f.node(f.opp(p)[0]).ty.dtype.clone();
         let mut used = vec![];
         let text = spell::cast_op(&args[0], &dtype, &source, &mut used)?;
@@ -220,7 +223,7 @@ fn is_proxy(f: &Frame, text: &str) -> bool {
 fn tensor_value(
     f: &mut Frame,
     p: usize,
-    kind: &str,
+    kind: OpKind,
     args: &[String],
     ranks: &[usize],
 ) -> Result<Out, Refusal> {
@@ -228,15 +231,15 @@ fn tensor_value(
     if linalg::is_factor_kind(kind) {
         return linalg::op(f, p, kind);
     }
-    if matches!(kind, "ray_tri" | "ray_aabb" | "ray_sphere") {
+    if matches!(kind, OpKind::RayTri | OpKind::RayAabb | OpKind::RaySphere) {
         return Ok(Out::Value(ray_call(f, p, kind, args, ranks)?, None));
     }
-    if kind == "component_at" {
+    if kind == OpKind::ComponentAt {
         return super::stores::rtstore::component_at(f, p);
     }
     // a placed value is an aether expression to the whole-value ops; a static element read reads it
     // by element
-    if kind == "component" && args.first().is_some_and(|a| is_proxy(f, a)) {
+    if kind == OpKind::Component && args.first().is_some_and(|a| is_proxy(f, a)) {
         let index = component_index(f.ctx(), h)?;
         return Ok(Out::Value(
             format!("{}.at({})", args[0], join_index(&index)),
@@ -246,7 +249,7 @@ fn tensor_value(
     let args: Vec<String> = args
         .iter()
         .map(|a| {
-            if is_proxy(f, a) && kind != "component" {
+            if is_proxy(f, a) && kind != OpKind::Component {
                 format!("{a}.expr()")
             } else {
                 a.clone()
@@ -274,19 +277,19 @@ fn join_index(index: &[i64]) -> String {
 fn spell_tensor(
     f: &mut Frame,
     p: usize,
-    kind: &str,
+    kind: OpKind,
     args: &[String],
     ranks: &[usize],
 ) -> Result<Out, Refusal> {
     let h = f.node(p).h;
     let (dtype, shape) = (f.node(p).ty.dtype.clone(), f.node(p).ty.shape.clone());
-    let component = if kind == "component" {
+    let component = if kind == OpKind::Component {
         component_index(f.ctx(), h)?
     } else {
         vec![]
     };
     let source = f.opp(p).first().copied();
-    let lazy_source = if kind == "component" {
+    let lazy_source = if kind == OpKind::Component {
         source
             .filter(|&q| f.is_lazy(q))
             .map(|q| text_field(f.ctx(), f.node(q).h, "role").is_ok_and(|role| role == "mutable"))
@@ -351,20 +354,14 @@ pub fn clamp_spans(
     };
     let mut groups: Vec<ClampGroup> = vec![];
     for (p, n) in nodes.iter().enumerate() {
-        if n.class != Class::Op || text_field(ctx, n.h, "kind")? != "clamp_index" {
+        if n.kind != Some(OpKind::ClampIndex) {
             continue;
         }
         let (index, bound) = (opp[p][0], opp[p][1]);
         let (mut base, mut offset) = (index, 0i64);
-        if nodes[index].class == Class::Op
-            && matches!(
-                text_field(ctx, nodes[index].h, "kind")?.as_str(),
-                "add" | "sub"
-            )
-            && opp[index].len() == 2
-        {
+        if matches!(nodes[index].kind, Some(OpKind::Add | OpKind::Sub)) && opp[index].len() == 2 {
             let (a, b) = (opp[index][0], opp[index][1]);
-            let add = text_field(ctx, nodes[index].h, "kind")? == "add";
+            let add = nodes[index].kind == Some(OpKind::Add);
             if let Some(c) = int(b)? {
                 (base, offset) = (a, if add { c } else { -c })
             } else if add {
@@ -409,23 +406,23 @@ pub fn clamp_spans(
 /// operand texts:
 /// the quaternion calls, the vector views and the component-wise quotient of two tensors. None for
 /// any other kind.
-fn expression_method(kind: &str, args: &[String], ranks: &[usize]) -> Option<String> {
+fn expression_method(kind: OpKind, args: &[String], ranks: &[usize]) -> Option<String> {
     let method0 = match kind {
-        "quat_conj" => "quatConj",
-        "quat_recip" => "quatReciprocal",
-        "as_pure" => "asPureQuaternion",
-        "as_vec3" => "asBack3DVector",
+        OpKind::QuatConj => "quatConj",
+        OpKind::QuatRecip => "quatReciprocal",
+        OpKind::AsPure => "asPureQuaternion",
+        OpKind::AsVec3 => "asBack3DVector",
         _ => "",
     };
     let method1 = match kind {
-        "quat_mul" => "quatMul",
-        "quat_rotate" => "quatRotate",
+        OpKind::QuatMul => "quatMul",
+        OpKind::QuatRotate => "quatRotate",
         _ => "",
     };
     match (args.len(), kind) {
         (1, _) if !method0.is_empty() => Some(format!("{}.{method0}()", args[0])),
         (2, _) if !method1.is_empty() => Some(format!("{}.{method1}({})", args[0], args[1])),
-        (2, "div") if ranks[0] > 0 && ranks[1] > 0 => {
+        (2, OpKind::Div) if ranks[0] > 0 && ranks[1] > 0 => {
             Some(format!("aether::cwiseDiv({}, {})", args[0], args[1]))
         }
         _ => None,
@@ -435,13 +432,13 @@ fn expression_method(kind: &str, args: &[String], ranks: &[usize]) -> Option<Str
 /// A product past the fold threshold, as its `aether::rt` twin written into a fresh item ahead of
 /// the line that uses it.
 /// A transposed operand is read through its own operand, so the transposed value is never built.
-fn rolled_product(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
+fn rolled_product(f: &mut Frame, p: usize, kind: OpKind) -> Result<Out, Refusal> {
     let out = linalg::fresh_item(f, p)?;
     let (left, right) = (
         product_operand(f, f.opp(p)[0])?,
         product_operand(f, f.opp(p)[1])?,
     );
-    let twin = if kind == "mv" {
+    let twin = if kind == OpKind::Mv {
         "matVecItems"
     } else {
         "matMat"
@@ -454,7 +451,7 @@ fn rolled_product(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
 
 /// A fold over a vector past the threshold, as its `aether::rt` twin reading its operands per
 /// sample.
-fn rolled_reduction(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
+fn rolled_reduction(f: &mut Frame, p: usize, kind: OpKind) -> Result<Out, Refusal> {
     let mut operands = vec![];
     for k in 0..f.opp(p).len() {
         let q = f.opp(p)[k];
@@ -489,7 +486,7 @@ fn matrix_sum(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
 /// An operand of a rolled product as a per-sample operand: a transpose is `aether::rt::transposed`
 /// of its operand.
 fn product_operand(f: &mut Frame, q: usize) -> Result<String, Refusal> {
-    if f.node(q).class == Class::Op && text_field(f.ctx(), f.node(q).h, "kind")? == "transpose" {
+    if f.node(q).kind == Some(OpKind::Transpose) {
         let inner = product_operand(f, f.opp(q)[0])?;
         f.need(Need::Rt);
         return Ok(format!("aether::rt::transposed({inner})"));
@@ -522,10 +519,12 @@ pub(super) fn is_rolled_handle(f: &Frame, h: u32) -> bool {
     if !door::class_is(f.ctx(), h, "Op").unwrap_or(false) {
         return false;
     }
-    if !matches!(
-        text_field(f.ctx(), h, "kind").unwrap_or_default().as_str(),
-        "mv" | "mm" | "dot" | "sum" | "norm"
-    ) {
+    if !OpKind::of(f.ctx(), h).is_ok_and(|kind| {
+        matches!(
+            kind,
+            OpKind::Mv | OpKind::Mm | OpKind::Dot | OpKind::Sum | OpKind::Norm
+        )
+    }) {
         return false;
     }
     crate::ir::analysis::fold_rolled(
@@ -540,12 +539,7 @@ pub(super) fn is_rolled_handle(f: &Frame, h: u32) -> bool {
 /// Whether the operation at a position is a rolled product (which reads its transposed operands
 /// through them).
 pub(super) fn is_rolled_product(f: &Frame, p: usize) -> bool {
-    matches!(
-        text_field(f.ctx(), f.node(p).h, "kind")
-            .unwrap_or_default()
-            .as_str(),
-        "mv" | "mm"
-    ) && is_rolled_handle(f, f.node(p).h)
+    matches!(f.node(p).kind, Some(OpKind::Mv | OpKind::Mm)) && is_rolled_handle(f, f.node(p).h)
 }
 
 /// Whether a value is read only through the operand it hides: a transpose every reader of which is
@@ -556,16 +550,16 @@ pub(super) fn is_absorbed(f: &Frame, p: usize) -> Result<bool, Refusal> {
     if f.node(p).class != Class::Op || f.users(p).is_empty() {
         return Ok(false);
     }
-    let kind = text_field(f.ctx(), f.node(p).h, "kind")?;
-    if kind == "transpose" {
+    let kind = f.op_kind(p)?;
+    if kind == OpKind::Transpose {
         return Ok(f.users(p).len() == f.fanout(p)
             && f.users(p).iter().all(|&(u, _)| is_rolled_product(f, u)));
     }
-    if kind == "vec" && linalg::is_identity(f, p)? {
+    if kind == OpKind::Vec && linalg::is_identity(f, p)? {
         return Ok(f.users(p).len() == f.fanout(p)
-            && f.users(p).iter().all(|&(u, slot)| {
-                slot == 1 && text_field(f.ctx(), f.node(u).h, "kind").is_ok_and(|k| k == "lu_solve")
-            }));
+            && f.users(p)
+                .iter()
+                .all(|&(u, slot)| slot == 1 && f.node(u).kind == Some(OpKind::LuSolve)));
     }
     Ok(false)
 }
@@ -576,13 +570,13 @@ pub(super) fn is_absorbed(f: &Frame, p: usize) -> Result<bool, Refusal> {
 fn ray_call(
     f: &mut Frame,
     p: usize,
-    kind: &str,
+    kind: OpKind,
     args: &[String],
     ranks: &[usize],
 ) -> Result<String, Refusal> {
     let function = match kind {
-        "ray_tri" => "rayTriangle",
-        "ray_aabb" => "rayAabb",
+        OpKind::RayTri => "rayTriangle",
+        OpKind::RayAabb => "rayAabb",
         _ => "raySphere",
     };
     let element = match f.node(p).ty.dtype.as_str() {

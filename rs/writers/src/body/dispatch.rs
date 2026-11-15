@@ -7,7 +7,7 @@ use super::stores::commits::Plan;
 use super::{name_value, node_out, render_pos, Frame, Name, NameKind, Node, Out};
 use crate::body::frame::needs::Need;
 use crate::body::values::literal_of;
-use crate::body::Class;
+use crate::body::{Class, OpKind};
 use crate::ir::analysis::switch_form;
 use crate::ir::door::Scalar;
 use crate::ir::door::{self, RxCtx};
@@ -99,8 +99,7 @@ fn in_range(f: &Frame, q: usize, k: usize) -> Result<bool, Refusal> {
             matches!(literal_of(f.ctx(), n.h)?, Scalar::Int(v) if v >= 0 && (v as usize) < k),
         );
     }
-    if n.class == Class::Select || (n.class == Class::Op && f.field_text(n.h, "kind")? == "select")
-    {
+    if n.class == Class::Select || n.kind == Some(OpKind::Select) {
         for &o in &f.opp(q)[1..] {
             if !in_range(f, o, k)? {
                 return Ok(false);
@@ -187,7 +186,7 @@ fn is_zero(f: &Frame, q: usize) -> Result<bool, Refusal> {
             _ => false,
         });
     }
-    if n.class == Class::Op && f.field_text(n.h, "kind")? == "splat" && f.opp(q).len() == 1 {
+    if n.kind == Some(OpKind::Splat) && f.opp(q).len() == 1 {
         return is_zero(f, f.opp(q)[0]);
     }
     Ok(false)
@@ -389,10 +388,9 @@ fn speculable(f: &Frame, p: usize) -> Result<bool, Refusal> {
     if n.class == Class::Loop {
         return Ok(false);
     }
-    let kind = f.field_text(n.h, "kind").unwrap_or_default();
     if matches!(
-        kind.as_str(),
-        "floordiv" | "mod" | "set_component_at" | "add_at"
+        n.kind,
+        Some(OpKind::Floordiv | OpKind::Mod | OpKind::SetComponentAt | OpKind::AddAt)
     ) {
         return Ok(false);
     }
@@ -401,7 +399,7 @@ fn speculable(f: &Frame, p: usize) -> Result<bool, Refusal> {
             && f.node(f.opp(p)[1]).class == Class::RoleConst
             && f.field_text(f.node(f.opp(p)[1]).h, "label")? == "param_cell");
     }
-    if kind == "component_at" {
+    if n.kind == Some(OpKind::ComponentAt) {
         let (v, i) = (f.opp(p)[0], f.opp(p)[1]);
         let idx = if f.node(i).class == Class::Const {
             match literal_of(f.ctx(), f.node(i).h)? {

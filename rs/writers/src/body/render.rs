@@ -154,9 +154,11 @@ fn load_rows(ctx: *mut RxCtx, walk: u32) -> Result<WalkRows, Refusal> {
     let order = door::walk_order(ctx, walk)?;
     let mut nodes = Vec::with_capacity(order.len());
     for &h in &order {
+        let class = Class::of(ctx, h)?;
         nodes.push(Node {
             h,
-            class: Class::of(ctx, h)?,
+            kind: crate::body::kind_of(ctx, h, &class)?,
+            class,
             ty: crate::body::ty_of(ctx, h)?,
             ops: door::operands(ctx, h)?,
         })

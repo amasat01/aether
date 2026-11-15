@@ -1,7 +1,7 @@
 //! Reads and stores at a runtime index into a vector.
 use crate::body::values::{literal_of, text_field};
-use crate::body::Class;
 use crate::body::{linalg, Frame, Out};
+use crate::body::{Class, OpKind};
 use crate::ir::door;
 use crate::ir::door::Scalar;
 use crate::refuse::{nib, Refusal};
@@ -23,25 +23,24 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     }
     // an element-wise source is rewritten first: the read moves to its operands (a rewrite of the
     // walk, not written)
-    if f.node(source).class == Class::Op && f.node(source).rank() == 1 {
-        let kind = text_field(f.ctx(), f.node(source).h, "kind")?;
+    if let (Some(kind), 1) = (f.node(source).kind, f.node(source).rank()) {
         if !matches!(
-            kind.as_str(),
-            "vec"
-                | "mv"
-                | "mm"
-                | "cross"
-                | "as_vec3"
-                | "as_pure"
-                | "quat_mul"
-                | "quat_rotate"
-                | "quat_conj"
-                | "quat_recip"
-                | "splat"
-                | "transpose"
-                | "add_at"
-                | "set_component_at"
-        ) && !linalg::is_factor_kind(&kind)
+            kind,
+            OpKind::Vec
+                | OpKind::Mv
+                | OpKind::Mm
+                | OpKind::Cross
+                | OpKind::AsVec3
+                | OpKind::AsPure
+                | OpKind::QuatMul
+                | OpKind::QuatRotate
+                | OpKind::QuatConj
+                | OpKind::QuatRecip
+                | OpKind::Splat
+                | OpKind::Transpose
+                | OpKind::AddAt
+                | OpKind::SetComponentAt
+        ) && !linalg::is_factor_kind(kind)
         {
             return Err(nib("a runtime-index read of an element-wise value (the read is pushed to its operands first)"));
         }

@@ -4,6 +4,7 @@
 pub mod body;
 pub mod contract;
 pub mod ir;
+pub mod kind;
 pub mod lanes;
 pub mod refuse;
 pub mod spell;

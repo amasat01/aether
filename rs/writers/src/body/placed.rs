@@ -12,6 +12,7 @@ use crate::ir::analysis::{
     element_kind, gather, is_prior, is_resident, is_tiled, loops_flat, plane_widths, Gather,
 };
 use crate::ir::door;
+use crate::kind::OpKind;
 use crate::refuse::{fault, nib, Refusal};
 use crate::spell::{binding_name, carry_type, scalar_op};
 use std::collections::{HashMap, HashSet};
@@ -380,13 +381,13 @@ fn element_text(
 
 /// One element of an elementwise operation over the element texts.
 fn operation(f: &Frame, node: u32, args: &[String]) -> Result<String, Refusal> {
-    let kind = text_field(f.ctx(), node, "kind")?;
-    if kind == "select" {
+    let kind = OpKind::of(f.ctx(), node)?;
+    if kind == OpKind::Select {
         return Ok(format!("({} ? {} : {})", args[0], args[1], args[2]));
     }
     let dtype = crate::body::ty_of(f.ctx(), node)?.dtype;
     let mut used = vec![];
-    let text = scalar_op(&kind, args, &dtype, &mut used)?;
+    let text = scalar_op(kind, args, &dtype, &mut used)?;
     f.need_spelled(&used);
     Ok(text)
 }

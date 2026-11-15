@@ -6,9 +6,10 @@ use super::text::*;
 use crate::body::frame::needs::Need;
 use crate::body::frame::needs::Needs as BodyNeeds;
 use crate::body::Class;
-use crate::contract::types::{Active, Form, Machine, SinkPolicy, Unit};
+use crate::contract::types::{Active, Form, Machine, SinkPolicy, Target, Unit};
 use crate::ir::analysis as an;
 use crate::ir::door::{self, RxCtx};
+use crate::kind::OpKind;
 use crate::lanes::host_interchange as interchange;
 use crate::lanes::host_split as split;
 use crate::lanes::host_text::{HOST_MASK_HELPERS, INDEPENDENT_ITERATIONS};
@@ -183,6 +184,27 @@ fn loop_keeps_lanes(
         || (trip > crate::ir::runtime_names::UNROLL_LIMIT && !inner_of_lanes.contains(&node))))
 }
 
+/// Whether an operation is a factorisation or a consumer of one: each branches per lane.
+fn branches_per_lane(kind: Option<OpKind>) -> bool {
+    use OpKind::*;
+    matches!(
+        kind,
+        Some(
+            Lu | Chol
+                | Eigh
+                | CholFrom
+                | Qr
+                | LuSolve
+                | LuSolveT
+                | ChoSolve
+                | TriLower
+                | TriUpperT
+                | QrSolve
+                | QrGramSolve
+        )
+    )
+}
+
 /// Whether the host loop over samples vectorises: the verdict of the host's rules, over the IR
 /// answers it asks for.
 fn vectorises(ctx: *mut RxCtx, walk: u32, w: &Walk, machine: &Machine) -> Result<bool, Refusal> {
@@ -202,20 +224,16 @@ fn vectorises(ctx: *mut RxCtx, walk: u32, w: &Walk, machine: &Machine) -> Result
         }
     }
     let (exact, routed) = (machine.exact_libm, machine.routed_pow);
-    let mut branching = door::constant_list(ctx, "LINALG_FACTORISATIONS")?;
-    branching.extend(door::constant_list(ctx, "LINALG_CONSUMERS")?);
     for node in an::kernel_nodes(ctx, walk)? {
         if exact
             && an::is_library_call(ctx, node)?
-            && !(routed && door::field_text(ctx, node, "kind")?.as_deref() == Some("pow"))
+            && !(routed && OpKind::of_op(ctx, node)? == Some(OpKind::Pow))
         {
             return Ok(false);
         }
         // a factorisation or a consumer branches per lane (a pivot search or a convergence skip):
         // the kinds are the writer's rule
-        if an::is_linalg(ctx, node)?
-            && branching.contains(&door::field_text(ctx, node, "kind")?.unwrap_or_default())
-        {
+        if an::is_linalg(ctx, node)? && branches_per_lane(OpKind::of_op(ctx, node)?) {
             return Ok(false);
         }
         match Class::of(ctx, node)? {
@@ -622,7 +640,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         #[cfg(feature = "shadow")]
         needs_diffs,
         meta: Meta {
-            target: "host",
+            target: Target::Host,
             mode: m.id,
             vectorised,
             thread_box: unit.thread_box.clone(),

@@ -2,52 +2,53 @@
 use super::{Frame, NameKind, Out};
 use crate::body::frame::needs::Need;
 use crate::body::values::{literal_of, text_field};
-use crate::body::Class;
+use crate::body::{Class, OpKind};
 use crate::ir::door;
 use crate::ir::door::Scalar;
 use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
 /// The op kinds that are written through the library.
-pub fn is_factor_kind(kind: &str) -> bool {
+pub fn is_factor_kind(kind: OpKind) -> bool {
     matches!(
         kind,
-        "lu" | "chol"
-            | "eigh"
-            | "chol_from"
-            | "qr"
-            | "lu_solve"
-            | "lu_solve_t"
-            | "cho_solve"
-            | "tri_lower"
-            | "tri_upper_t"
-            | "chol_factor"
-            | "eigh_w"
-            | "eigh_v"
-            | "lu_det"
+        OpKind::Lu
+            | OpKind::Chol
+            | OpKind::Eigh
+            | OpKind::CholFrom
+            | OpKind::Qr
+            | OpKind::LuSolve
+            | OpKind::LuSolveT
+            | OpKind::ChoSolve
+            | OpKind::TriLower
+            | OpKind::TriUpperT
+            | OpKind::CholFactor
+            | OpKind::EighW
+            | OpKind::EighV
+            | OpKind::LuDet
     ) || is_info_kind(kind)
 }
 
 /// The kinds that read the `info` field of a factor.
-fn is_info_kind(kind: &str) -> bool {
-    matches!(kind, "lu_info" | "chol_info" | "eigh_info")
+fn is_info_kind(kind: OpKind) -> bool {
+    matches!(kind, OpKind::LuInfo | OpKind::CholInfo | OpKind::EighInfo)
 }
 
 /// The library call a solve kind is spelled with.
-fn solve_name(kind: &str) -> Option<&'static str> {
+fn solve_name(kind: OpKind) -> Option<&'static str> {
     Some(match kind {
-        "lu_solve" => "luSolve",
-        "lu_solve_t" => "luSolveT",
-        "cho_solve" => "choSolve",
+        OpKind::LuSolve => "luSolve",
+        OpKind::LuSolveT => "luSolveT",
+        OpKind::ChoSolve => "choSolve",
         _ => return None,
     })
 }
 
 /// The library call of a solve against the factor's lower triangle alone.
-fn triangular_name(kind: &str) -> Option<&'static str> {
+fn triangular_name(kind: OpKind) -> Option<&'static str> {
     Some(match kind {
-        "tri_lower" => "triLower",
-        "tri_upper_t" => "triUpperT",
+        OpKind::TriLower => "triLower",
+        OpKind::TriUpperT => "triUpperT",
         _ => return None,
     })
 }
@@ -85,16 +86,16 @@ pub fn leaf_is_proxy(f: &Frame, p: usize) -> bool {
             && STORE_CLASSES
                 .iter()
                 .any(|k| door::class_is(f.ctx(), reader, k).unwrap_or(false));
-        let library_use = stored || (matches!(kind.as_str(), "lu" | "chol" | "eigh" | "chol_from") && slot == 0)
-            || (solve_name(&kind).or(triangular_name(&kind)).is_some() && slot == 1)
+        let library_use = stored || (matches!(kind, Some(OpKind::Lu | OpKind::Chol | OpKind::Eigh | OpKind::CholFrom)) && slot == 0)
+            || (kind.is_some_and(|k| solve_name(k).or(triangular_name(k)).is_some()) && slot == 1)
             // a rolled product reads its operands as proxies, and so does a value no statement
             // renders
             // a placed value's store loop reads its operand by element, and so does a value only
             // that loop reads
-            || (f.placed && (f.absorbed.contains(&reader) || (door::class_is(f.ctx(), reader, "Op").unwrap_or(false) && text_field(f.ctx(), reader, "kind").unwrap_or_default() == "resident")))
+            || (f.placed && (f.absorbed.contains(&reader) || kind == Some(OpKind::Resident)))
             || super::ops::is_rolled_handle(f, reader) || crate::ir::door::position(f.ctx(), f.walk(), reader).ok().is_some_and(|u| super::ops::is_absorbed(f, u).unwrap_or(false));
         proxied |= library_use;
-        all_read &= library_use || (kind == "component" && slot == 0);
+        all_read &= library_use || (kind == Some(OpKind::Component) && slot == 0);
     }
     proxied && all_read
 }
@@ -228,7 +229,7 @@ pub(super) fn operand(f: &mut Frame, source: usize, arg: &str) -> Result<String,
         };
     }
     f.record_read(source);
-    let assembled = class == Class::Op && text_field(f.ctx(), f.node(source).h, "kind")? == "vec";
+    let assembled = f.node(source).kind == Some(OpKind::Vec);
     if is_fresh(f, arg) || assembled {
         return Ok(arg.to_string());
     }
@@ -275,21 +276,20 @@ fn call(name: &str, targs: &[usize], args: &[&str]) -> String {
 /// A factorisation: declares the struct (`hawk_lf<k>`) and fills it in place from the matrix
 /// operand; the value is its name.
 /// Eigenvalues alone use the cheaper struct when no `eigh_v` reads this factor.
-fn factorisation(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
+fn factorisation(f: &mut Frame, p: usize, kind: OpKind) -> Result<Out, Refusal> {
     let n = f.node(f.opp(p)[0]).ty.shape[0];
     let factor = f.names.factor();
     let name = factor.text.clone();
-    let vectors = f.nodes().enumerate().any(|(q, m)| {
-        m.class == Class::Op
-            && f.opp(q).first() == Some(&p)
-            && text_field(f.ctx(), m.h, "kind").is_ok_and(|k| k == "eigh_v")
-    });
+    let vectors = f
+        .nodes()
+        .enumerate()
+        .any(|(q, m)| m.kind == Some(OpKind::EighV) && f.opp(q).first() == Some(&p));
     let (function, structure) = match (kind, vectors) {
-        ("lu", _) => ("lu", "Lu"),
-        ("chol", _) => ("cholesky", "Cholesky"),
-        ("chol_from", _) => ("choleskyFrom", "Cholesky"),
-        ("eigh", false) => ("eighValues", "EighValues"),
-        ("eigh", true) => ("eigh", "Eigh"),
+        (OpKind::Lu, _) => ("lu", "Lu"),
+        (OpKind::Chol, _) => ("cholesky", "Cholesky"),
+        (OpKind::CholFrom, _) => ("choleskyFrom", "Cholesky"),
+        (OpKind::Eigh, false) => ("eighValues", "EighValues"),
+        (OpKind::Eigh, true) => ("eigh", "Eigh"),
         _ => return Err(nib(format!("op {kind} of rank > 0"))),
     };
     let elem = element(&f.node(p).ty.dtype)?;
@@ -310,11 +310,7 @@ fn factorisation(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
 /// diagonal and zeros elsewhere).
 pub(super) fn is_identity(f: &Frame, q: usize) -> Result<bool, Refusal> {
     let node = &f.node(q);
-    if node.class != Class::Op
-        || text_field(f.ctx(), node.h, "kind")? != "vec"
-        || node.rank() != 2
-        || node.ty.shape[0] != node.ty.shape[1]
-    {
+    if node.kind != Some(OpKind::Vec) || node.rank() != 2 || node.ty.shape[0] != node.ty.shape[1] {
         return Ok(false);
     }
     let n = node.ty.shape[0];
@@ -339,7 +335,7 @@ pub(super) fn is_identity(f: &Frame, q: usize) -> Result<bool, Refusal> {
 /// fields): written by
 /// statements ahead of the line into the plane directly or into a fresh item; the value is that
 /// target.
-fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
+fn consumer(f: &mut Frame, p: usize, kind: OpKind) -> Result<Out, Refusal> {
     let n = f.node(f.opp(p)[0]).ty.shape[0];
     let out = match direct_target(f, p)? {
         Some(target) => target,
@@ -353,7 +349,7 @@ fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
         } else {
             1
         };
-        if kind == "lu_solve" && is_identity(f, rhs)? {
+        if kind == OpKind::LuSolve && is_identity(f, rhs)? {
             f.emit(format!("{};", call("luInverse", &[], &[&factor, &out])));
             f.set_text(p, out);
             return Ok(Out::Bound);
@@ -368,13 +364,13 @@ fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
             ),
         };
         f.emit(format!("{text};"));
-    } else if kind == "chol_factor" {
+    } else if kind == OpKind::CholFactor {
         f.emit(format!(
             "{};",
             call("choleskyFactor", &[], &[&factor, &out])
         ));
     } else {
-        let field = if kind == "eigh_w" { "w" } else { "v" };
+        let field = if kind == OpKind::EighW { "w" } else { "v" };
         let shape = f.node(p).ty.shape.clone();
         let count: usize = shape.iter().product();
         let slot = if is_fresh(f, &out) {
@@ -392,13 +388,19 @@ fn consumer(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
 
 /// The text of a factor kind: a factorisation, a solve or field read, `<factor>.info`, or the
 /// determinant call.
-pub fn op(f: &mut Frame, p: usize, kind: &str) -> Result<Out, Refusal> {
+pub fn op(f: &mut Frame, p: usize, kind: OpKind) -> Result<Out, Refusal> {
     match kind {
-        "lu" | "chol" | "chol_from" | "eigh" => factorisation(f, p, kind),
+        OpKind::Lu | OpKind::Chol | OpKind::CholFrom | OpKind::Eigh => factorisation(f, p, kind),
         _ if is_info_kind(kind) => Ok(Out::Value(format!("{}.info", f.text(f.opp(p)[0])), None)),
-        "lu_det" => Ok(Out::Value(call("luDet", &[], &[f.text(f.opp(p)[0])]), None)),
-        "lu_solve" | "lu_solve_t" | "cho_solve" | "tri_lower" | "tri_upper_t" | "chol_factor"
-        | "eigh_w" | "eigh_v" => consumer(f, p, kind),
+        OpKind::LuDet => Ok(Out::Value(call("luDet", &[], &[f.text(f.opp(p)[0])]), None)),
+        OpKind::LuSolve
+        | OpKind::LuSolveT
+        | OpKind::ChoSolve
+        | OpKind::TriLower
+        | OpKind::TriUpperT
+        | OpKind::CholFactor
+        | OpKind::EighW
+        | OpKind::EighV => consumer(f, p, kind),
         _ => Err(nib(format!("op {kind} of rank > 0"))),
     }
 }

@@ -39,9 +39,11 @@ impl Frame<'_> {
     /// Appends the slot of one node of a loop scope.
     fn add_slot(&mut self, h: u32) -> Result<usize, Refusal> {
         let s = self.count();
+        let class = Class::of(self.ctx(), h)?;
         let node = Node {
             h,
-            class: Class::of(self.ctx(), h)?,
+            kind: crate::body::kind_of(self.ctx(), h, &class)?,
+            class,
             ty: ty_of(self.ctx(), h)?,
             ops: door::operands(self.ctx(), h)?,
         };

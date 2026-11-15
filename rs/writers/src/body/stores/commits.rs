@@ -6,6 +6,7 @@
 use crate::body::values::text_field;
 use crate::body::Class;
 use crate::body::{render_pos, Frame};
+use crate::kind::OpKind;
 use crate::refuse::Refusal;
 use crate::spell::binding_name;
 
@@ -175,21 +176,16 @@ fn candidate(f: &Frame, s: u32, read: &[(String, String)]) -> Result<Option<Cand
         return Ok(None);
     }
     let (mut node, mut chain, mut links) = (f.opp(p)[0], vec![f.opp(p)[0]], vec![]);
-    while f.node(node).class == Class::Op
-        && text_field(f.ctx(), f.node(node).h, "kind")? == "add_at"
-    {
+    while f.node(node).kind == Some(OpKind::AddAt) {
         links.push((f.opp(node)[1], f.opp(node)[2]));
         node = f.opp(node)[0];
         chain.push(node);
     }
     links.reverse();
     let base = node;
-    let parts: Vec<usize> = match f.node(base).class {
-        Class::Op => match text_field(f.ctx(), f.node(base).h, "kind")?.as_str() {
-            "vec" => f.opp(base).clone(),
-            "splat" => vec![f.opp(base)[0]; f.node(base).numel()],
-            _ => return Ok(None),
-        },
+    let parts: Vec<usize> = match f.node(base).kind {
+        Some(OpKind::Vec) => f.opp(base).clone(),
+        Some(OpKind::Splat) => vec![f.opp(base)[0]; f.node(base).numel()],
         _ => return Ok(None),
     };
     let (role, name) = (

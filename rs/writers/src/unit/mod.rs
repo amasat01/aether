@@ -4,7 +4,7 @@
 //! unpacking of the entry's
 //! arguments. The host and device arms differ only in the arguments they pass here.
 use crate::body::frame::needs::{Need, Needs as BodyNeeds};
-use crate::contract::types::{Active, Exports, Scalar, ThreadBox, Walk as TypedWalk};
+use crate::contract::types::{Active, Exports, Scalar, Target, ThreadBox, Walk as TypedWalk};
 use crate::ir::door::RxCtx;
 use crate::refuse::{not_written, Refusal};
 use crate::spell::binding_name;
@@ -130,10 +130,10 @@ pub struct Mode {
 }
 
 /// The facts of a rendered unit that its caller reads back: a typed record, written as one JSON object by `json`.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Meta {
-    /// `host` or `cuda`.
-    pub target: &'static str,
+    /// The target the unit was written for.
+    pub target: Target,
     /// The scalar mode's id.
     pub mode: &'static str,
     /// Whether the lane loop runs its lanes side by side; the device text never does.
@@ -153,9 +153,13 @@ impl Meta {
             }) => format!("{{\"axis\":{axis},\"T\":{t},\"stride\":{stride}}}"),
             _ => "null".to_string(),
         };
+        let target = match self.target {
+            Target::Host => "host",
+            Target::Device => "cuda",
+        };
         format!(
-            "{{\"target\":\"{}\",\"mode\":\"{}\",\"vectorised\":{},\"box\":{boxed}}}",
-            self.target, self.mode, self.vectorised
+            "{{\"target\":\"{target}\",\"mode\":\"{}\",\"vectorised\":{},\"box\":{boxed}}}",
+            self.mode, self.vectorised
         )
     }
 }

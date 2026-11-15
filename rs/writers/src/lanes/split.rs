@@ -12,6 +12,7 @@ use crate::body::Class;
 use crate::body::{Frame, LoopEmitter, Ty};
 use crate::ir::analysis::{loops_flat, speculative_step};
 use crate::ir::door::{self, RxCtx};
+use crate::kind::OpKind;
 use crate::refuse::Refusal;
 use crate::spell::ident;
 use std::collections::BTreeSet;
@@ -169,7 +170,7 @@ fn emit_split(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Ref
 
 /// Whether a value reads nothing per sample: parameters, sample counts, table lengths and
 /// constants by non-random ops.
-fn sample_free(f: &Frame, root: u32, random: &[String], raw: &str) -> Result<bool, Refusal> {
+fn sample_free(f: &Frame, root: u32) -> Result<bool, Refusal> {
     let (mut stack, mut seen) = (vec![root], vec![]);
     while let Some(h) = stack.pop() {
         if seen.contains(&h) {
@@ -187,8 +188,10 @@ fn sample_free(f: &Frame, root: u32, random: &[String], raw: &str) -> Result<boo
                 }
             }
             Class::Op => {
-                let kind = door::text_field(f.ctx(), h, "kind")?;
-                if random.contains(&kind) || kind == raw {
+                if matches!(
+                    OpKind::of(f.ctx(), h)?,
+                    OpKind::RandomUniform | OpKind::RandomNormal | OpKind::RawDevice
+                ) {
                     return Ok(false);
                 }
                 stack.extend(door::operands(f.ctx(), h)?);
@@ -206,15 +209,11 @@ fn exit_order(f: &Frame, lp: u32) -> Result<Option<(usize, bool)>, Refusal> {
     if !door::class_is(f.ctx(), cond, "Op")? {
         return Ok(None);
     }
-    let kind = door::text_field(f.ctx(), cond, "kind")?;
+    let kind = OpKind::of(f.ctx(), cond)?;
     let ops = door::operands(f.ctx(), cond)?;
-    if ops.len() != 2 || !matches!(kind.as_str(), "ge" | "gt" | "le" | "lt") {
+    if ops.len() != 2 || !matches!(kind, OpKind::Ge | OpKind::Gt | OpKind::Le | OpKind::Lt) {
         return Ok(None);
     }
-    let (random, raw) = (
-        door::constant_list(f.ctx(), "RANDOM_OPS")?,
-        door::constant_list(f.ctx(), "RAW_KIND")?.concat(),
-    );
     let (nexts, carries) = (
         door::field_node_list(f.ctx(), lp, "nexts")?.unwrap_or_default(),
         door::field_node_list(f.ctx(), lp, "carries")?.unwrap_or_default(),
@@ -222,22 +221,22 @@ fn exit_order(f: &Frame, lp: u32) -> Result<Option<(usize, bool)>, Refusal> {
     for first in 0..2 {
         let (value, bound) = (ops[first], ops[1 - first]);
         let kind = if first == 0 {
-            kind.as_str()
+            kind
         } else {
-            match kind.as_str() {
-                "ge" => "le",
-                "gt" => "lt",
-                "le" => "ge",
-                _ => "gt",
+            match kind {
+                OpKind::Ge => OpKind::Le,
+                OpKind::Gt => OpKind::Lt,
+                OpKind::Le => OpKind::Ge,
+                _ => OpKind::Gt,
             }
         };
         let hits: Vec<usize> = (0..nexts.len()).filter(|&j| nexts[j] == value).collect();
-        if hits.len() != 1 || !sample_free(f, bound, &random, &raw)? {
+        if hits.len() != 1 || !sample_free(f, bound)? {
             continue;
         }
         let ty = crate::body::ty_of(f.ctx(), carries[hits[0]])?;
         if ty.shape.is_empty() && matches!(ty.dtype.as_str(), "f64" | "f32") {
-            return Ok(Some((hits[0], matches!(kind, "ge" | "gt"))));
+            return Ok(Some((hits[0], matches!(kind, OpKind::Ge | OpKind::Gt))));
         }
     }
     Ok(None)
@@ -276,13 +275,9 @@ fn sample_free_lines(
     live_ins: &[(String, Ty)],
     pre: &Buffer,
 ) -> Result<SampleFree, Refusal> {
-    let (random, raw) = (
-        door::constant_list(f.ctx(), "RANDOM_OPS")?,
-        door::constant_list(f.ctx(), "RAW_KIND")?.concat(),
-    );
     let mut free_names: Vec<String> = vec![];
     for &free in door::operands(f.ctx(), lp)?.iter().skip(carry_count) {
-        if sample_free(f, free, &random, &raw)? {
+        if sample_free(f, free)? {
             free_names.push(f.arg(free)?)
         }
     }

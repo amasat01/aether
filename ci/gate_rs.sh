@@ -83,7 +83,7 @@ module_edges() {
   done
 }
 
-# whether `from` may use `to`: refuse uses nothing; contract, ir and spell use only refuse; body uses the leaves (the
+# whether `from` may use `to`: refuse and kind use nothing; contract, ir and spell use only refuse and kind; body uses the leaves (the
 # contract only through its typed `types`); lanes uses body and the leaves; unit uses all; unit/host and unit/device
 # never use each other. A module may always use itself, and unit/host and unit/device their parent.
 leg_modules() {
@@ -92,12 +92,12 @@ leg_modules() {
   need modules "$n" || return 1
   awk '{ c[$3 " -> " $4]++ } END { for (k in c) printf "  %-32s %d\n", k, c[k] }' "$out.edges" | sort
   awk '
-    function leaf(t) { return t == "refuse" || t == "ir" || t == "spell" || t == "contract::types" }
+    function leaf(t) { return t == "refuse" || t == "kind" || t == "ir" || t == "spell" || t == "contract::types" }
     function json(t) { return t ~ /^contract::(Contract|Json|json|old|wire)/ }
     function ok(f, t,   top) { top = f; sub(/\/.*/, "", top)
       if (f == t || (top == "unit" && t == "unit") ) return 1
-      if (f == "refuse") return 0
-      if (f == "contract" || f == "ir" || f == "spell") return t == "refuse"
+      if (f == "refuse" || f == "kind") return 0
+      if (f == "contract" || f == "ir" || f == "spell") return t == "refuse" || t == "kind"
       if (json(t)) return top == "unit" && f == "unit"
       if (f == "body") return leaf(t)
       if (f == "lanes") return leaf(t) || t == "body"

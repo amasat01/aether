@@ -207,15 +207,6 @@ extern "C" {
     ) -> c_int;
     /// Whether the node is inside the body of a loop.
     pub fn rx_in_loop_body(ctx: *mut RxCtx, walk: u32, node: u32, out: *mut c_int) -> c_int;
-    /// The texts of a list constant of the IR core, back to back.
-    pub fn rx_const_names(
-        ctx: *mut RxCtx,
-        name: *const c_char,
-        buf: *mut c_char,
-        cap: usize,
-        len: *mut usize,
-        count: *mut usize,
-    ) -> c_int;
     /// Whether the node is of a class (or a subclass).
     pub fn rx_is_a(ctx: *mut RxCtx, node: u32, name: *const c_char, out: *mut c_int) -> c_int;
     /// The digest of a walk.
@@ -444,42 +435,6 @@ pub fn body_nodes(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, Refusal> 
 pub fn body_roots(ctx: impl Into<CtxPtr>, lp: u32) -> Result<Vec<u32>, Refusal> {
     let ctx = ctx.into().raw();
     handles(ctx, |b, c, n| unsafe { rx_body_roots(ctx, lp, b, c, n) })
-}
-
-/// A constant raptor owns, by name, as the list of texts it holds; refuses a name that is no list.
-pub fn constant_list(ctx: impl Into<CtxPtr>, name: &str) -> Result<Vec<String>, Refusal> {
-    let ctx = ctx.into().raw();
-    let name = cs(name)?;
-    let (mut len, mut count) = (0usize, 0usize);
-    let status = unsafe {
-        rx_const_names(
-            ctx,
-            name.as_ptr(),
-            std::ptr::null_mut(),
-            0,
-            &mut len,
-            &mut count,
-        )
-    };
-    if status != RX_TRUNC {
-        check(ctx, status)?;
-        return Ok(vec![]);
-    }
-    let mut buf = vec![0u8; len + 1];
-    let status = unsafe {
-        rx_const_names(
-            ctx,
-            name.as_ptr(),
-            buf.as_mut_ptr() as *mut c_char,
-            len + 1,
-            &mut len,
-            &mut count,
-        )
-    };
-    check(ctx, status)?;
-    buf.truncate(len);
-    let text = String::from_utf8(buf).map_err(fault)?;
-    Ok(text.split_terminator('\0').map(String::from).collect())
 }
 
 /// The dispatch nodes of a walk, top-level first, then those inside loop bodies: the order that
