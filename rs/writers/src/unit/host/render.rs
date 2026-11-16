@@ -645,6 +645,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
             vectorised,
             thread_box: unit.thread_box.clone(),
         },
+        facts: Facts::default(),
     })
 }
 

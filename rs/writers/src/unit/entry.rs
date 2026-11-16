@@ -7,8 +7,8 @@ use crate::body::frame::needs::{Need, Needs, Rendered};
 use crate::contract::types::{BodySource, Form, Target, Unit};
 use crate::contract::Contract;
 use crate::ir::door::RxCtx;
-use crate::refuse::{unknown, Refusal};
-use crate::unit::Meta;
+use crate::refuse::{fault, unknown, Refusal};
+use crate::unit::{CompanionFact, Facts, Meta, StepFacts};
 
 /// The result of a render: the text, the body inside it, the entry name and the rest (target, mode,
 /// vectorised, box) as JSON.
@@ -22,21 +22,12 @@ pub struct HostSource {
     pub entry: String,
     /// The unit's facts: target, mode, vectorised and the thread box (`Meta::json` writes them as JSON).
     pub meta: Meta,
+    /// What the writer decided about the unit that its caller states.
+    pub facts: Facts,
     /// The shadow check of the lane text's recorded needs: none without a lane text, else what
     /// differs from its text.
     #[cfg(feature = "shadow")]
     pub needs_diffs: Option<Vec<String>>,
-}
-
-impl HostSource {
-    /// The symbol the text exports for its entry: a host entry carries the host writer's suffix, a device kernel is its name.
-    pub fn symbol(&self) -> String {
-        if self.meta.target == Target::Host {
-            crate::unit::host::render::exported(&self.entry)
-        } else {
-            self.entry.clone()
-        }
-    }
 }
 
 /// What one render owns besides the unit: the body it wrote and whether that body draws random
@@ -189,7 +180,59 @@ fn render_with(
         needs_random,
         needs,
     };
-    render(ctx, walk, &render_input)
+    let mut source = render(ctx, walk, &render_input)?;
+    source.facts = facts_of(ctx, walk, &prepared.unit, &source)?;
+    Ok(source)
+}
+
+/// What the writer decided about a rendered unit: the exported symbol (a host entry carries the host
+/// writer's suffix, a device kernel is its name), the row planes of its sample sums and its
+/// companion planes.
+fn facts_of(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+    source: &HostSource,
+) -> Result<Facts, Refusal> {
+    let host = source.meta.target == Target::Host;
+    let slots = &unit
+        .walk
+        .as_ref()
+        .ok_or_else(|| fault("a unit without a walk"))?
+        .slots;
+    Ok(Facts {
+        symbol: if host {
+            crate::unit::host::render::exported(&source.entry)
+        } else {
+            source.entry.clone()
+        },
+        row_planes: crate::unit::sums::row_planes(ctx, &unit.sinks, slots)?,
+        companions: crate::ir::analysis::companions(ctx, walk)?
+            .into_iter()
+            .map(|(plane, target)| CompanionFact {
+                fold_entry: host
+                    .then(|| crate::unit::host::render::fold_entry(&source.entry, &target)),
+                plane,
+                target,
+            })
+            .collect(),
+        step: step_of(ctx, walk, unit)?,
+    })
+}
+
+/// The step of a finishing unit, from the lane split of its body; none when the unit does not
+/// finish or its body is not that shape.
+fn step_of(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<StepFacts>, Refusal> {
+    let finishes = unit.walk.as_ref().is_some_and(|w| w.finish.is_some());
+    if !finishes {
+        return Ok(None);
+    }
+    Ok(
+        crate::lanes::lane_split(ctx, walk, unit, "        ")?.map(|(split, _)| StepFacts {
+            ops: split.op_count as i64,
+            entry_counts: split.guard.is_some(),
+        }),
+    )
 }
 
 /// The host unit of a walk and a build contract.

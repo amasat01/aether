@@ -367,6 +367,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
             vectorised: false,
             thread_box: unit.thread_box.clone(),
         },
+        facts: crate::unit::Facts::default(),
         #[cfg(feature = "shadow")]
         needs_diffs: None,
     })

@@ -164,6 +164,42 @@ impl Meta {
     }
 }
 
+/// A companion plane of a compensated sum: its name, the plane it compensates and, in a host text,
+/// the symbol of the entry that folds it into that plane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompanionFact {
+    /// The companion plane's name.
+    pub plane: String,
+    /// The name of the plane it compensates.
+    pub target: String,
+    /// The symbol of the host entry that folds it; none in a device text.
+    pub fold_entry: Option<String>,
+}
+
+/// The lane split of a finishing unit's step, as the caller prices it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepFacts {
+    /// The operations of one step.
+    pub ops: i64,
+    /// Whether the fast entries count the samples finished on entry (the body is guarded by its mask).
+    pub entry_counts: bool,
+}
+
+/// What the writer decided about a rendered unit that its caller states about it: the symbol the
+/// text exports for its entry, the row planes of its sample sums, its companion planes and the
+/// step of a finishing unit that splits.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Facts {
+    /// The symbol the text exports for its entry.
+    pub symbol: String,
+    /// The row plane of each sample-sum sink.
+    pub row_planes: Vec<sums::RowPlane>,
+    /// The companion planes.
+    pub companions: Vec<CompanionFact>,
+    /// The step of a finishing unit whose body is a lane split; none for any other unit.
+    pub step: Option<StepFacts>,
+}
+
 /// One argument slot of the entry: role, name, element type and shape.
 pub struct Slot {
     /// The slot's role.

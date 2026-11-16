@@ -56,6 +56,7 @@ pub fn sum_sinks(ctx: *mut RxCtx, nodes: &[u32], walk: &Walk) -> Result<Vec<SumS
     Ok(sinks)
 }
 
+#[derive(Debug, Clone, PartialEq)]
 /// The row plane of one sample-sum sink: the cell it fills and the plane's position among the entry's
 /// arguments.
 pub struct RowPlane {
