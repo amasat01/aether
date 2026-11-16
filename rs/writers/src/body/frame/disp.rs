@@ -31,6 +31,7 @@ impl Frame<'_> {
                         | Class::WarpStore
                         | Class::SampleSum
                         | Class::AccumWrite
+                        | Class::WideWrite
                         | Class::Finish
                         | Class::TapeWrite
                 ),

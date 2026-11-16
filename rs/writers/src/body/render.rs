@@ -512,6 +512,15 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
             }
             continue;
         }
+        if class == Class::WideWrite {
+            if f.unit.team.is_some() {
+                return Err(nib("a wide write of a team stage"));
+            }
+            if nops == 2 {
+                stores::sinks::wide_write(f, p)?;
+                continue;
+            }
+        }
         if class == Class::Finish && nops == 1 {
             finish = Some(s);
             continue;
@@ -537,7 +546,7 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
             stores::sinks::accum(f, s, p)?;
             continue;
         }
-        if !matches!(class, Class::Assign | Class::AccumWrite) || nops != 1 {
+        if !matches!(class, Class::Assign | Class::AccumWrite | Class::WideWrite) || nops != 1 {
             return Err(nib(format!("sink {class} with {nops} operands")));
         }
         if !plans.early.iter().any(|e| e.1 == s) && !plans.commits.held.contains(&s) {

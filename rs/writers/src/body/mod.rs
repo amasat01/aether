@@ -14,7 +14,6 @@ mod render;
 pub mod stores;
 mod team;
 mod values;
-mod wide;
 
 use crate::contract::types::{Form, Guard, SinkPolicy, Unit};
 use crate::ir::door::{self, RxCtx};
@@ -444,7 +443,6 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         Class::LoopValue => loops::value(f, p)?,
         Class::LoopCount => loops::count(f, p)?,
         Class::TapeRead => loops::tape_read(f, p)?,
-        Class::WideWrite => wide::stmt(f, p)?,
         Class::Dispatch | Class::PredicatedDispatch | Class::AutoDispatch => dispatch::stmt(f, p)?,
         Class::TeamRead
         | Class::TeamCopy

@@ -67,6 +67,23 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// An indexed wide write: the value into the plane element the index names (a scalar value only).
+pub(crate) fn wide_write(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+    if !f.node(f.opp(p)[0]).ty.shape.is_empty() {
+        return Err(nib("an indexed wide write of a rank > 0 value"));
+    }
+    let (value, index) = (f.text(f.opp(p)[0]).clone(), f.text(f.opp(p)[1]).clone());
+    let target = binding_name(
+        &text_field(f.ctx(), f.node(p).h, "role")?,
+        &text_field(f.ctx(), f.node(p).h, "name")?,
+    )?;
+    f.emit(format!(
+        "{target}[aether::SampleIndex::make(static_cast<std::size_t>({index}))] = {};",
+        plane_value(f, &value)
+    ));
+    Ok(())
+}
+
 /// A thread box lane's own-column store, made only for a lane the thread owns.
 pub(crate) fn box_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let (value, lane) = (f.text(f.opp(p)[0]).clone(), f.text(f.opp(p)[1]).clone());
