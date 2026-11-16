@@ -128,6 +128,12 @@ fn lane_split_of(
     )
 }
 
+/// The kernel that folds the companion of `target` into it, for the kernel named `name`: the one place
+/// that names it.
+pub(crate) fn fold_entry(name: &str, target: &str) -> String {
+    format!("{name}__fold_{target}")
+}
+
 /// The lines of one fold entry per companion: the kernel's own signature and arguments, one lane
 /// per slot of the target.
 fn fold_entries(
@@ -139,8 +145,11 @@ fn fold_entries(
 ) -> Result<Vec<String>, Refusal> {
     let mut lines = vec![];
     for (companion, target) in an::companions(ctx, walk)? {
-        let fold_name = format!("{name}__fold_{target}");
-        lines.push(prologue::entry_signature(w, &fold_name, bounds)?);
+        lines.push(prologue::entry_signature(
+            w,
+            &fold_entry(name, &target),
+            bounds,
+        )?);
         lines.extend([
             "{".to_string(),
             unpack(ctx, walk, w)?,

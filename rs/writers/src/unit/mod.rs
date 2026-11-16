@@ -164,15 +164,15 @@ impl Meta {
     }
 }
 
-/// A companion plane of a compensated sum: its name, the plane it compensates and, in a host text,
-/// the symbol of the entry that folds it into that plane.
+/// A companion plane of a compensated sum: its name, the plane it compensates and the symbol of the
+/// host entry or device kernel that folds it into that plane.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompanionFact {
     /// The companion plane's name.
     pub plane: String,
     /// The name of the plane it compensates.
     pub target: String,
-    /// The symbol of the host entry that folds it; none in a device text.
+    /// The symbol of the host entry or device kernel that folds it.
     pub fold_entry: Option<String>,
 }
 

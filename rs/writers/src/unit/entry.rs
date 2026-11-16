@@ -210,8 +210,11 @@ fn facts_of(
         companions: crate::ir::analysis::companions(ctx, walk)?
             .into_iter()
             .map(|(plane, target)| CompanionFact {
-                fold_entry: host
-                    .then(|| crate::unit::host::render::fold_entry(&source.entry, &target)),
+                fold_entry: Some(if host {
+                    crate::unit::host::render::fold_entry(&source.entry, &target)
+                } else {
+                    crate::unit::device::render::fold_entry(&source.entry, &target)
+                }),
                 plane,
                 target,
             })
