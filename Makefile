@@ -260,7 +260,8 @@ gate-wheel: gate-venv gate-need-cxx gate-need-cuda
 	[ -n "$(EAGLE_SRC)" ] || { echo "gate: set EAGLE_SRC (the payload seal reads plugin/gref_layout.h)"; exit 1; }
 	$(gate_env)
 	$(gate_py) -m pip install --quiet cuda-bindings nvidia-cuda-nvrtc-cu12 nvidia-cuda-cccl-cu12 pyyaml
-	( cd dsc && $(gate_py) -m aether_dsc.seal --layout-header "$(abspath $(EAGLE_SRC))/plugin/gref_layout.h" )
+	[ -n "$(facts_dir)" ] || { echo "gate: set facts_dir (the payload seal's NVRTC gate includes the raptor wing's raptor_facts.h)"; exit 1; }
+	( cd dsc && $(gate_py) -m aether_dsc.seal --layout-header "$(abspath $(EAGLE_SRC))/plugin/gref_layout.h" --facts-dir "$(abspath $(facts_dir))" )
 	PYTHONPATH=dsc $(gate_py) -m pytest -q -p no:cacheprovider dsc/tests/test_aether_dsc.py
 	rm -rf $(GATE_DIR)/wheels $(GATE_DIR)/wheelenv
 	export SETUPTOOLS_SCM_PRETEND_VERSION="$${SETUPTOOLS_SCM_PRETEND_VERSION:-0.0.0.dev0+g$$(git rev-parse --short HEAD)}"

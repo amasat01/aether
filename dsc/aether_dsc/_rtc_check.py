@@ -28,7 +28,7 @@ from typing import Mapping
 __all__ = ["RTC_SHIM_NAMES", "NVRTC_OPTIONS", "PAYLOAD_MANIFEST",
            "HOST_ONLY_MANIFEST", "manifest_paths", "host_only_manifest_paths",
            "repo_headers", "cccl_include_dir", "served_name",
-           "check_headers_nvrtc_clean"]
+           "check_headers_nvrtc_clean", "FACTS_HEADER"]
 
 #: The seven NVRTC compatibility shims — see ``aether/rtc/``'s own files for the served text.
 RTC_SHIM_NAMES = ("cstddef", "cstdint", "type_traits", "utility", "concepts",
@@ -54,6 +54,10 @@ PAYLOAD_MANIFEST = Path(__file__).resolve().parent / "payload_headers.txt"
 #: (:data:`aether_dsc._core.Payload.device_headers` excludes every name
 #: this manifest lists).
 HOST_ONLY_MANIFEST = Path(__file__).resolve().parent / "payload_headers_host.txt"
+
+
+#: The raptor wing's generated header every aether linalg / geometry compile includes first (CMake: AETHER_FACTS_DIR).
+FACTS_HEADER = "raptor_facts.h"
 
 
 def manifest_paths() -> list[str]:
@@ -203,6 +207,7 @@ def check_headers_nvrtc_clean(headers: Mapping[str, bytes], *,
                                cccl_include: str | None = None,
                                options: list[str] | None = None,
                                exclude_from_toplevel: frozenset[str] = frozenset(),
+                               facts_header: bytes | None = None,
                                ) -> list[str]:
     """Compile ONE synthetic TU ``#include``-ing every TOP-LEVEL name in
     ``headers`` (sorted, for a reproducible diagnostic order) through NVRTC,
@@ -217,6 +222,11 @@ def check_headers_nvrtc_clean(headers: Mapping[str, bytes], *,
     claim — see :mod:`aether_dsc._seal_impl`'s ``GREF_ABI_HOST_NAME`` for
     the one case this applies to.
 
+    ``facts_header`` is the content of a raptor wing's ``raptor_facts.h``:
+    served under that name and included FIRST, as every real compile
+    includes it before aether. It is the compiling machine's input, not a
+    payload header, so it is never part of the claim.
+
     Returns the NVRTC log's diagnostic lines (empty means the claim holds);
     raises only on an environment failure (no NVRTC binding, no CCCL) that
     is not itself the thing under test.
@@ -225,16 +235,20 @@ def check_headers_nvrtc_clean(headers: Mapping[str, bytes], *,
 
     cccl_include = cccl_include or cccl_include_dir()
     opts = list(options or _default_options(nvrtc)) + [f"-I{cccl_include}"]
-    names = sorted(headers)
-    top_level = [n for n in names
+    served = dict(headers)
+    if facts_header is not None:
+        served[FACTS_HEADER] = facts_header
+    names = sorted(served)
+    top_level = [n for n in sorted(headers)
                  if not n.startswith("rtc/") and n not in exclude_from_toplevel]
-    src = "".join(f'#include "{n}"\n' for n in top_level)
+    src = (f'#include "{FACTS_HEADER}"\n' if facts_header is not None else "")
+    src += "".join(f'#include "{n}"\n' for n in top_level)
     src += "\n// reachability only — the TU need not use anything.\n"
 
     _, prog = nvrtc.nvrtcCreateProgram(
         src.encode(), b"rtc_seal_check.cu",
-        len(names), [headers[n] for n in names],
-        [served_name(n).encode() for n in names])
+        len(names), [served[n] for n in names],
+        [(n if n == FACTS_HEADER else served_name(n)).encode() for n in names])
     try:
         nvrtc.nvrtcCompileProgram(prog, len(opts), [o.encode() for o in opts])
         _, log_size = nvrtc.nvrtcGetProgramLogSize(prog)

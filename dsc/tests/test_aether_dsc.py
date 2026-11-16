@@ -430,3 +430,22 @@ def test_release_wheel_jobs_build_for_the_portable_isa():
     for job in wheel_jobs:
         envs = len(re.findall(r"CIBW_ENVIRONMENT(?:_LINUX|_MACOS)?:", job))
         assert envs and job.count("AETHER_MARCH=x86-64-v3") >= envs, f"wheel job {job.split(':', 1)[0]}: every CIBW_ENVIRONMENT needs AETHER_MARCH=x86-64-v3"
+
+
+def test_the_seal_gate_refuses_by_name_without_the_facts_folder(tmp_path):
+    """The gate compiles as every real compile does, with the raptor wing's facts header first: no folder, or a folder
+    without the header, is refused by name before anything is written."""
+    for given in (None, tmp_path):
+        with pytest.raises(FileNotFoundError, match="raptor_facts.h"):
+            _seal_impl.seal_and_write({"aether/x.h": b""}, gate=True, facts_dir=given)
+
+
+def test_the_gate_compiles_with_the_facts_header_included_first(tmp_path):
+    """A header that demands a facts macro compiles clean once the facts header is served and included first, and is a
+    diagnostic without it: the facts reach the gate's compile, and only through ``facts_header`` (never sealed)."""
+    pytest.importorskip("cuda.bindings")
+    demands = {"aether/x.h": b"#ifndef RAPTOR_PROBE_FACT\n#error the facts header was not included first\n#endif\n"}
+    assert _tools.check_headers_nvrtc_clean(demands, cccl_include=str(tmp_path),
+                                            facts_header=b"#define RAPTOR_PROBE_FACT 1\n") == []
+    missing = _tools.check_headers_nvrtc_clean(demands, cccl_include=str(tmp_path))
+    assert any("the facts header was not included first" in line for line in missing), missing

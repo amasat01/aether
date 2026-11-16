@@ -147,7 +147,7 @@ def seal(aether_root: str | Path | None = None,
 
 def seal_and_write(headers: Mapping[str, bytes],
                    host_only_names: frozenset[str] = frozenset(),
-                   *, gate: bool = True) -> Path:
+                   *, gate: bool = True, facts_dir: str | Path | None = None) -> Path:
     """Runs the NVRTC-clean gate over the NVRTC-clean section ONLY, then
     writes `_payload/<digest>.bin` — refuses to write a payload that fails
     the gate. Removes any stale blob first: `aether_dsc.payload()` globs
@@ -161,11 +161,24 @@ def seal_and_write(headers: Mapping[str, bytes],
 
     `gate=False` skips the NVRTC check, for a machine with no NVRTC (CPU-only macOS):
     the blob is the same bytes the gated Linux seal writes, and only the host route reads it there.
+
+    `facts_dir` is the folder holding a raptor wing's `raptor_facts.h` (CMake's `AETHER_FACTS_DIR`): the gate
+    compiles with it included first, as every real compile does. It is required for the gate and never sealed:
+    the facts belong to the wing chosen on the machine that compiles.
     """
+    facts_header = None
+    if gate:
+        facts_file = Path(facts_dir) / _tools.FACTS_HEADER if facts_dir else None
+        if facts_file is None or not facts_file.is_file():
+            raise FileNotFoundError(
+                "seal_and_write(): the NVRTC-clean gate needs the folder holding the raptor wing's "
+                f"{_tools.FACTS_HEADER} (facts_dir, as CMake's AETHER_FACTS_DIR); got {str(facts_dir)!r}")
+        facts_header = facts_file.read_bytes()
     nvrtc_headers = ({k: v for k, v in headers.items() if k not in host_only_names}
                      if host_only_names else headers)
     diagnostics = (_tools.check_headers_nvrtc_clean(
-        nvrtc_headers, exclude_from_toplevel=frozenset({GREF_ABI_HOST_NAME})) if gate else [])
+        nvrtc_headers, exclude_from_toplevel=frozenset({GREF_ABI_HOST_NAME}),
+        facts_header=facts_header) if gate else [])
     if diagnostics:
         raise RuntimeError(
             "NVRTC-clean check FAILED: the sealed payload does not compile clean under NVRTC "
