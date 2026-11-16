@@ -3,6 +3,7 @@ use super::{linalg, Frame, Out};
 use crate::body::frame::needs::Need;
 use crate::body::values::text_field;
 use crate::body::Class;
+use crate::ir::door;
 use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
@@ -63,25 +64,54 @@ fn element(held: &str, shape: &[usize]) -> String {
 /// matrix is one loop over its elements, or (for a copy) a loop its team's threads share.
 pub fn store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let (value_p, index_p) = (f.opp(p)[0], f.opp(p)[1]);
-    let h = f.node(p).h;
+    let shape = f.node(value_p).ty.shape.clone();
+    let (value, index) = (f.text(value_p).clone(), f.text(index_p).clone());
+    let held = if shape.is_empty() {
+        value
+    } else {
+        linalg::operand(f, value_p, &value)?
+    };
+    let copy = f.node(p).class == Class::TeamCopy;
+    write(f, f.node(p).h, &held, &index, &shape, copy)
+}
+
+/// A log store inside a loop body, whose operands have no place of their own in the walk and are
+/// rendered by handle: a scalar value into the slot its index names. A value of rank > 0 is refused
+/// by name.
+pub fn store_in_loop(f: &mut Frame, h: u32) -> Result<(), Refusal> {
+    let operands = door::operands(f.ctx(), h)?;
+    if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {
+        return Err(nib("a log store of a rank > 0 value inside a loop body"));
+    }
+    let (value, index) = (f.arg(operands[0])?, f.arg(operands[1])?);
+    write(f, h, &value, &index, &[], false)
+}
+
+/// The statement of a store into the lane's own slice of the scratch plane the node `h` names:
+/// `held` the value (an element-readable item when `shape` is not empty), `index` its slice.
+fn write(
+    f: &mut Frame,
+    h: u32,
+    held: &str,
+    index: &str,
+    shape: &[usize],
+    copy: bool,
+) -> Result<(), Refusal> {
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
         &text_field(f.ctx(), h, "name")?,
     )?;
-    let shape = f.node(value_p).ty.shape.clone();
     let size: usize = shape.iter().product();
-    let base = slice_base(f.text(index_p), size);
-    let value = f.text(value_p).clone();
+    let base = slice_base(index, size);
     if shape.is_empty() {
-        f.emit(format!("{target}.data()[{base}] = {value};"));
+        f.emit(format!("{target}.data()[{base}] = {held};"));
         return Ok(());
     }
-    let held = linalg::operand(f, value_p, &value)?;
     let assign = format!(
         "{target}.data()[{base} + hawk_lk] = {};",
-        element(&held, &shape)
+        element(held, shape)
     );
-    if f.node(p).class == Class::TeamCopy {
+    if copy {
         f.need(Need::Linalg);
         f.need(Need::Team);
         f.emit(format!("{{ const aether::linalg::team::Team hawk_tm = aether::linalg::team::Team::here(); for (Int hawk_lk = hawk_tm.rank; hawk_lk < {size}; hawk_lk += hawk_tm.size) {assign} }}"));

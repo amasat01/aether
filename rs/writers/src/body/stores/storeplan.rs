@@ -470,7 +470,7 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
 }
 
 /// The statements of a loop's body sinks: each link of a per-iteration accumulate on the own column
-/// where it stands. Any other
+/// where it stands, and each log store of an ordered accumulate into its scratch plane. Any other
 /// body sink is refused by name.
 pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
     for sink in door::field_refs(f.ctx(), lp, "body_sinks")?.unwrap_or_default() {
@@ -481,6 +481,10 @@ pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
         }
         if door::class_is(f.ctx(), sink, "TapeWrite")? {
             super::sinks::tape_write_of(f, sink)?;
+            continue;
+        }
+        if door::class_is(f.ctx(), sink, "LogStore")? {
+            crate::body::team::store_in_loop(f, sink)?;
             continue;
         }
         let Some(links) = accumulate_links(f, sink)? else {
