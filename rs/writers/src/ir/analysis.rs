@@ -199,11 +199,6 @@ extern "C" {
     ) -> c_int;
 }
 
-/// The branch-mix plane of the dispatch of that name.
-pub fn mix_name(dispatch_name: &str) -> Result<String, Refusal> {
-    Ok(runtime_names::mix_plane(dispatch_name))
-}
-
 /// The refusal a non-OK status stands for: the reason is the text the context holds.
 fn refusal(ctx: *mut RxCtx, what: &str, st: c_int) -> Refusal {
     let mut refused = crate::ir::door::failed(ctx, st);

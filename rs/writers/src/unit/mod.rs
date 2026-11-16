@@ -187,7 +187,7 @@ pub struct StepFacts {
 
 /// What the writer decided about a rendered unit that its caller states about it: the symbol the
 /// text exports for its entry, the row planes of its sample sums, its companion planes and the
-/// step of a finishing unit that splits.
+/// step of a finishing unit that splits, and the branch-mix planes of its auto dispatch groups.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
     /// The symbol the text exports for its entry.
@@ -198,6 +198,8 @@ pub struct Facts {
     pub companions: Vec<CompanionFact>,
     /// The step of a finishing unit whose body is a lane split; none for any other unit.
     pub step: Option<StepFacts>,
+    /// The branch-mix plane of each auto dispatch group, as the group's name and the plane's name.
+    pub mix_planes: Vec<(String, String)>,
 }
 
 /// One argument slot of the entry: role, name, element type and shape.

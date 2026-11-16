@@ -220,7 +220,24 @@ fn facts_of(
             })
             .collect(),
         step: step_of(ctx, walk, unit)?,
+        mix_planes: mix_planes(ctx, walk)?,
     })
+}
+
+/// The branch-mix plane of each auto dispatch group of the walk, by the group's name (`dispatch<n>`, n its place among the walk's
+/// dispatches).
+fn mix_planes(ctx: *mut RxCtx, walk: u32) -> Result<Vec<(String, String)>, Refusal> {
+    let mut out = vec![];
+    for (index, &node) in crate::ir::door::dispatch_nodes(ctx, walk)?
+        .iter()
+        .enumerate()
+    {
+        if crate::ir::door::is_a(ctx, node, "auto_dispatch")? {
+            let group = format!("dispatch{index}");
+            out.push((group.clone(), crate::ir::runtime_names::mix_plane(&group)));
+        }
+    }
+    Ok(out)
 }
 
 /// The step of a finishing unit, from the lane split of its body; none when the unit does not
