@@ -173,7 +173,7 @@ pub struct CompanionFact {
     /// The name of the plane it compensates.
     pub target: String,
     /// The symbol of the host entry or device kernel that folds it.
-    pub fold_entry: Option<String>,
+    pub fold_entry: String,
 }
 
 /// The lane split of a finishing unit's step, as the caller prices it.
