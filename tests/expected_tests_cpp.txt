@@ -575,6 +575,7 @@ Fft.C2cLengthsF64
 Fft.ErrorsAreAetherErrors
 Fft.MultiAxisF32
 Fft.MultiAxisF64
+Fft.NegativeThreadCountIsRefused @debug
 Fft.NormsF32
 Fft.NormsF64
 Fft.RealTransformsF32

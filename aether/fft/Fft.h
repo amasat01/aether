@@ -37,6 +37,10 @@
 #include <type_traits>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "aether/err/Error.h"
 
 // plans are cached (thread-safe) and shared by the OpenMP chunks below
@@ -59,7 +63,8 @@ enum class Norm { Backward, Forward, Ortho };
 
 namespace detail {
 
-inline void check(std::span<const std::size_t> shape, std::span<const std::size_t> axes) {
+inline void check(std::span<const std::size_t> shape, std::span<const std::size_t> axes, int threads) {
+    if (threads < 0) throw aether::Error("fft: negative thread count");
     if (axes.empty()) throw aether::Error("fft: no axes to transform");
     std::vector<bool> seen(shape.size(), false);
     for (std::size_t a : axes) {
@@ -102,8 +107,8 @@ inline constexpr std::size_t kChunkLines = 16;
 /// Runs `body(sub_shape, byte_offset_of(dim, begin))` over independent chunks of the lines of a transform along `axis`
 /// of an array of `shape`. A chunk is a rectangular block: the non-`axis` dimension with the largest extent is cut
 /// into pieces of about `kChunkLines` lines (the other non-`axis` dimensions stay whole). Chunks run on an OpenMP
-/// team; a failure inside one is rethrown after the loop.
-template <class Body> void forChunks(const pocketfft::shape_t& shape, std::size_t axis, Body&& body) {
+/// team of `threads` (0: the ambient team); a failure inside one is rethrown after the loop.
+template <class Body> void forChunks(const pocketfft::shape_t& shape, std::size_t axis, int threads, Body&& body) {
     std::size_t dim = shape.size(), best = 0, lines = 1;
     for (std::size_t d = 0; d < shape.size(); ++d) {
         if (d == axis) continue;
@@ -117,7 +122,7 @@ template <class Body> void forChunks(const pocketfft::shape_t& shape, std::size_
     const std::ptrdiff_t chunks = std::ptrdiff_t((shape[dim] + piece - 1) / piece);
     std::exception_ptr failure;
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (chunks > 1)
+#pragma omp parallel for schedule(static) if (chunks > 1) num_threads(threads > 0 ? threads : omp_get_max_threads())
 #endif
     for (std::ptrdiff_t c = 0; c < chunks; ++c) {
         try {
@@ -148,20 +153,20 @@ template <class T> T* atr(T* p, std::ptrdiff_t bytes) { return reinterpret_cast<
 
 /// c2c along one `axis` of a dense array of `shape`, chunked and parallel; `in == out` is allowed
 template <class T>
-void c2cPass(const std::complex<T>* in, std::complex<T>* out, const pocketfft::shape_t& shape, std::size_t axis, bool forward, T fct) {
+void c2cPass(const std::complex<T>* in, std::complex<T>* out, const pocketfft::shape_t& shape, std::size_t axis, bool forward, T fct, int threads) {
     auto st = strides(shape, sizeof(std::complex<T>));
-    forChunks(shape, axis, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
+    forChunks(shape, axis, threads, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
         std::ptrdiff_t off = dim < shape.size() ? std::ptrdiff_t(begin) * st[dim] : 0;
         pocketfft::c2c(sub, st, st, pocketfft::shape_t{axis}, forward, at(in, off), at(out, off), fct);
     });
 }
 
 /// r2c along `axis`: real `shape` in, complex out whose `axis` extent is `n / 2 + 1`
-template <class T> void r2cPass(const T* in, std::complex<T>* out, const pocketfft::shape_t& shape, std::size_t axis, T fct) {
+template <class T> void r2cPass(const T* in, std::complex<T>* out, const pocketfft::shape_t& shape, std::size_t axis, T fct, int threads) {
     pocketfft::shape_t half = shape;
     half[axis] = shape[axis] / 2 + 1;
     auto sti = strides(shape, sizeof(T)), sto = strides(half, sizeof(std::complex<T>));
-    forChunks(shape, axis, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
+    forChunks(shape, axis, threads, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
         std::ptrdiff_t oi = dim < shape.size() ? std::ptrdiff_t(begin) * sti[dim] : 0;
         std::ptrdiff_t oo = dim < shape.size() ? std::ptrdiff_t(begin) * sto[dim] : 0;
         pocketfft::r2c(sub, sti, sto, axis, true, atr(in, oi), at(out, oo), fct);
@@ -169,11 +174,11 @@ template <class T> void r2cPass(const T* in, std::complex<T>* out, const pocketf
 }
 
 /// c2r along `axis`: complex in (extent `n / 2 + 1`), real `shape` out; the input is left unchanged
-template <class T> void c2rPass(const std::complex<T>* in, T* out, const pocketfft::shape_t& shape, std::size_t axis, T fct) {
+template <class T> void c2rPass(const std::complex<T>* in, T* out, const pocketfft::shape_t& shape, std::size_t axis, T fct, int threads) {
     pocketfft::shape_t half = shape;
     half[axis] = shape[axis] / 2 + 1;
     auto sti = strides(half, sizeof(std::complex<T>)), sto = strides(shape, sizeof(T));
-    forChunks(shape, axis, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
+    forChunks(shape, axis, threads, [&](const pocketfft::shape_t& sub, std::size_t begin, std::size_t, std::size_t dim) {
         std::ptrdiff_t oi = dim < shape.size() ? std::ptrdiff_t(begin) * sti[dim] : 0;
         std::ptrdiff_t oo = dim < shape.size() ? std::ptrdiff_t(begin) * sto[dim] : 0;
         pocketfft::c2r(sub, sti, sto, axis, false, at(in, oi), atr(out, oo), fct);
@@ -182,43 +187,44 @@ template <class T> void c2rPass(const std::complex<T>* in, T* out, const pocketf
 
 }  // namespace detail
 
-/// Complex to complex over `axes`: `in` and `out` hold `prod(shape)` pairs.
+/// Complex to complex over `axes`: `in` and `out` hold `prod(shape)` pairs. `threads`: 0 uses the ambient OpenMP
+/// team, n >= 1 at most n threads; negative throws. The result is bit-identical for every count.
 template <class T>
 void c2c(const T* in, T* out, std::span<const std::size_t> shape, std::span<const std::size_t> axes, bool forward,
-         Norm norm = Norm::Backward) {
+         Norm norm = Norm::Backward, int threads = 0) {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
-    detail::check(shape, axes);
+    detail::check(shape, axes, threads);
     const T fct = detail::scale<T>(norm, forward, detail::points(shape, axes));
     auto sh = detail::vec(shape);
     auto src = reinterpret_cast<const std::complex<T>*>(in);
     auto dst = reinterpret_cast<std::complex<T>*>(out);
     for (std::size_t i = 0; i < axes.size(); ++i)
-        detail::c2cPass<T>(i == 0 ? src : dst, dst, sh, axes[i], forward, i + 1 == axes.size() ? fct : T(1));
+        detail::c2cPass<T>(i == 0 ? src : dst, dst, sh, axes[i], forward, i + 1 == axes.size() ? fct : T(1), threads);
 }
 
 /// Real to complex (forward) over `axes`. `shape` is the REAL input; the last of `axes` is the halved one: `out`
-/// holds the shape with that extent replaced by `n / 2 + 1`, as pairs.
+/// holds the shape with that extent replaced by `n / 2 + 1`, as pairs. `threads` as in `c2c`.
 template <class T>
 void r2c(const T* in, T* out, std::span<const std::size_t> shape, std::span<const std::size_t> axes,
-         Norm norm = Norm::Backward) {
+         Norm norm = Norm::Backward, int threads = 0) {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
-    detail::check(shape, axes);
+    detail::check(shape, axes, threads);
     const T fct = detail::scale<T>(norm, true, detail::points(shape, axes));
     auto sh = detail::vec(shape);
     auto dst = reinterpret_cast<std::complex<T>*>(out);
-    detail::r2cPass<T>(in, dst, sh, axes.back(), axes.size() == 1 ? fct : T(1));
+    detail::r2cPass<T>(in, dst, sh, axes.back(), axes.size() == 1 ? fct : T(1), threads);
     sh[axes.back()] = shape[axes.back()] / 2 + 1;
     for (std::size_t i = 0; i + 1 < axes.size(); ++i)
-        detail::c2cPass<T>(dst, dst, sh, axes[i], true, i + 2 == axes.size() ? fct : T(1));
+        detail::c2cPass<T>(dst, dst, sh, axes[i], true, i + 2 == axes.size() ? fct : T(1), threads);
 }
 
 /// Complex to real (inverse) over `axes`. `shape` is the REAL output; the last of `axes` is the halved one: `in`
-/// holds the shape with that extent replaced by `n / 2 + 1`, as pairs. The input is left unchanged.
+/// holds the shape with that extent replaced by `n / 2 + 1`, as pairs. The input is left unchanged. `threads` as in `c2c`.
 template <class T>
 void c2r(const T* in, T* out, std::span<const std::size_t> shape, std::span<const std::size_t> axes,
-         Norm norm = Norm::Backward) {
+         Norm norm = Norm::Backward, int threads = 0) {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>);
-    detail::check(shape, axes);
+    detail::check(shape, axes, threads);
     const T fct = detail::scale<T>(norm, false, detail::points(shape, axes));
     auto src = reinterpret_cast<const std::complex<T>*>(in);
     auto half = detail::vec(shape);
@@ -229,10 +235,10 @@ void c2r(const T* in, T* out, std::span<const std::size_t> shape, std::span<cons
         for (auto v : half) total *= v;
         work.resize(total);
         for (std::size_t i = 0; i + 1 < axes.size(); ++i)
-            detail::c2cPass<T>(i == 0 ? src : work.data(), work.data(), half, axes[i], false, T(1));
+            detail::c2cPass<T>(i == 0 ? src : work.data(), work.data(), half, axes[i], false, T(1), threads);
         src = work.data();
     }
-    detail::c2rPass<T>(src, out, detail::vec(shape), axes.back(), fct);
+    detail::c2rPass<T>(src, out, detail::vec(shape), axes.back(), fct, threads);
 }
 
 }  // namespace aether::fft

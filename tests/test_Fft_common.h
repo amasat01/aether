@@ -24,10 +24,6 @@
 #include <cstring>
 #include <vector>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 #include "aether/fft/Fft.h"
 
 namespace {
@@ -220,39 +216,46 @@ TEST(Fft, AdjointOfUnscaledForwardIsUnscaledInverse) {
     EXPECT_LT(double(std::abs(lhs - rhs)), 1e-12);
 }
 
-// The chunking depends on the shape only: one thread and four threads give the same bits, on every route.
+// The chunking depends on the shape only: every thread count gives the same bits as one thread, on every route.
 template <class T> void threadInvariant() {
     auto run = [](int threads) {
-#ifdef _OPENMP
-        omp_set_num_threads(threads);
-#else
-        (void)threads;
-#endif
         std::vector<std::vector<T>> outs;
         for (Idx shape : {Idx{37, 100}, Idx{9, 20, 11}}) {
             std::size_t total = prodOf(shape);
             auto x = randomVec<T>(2 * total, 77);
             for (Idx axes : {Idx{shape.size() - 1}, Idx{0}, Idx{0, shape.size() - 1}}) {
                 std::vector<T> y(2 * total);
-                aether::fft::c2c<T>(x.data(), y.data(), shape, axes, true);
+                aether::fft::c2c<T>(x.data(), y.data(), shape, axes, true, aether::fft::Norm::Backward, threads);
                 outs.push_back(y);
                 auto re = randomVec<T>(total, 78);
                 Idx half = shape;
                 half[axes.back()] = shape[axes.back()] / 2 + 1;
                 std::vector<T> spec(2 * prodOf(half)), back(total);
-                aether::fft::r2c<T>(re.data(), spec.data(), shape, axes);
-                aether::fft::c2r<T>(spec.data(), back.data(), shape, axes);
+                aether::fft::r2c<T>(re.data(), spec.data(), shape, axes, aether::fft::Norm::Backward, threads);
+                aether::fft::c2r<T>(spec.data(), back.data(), shape, axes, aether::fft::Norm::Backward, threads);
                 outs.push_back(spec);
                 outs.push_back(back);
             }
         }
         return outs;
     };
-    auto one = run(1), four = run(4);
-    ASSERT_EQ(one.size(), four.size());
-    for (std::size_t i = 0; i < one.size(); ++i)
-        EXPECT_EQ(0, std::memcmp(one[i].data(), four[i].data(), one[i].size() * sizeof(T))) << "case " << i;
+    auto one = run(1);
+    for (int threads : {2, 3, 0}) {
+        auto other = run(threads);
+        ASSERT_EQ(one.size(), other.size());
+        for (std::size_t i = 0; i < one.size(); ++i)
+            EXPECT_EQ(0, std::memcmp(one[i].data(), other[i].data(), one[i].size() * sizeof(T)))
+                << "threads " << threads << " case " << i;
+    }
 }
 
 TEST(Fft, ThreadCountDoesNotChangeTheBitsF32) { threadInvariant<float>(); }
 TEST(Fft, ThreadCountDoesNotChangeTheBitsF64) { threadInvariant<double>(); }
+
+TEST(Fft, NegativeThreadCountIsRefused) {
+    using aether::fft::Norm;
+    std::vector<double> a(8), b(8), c(6);
+    EXPECT_THROW(aether::fft::c2c<double>(a.data(), b.data(), Idx{4}, Idx{0}, true, Norm::Backward, -1), aether::Error);
+    EXPECT_THROW(aether::fft::r2c<double>(a.data(), b.data(), Idx{4}, Idx{0}, Norm::Backward, -1), aether::Error);
+    EXPECT_THROW(aether::fft::c2r<double>(b.data(), c.data(), Idx{4}, Idx{0}, Norm::Backward, -1), aether::Error);
+}
