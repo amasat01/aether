@@ -164,19 +164,25 @@ fn put(store: &str, ctype: &str, value: &str, shaped: bool) -> String {
     }
 }
 
-/// The signature of a fast entry: the unit's own signature with the entry's extra parameters, under the `_suffix` name.
-fn fast_head(signature: &str, name: &str, params: &str, suffix: &str) -> Result<String, Refusal> {
+/// The name of the persistent entry of the unit named `name`: the one place that makes it.
+pub fn persist_function(name: &str) -> String {
+    format!("{name}_persist")
+}
+
+/// The name of the contiguous-range entry of the unit named `name`: the one place that makes it.
+pub fn range_function(name: &str) -> String {
+    format!("{name}_range")
+}
+
+/// The signature of a fast entry: the unit's own signature with the entry's extra parameters, under the name `entry`.
+fn fast_head(signature: &str, name: &str, params: &str, entry: &str) -> Result<String, Refusal> {
     if !signature.ends_with("    long long nSamples)") {
         return Err(fault(
             "fast entry: the signature does not end with the partition triple",
         ));
     }
     let head = format!("{},\n{params})", &signature[..signature.len() - 1]);
-    Ok(head.replacen(
-        &format!("void {name}("),
-        &format!("void {name}{suffix}("),
-        1,
-    ))
+    Ok(head.replacen(&format!("void {name}("), &format!("void {entry}("), 1))
 }
 
 /// What the two fast entries are cut from.
@@ -354,7 +360,12 @@ fn persist_parts(cut: &Cut) -> Result<PersistParts, Refusal> {
         (Some(guard), false) => post.replace(&format!("!{guard} && "), ""),
         _ => post,
     };
-    let head = fast_head(&cut.signature, cut.name, PERSIST_PARAMS, "_persist")?;
+    let head = fast_head(
+        &cut.signature,
+        cut.name,
+        PERSIST_PARAMS,
+        &persist_function(cut.name),
+    )?;
     let rebuilt = if post.is_empty() {
         None
     } else {
@@ -703,7 +714,12 @@ fn range_parts(cut: &Cut) -> Result<RangeParts, Refusal> {
         .count
         .clone()
         .ok_or_else(|| fault("range entry: no runtime trip count"))?;
-    let head = fast_head(&cut.signature, cut.name, RANGE_PARAMS, "_range")?;
+    let head = fast_head(
+        &cut.signature,
+        cut.name,
+        RANGE_PARAMS,
+        &range_function(cut.name),
+    )?;
     Ok(RangeParts {
         head,
         opened,
@@ -867,4 +883,20 @@ pub fn fast_entries(cut: &Cut, single: &str, active: bool) -> Result<Vec<String>
     out.extend(gated);
     out.extend(["#endif  // HAWK_FAST_ENTRIES".to_string(), String::new()]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    //! The entry names the facts state are the names the fast entries' heads carry.
+    use super::*;
+
+    #[test]
+    fn the_heads_of_the_fast_entries_carry_the_names_the_facts_state() {
+        let signature = "void k(\n    float* a,\n    long long nSamples)";
+        let persist = fast_head(signature, "k", "int extra", &persist_function("k")).unwrap();
+        let ranged = fast_head(signature, "k", "int extra", &range_function("k")).unwrap();
+        assert!(persist.starts_with(&format!("void {}(", persist_function("k"))));
+        assert!(ranged.starts_with(&format!("void {}(", range_function("k"))));
+        assert_ne!(persist_function("k"), range_function("k"));
+    }
 }

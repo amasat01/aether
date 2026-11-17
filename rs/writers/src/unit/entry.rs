@@ -221,6 +221,9 @@ fn facts_of(
             .collect(),
         step: step_of(ctx, walk, unit)?,
         mix_planes: mix_planes(ctx, walk)?,
+        // the device render knows whether it cut the fast entries and names them
+        persist_function: source.facts.persist_function.clone(),
+        range_function: source.facts.range_function.clone(),
     })
 }
 

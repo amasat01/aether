@@ -361,11 +361,18 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         &name,
         unit.build.launch_bounds,
     )?);
+    let fast_names = (!fast.is_empty()).then(|| {
+        (
+            persist::persist_function(&name),
+            persist::range_function(&name),
+        )
+    });
     parts.extend(fast);
     let mut text = parts.join("\n");
     if unit.literal_table && mode.id == "float64" {
         text = super::literals::literal_table(&text);
     }
+    let (persist_function, range_function) = fast_names.unzip();
     Ok(HostSource {
         text,
         body: input.body.clone(),
@@ -376,7 +383,11 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
             vectorised: false,
             thread_box: unit.thread_box.clone(),
         },
-        facts: crate::unit::Facts::default(),
+        facts: crate::unit::Facts {
+            persist_function,
+            range_function,
+            ..crate::unit::Facts::default()
+        },
         #[cfg(feature = "shadow")]
         needs_diffs: None,
     })

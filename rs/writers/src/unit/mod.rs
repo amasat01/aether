@@ -200,6 +200,11 @@ pub struct Facts {
     pub step: Option<StepFacts>,
     /// The branch-mix plane of each auto dispatch group, as the group's name and the plane's name.
     pub mix_planes: Vec<(String, String)>,
+    /// The persistent entry the device text holds; none when the unit has no fast entries.
+    pub persist_function: Option<String>,
+    /// The contiguous-range entry the device text holds (under the build's fast-entries macro); none when the unit has no
+    /// fast entries.
+    pub range_function: Option<String>,
 }
 
 /// One argument slot of the entry: role, name, element type and shape.
