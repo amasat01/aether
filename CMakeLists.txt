@@ -306,6 +306,9 @@ endif()
 
 # Copy includes to install location
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/aether" DESTINATION "include")
+# The facts header this build was configured with goes with the headers: the installed target forces its include, so a
+# consumer of the installed package finds it in the package's own include directory and names no wing.
+install(FILES "${AETHER_FACTS_DIR}/raptor_facts.h" DESTINATION "include")
 # Configure targets to be exported (in this case just our header lib)
 install(TARGETS ${AETHER_LIB}
     EXPORT ${PROJECT_NAME}_Targets
