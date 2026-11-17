@@ -587,7 +587,6 @@ TEST_F(BandedRealCert, LimitsAreDerivedFromTheCodecConstantsAndNotTranscribed)
     EXPECT_TRUE(NL::has_infinity);
     EXPECT_TRUE(NL::has_quiet_NaN);
     EXPECT_FALSE(NL::has_signaling_NaN);
-    EXPECT_EQ(NL::has_denorm, std::denorm_absent);
 }
 
 TEST_F(BandedRealCert, LimitsMaxIsTheMarginRespectingAdmissibleTopAndTheCodecTopIsNot)

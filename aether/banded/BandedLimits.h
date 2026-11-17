@@ -187,9 +187,9 @@ public:
     /* Every `double` subnormal encodes to canonical zero, and the flush is
      * sign-destroying: a negative subnormal comes back `+0`, not `-0`.
      * Checked by
-     * `BandedRealCert.SubnormalDoublesFlushToCanonicalZeroSignDestroying`. */
-    static constexpr std::float_denorm_style has_denorm = std::denorm_absent;
-    static constexpr bool has_denorm_loss                = false;
+     * `BandedRealCert.SubnormalDoublesFlushToCanonicalZeroSignDestroying`.
+     * `has_denorm` and `has_denorm_loss` are not stated: C++23 deprecates
+     * them; `denorm_min() == min()` below says the same. */
 
     /* Representation is well defined but the arithmetic is not IEC 559:
      * the banded ops are certified to <= 1 ULP rather than correctly
