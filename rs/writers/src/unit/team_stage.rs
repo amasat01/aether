@@ -609,7 +609,6 @@ fn step_lines(
         "block_part" if active.is_some() => return Ok(vec![]),
         "block_part" => return block_part(step, per_lane, reads, device, banded),
         "block_sum" => return block_sum(step, per_lane, active, device, banded),
-        "eigh_warp" => return Err(nib("a team step eigh_warp")),
         _ => {}
     }
     if banded {
@@ -627,9 +626,39 @@ fn step_lines(
             .ok_or_else(|| unknown("a team plane without width"))?;
         lines.push(pointer(name, role, width));
     }
+    if step.op == "eigh_warp" {
+        lines.extend(eigh_warp(step)?);
+        return Ok(lines);
+    }
     lines.push(format!("const auto hawk_f = {};", factor_view(step)?));
     lines.push(call(step)?);
     Ok(lines)
+}
+
+/// The eigenvalues of an order-32 matrix, worked by one warp on the device (lane `l` of the team keeps the `l`-th smallest) and by
+/// the one-thread routine on the host, whose team is one thread. A preprocessor line starts at the left margin (`stage_body` does
+/// not indent it); the routine's own barrier is not the team's, so the stage ends with the team's.
+fn eigh_warp(step: &Step) -> Result<Vec<String>, Refusal> {
+    // the routines are written for exactly this order
+    if step.n != 32 {
+        return Err(nib(format!("a warp eigh of order {}", step.n)));
+    }
+    Ok(strs(&[
+        "#if defined(__CUDA_ARCH__)",
+        "__shared__ aether::linalg::warp::EighValuesScratch<Real> hawk_scratch;",
+        "if (hawk_tm.rank < 32) {",
+        "    const auto hawk_r = aether::linalg::warp::eighValues<32>(hawk_scratch, static_cast<const Real*>(hawk_a));",
+        "    hawk_w[hawk_tm.rank] = hawk_r.w;",
+        "    if (hawk_tm.rank == 0) *hawk_info = hawk_r.info;",
+        "}",
+        "#else       // the host's team of one: the one-thread form, same bits",
+        "aether::linalg::EighValues<Real, 32> hawk_r;",
+        "aether::linalg::eighValues<32>(hawk_r, static_cast<const Real*>(hawk_a));",
+        "for (int hawk_k = 0; hawk_k < 32; ++hawk_k) hawk_w[hawk_k] = hawk_r.w[hawk_k];",
+        "*hawk_info = hawk_r.info;",
+        "#endif",
+        "hawk_tm.sync();",
+    ]))
 }
 
 /// Whether the recorded call is a team stage.
@@ -686,7 +715,10 @@ pub fn stage_body(ctx: *mut RxCtx, unit: &Unit, stage: &TeamStage) -> Result<Ren
                 banded,
             )?
             .into_iter()
-            .map(|l| format!("            {l}")),
+            .map(|l| match l.starts_with('#') {
+                true => l,
+                false => format!("            {l}"),
+            }),
         );
         lines.push("        }".to_string());
     }
@@ -711,6 +743,83 @@ mod tests {
             max_chunks: 0,
             planes: vec![("gp".into(), "parts".into())],
         }
+    }
+
+    /// A warp eigh step over the planes `a`, `info` and `w` of order `n`.
+    fn warp_step(n: i64) -> Step {
+        Step {
+            op: "eigh_warp".into(),
+            n,
+            k: 1,
+            m: 0,
+            max_chunks: 0,
+            planes: ["a", "info", "w"]
+                .map(|role| (role.to_string(), format!("tm0_{role}")))
+                .to_vec(),
+        }
+    }
+
+    /// Oracle: the text of the eigenvalue stage the previous emitter wrote for a warp eigh, line by line (its device branch calling the
+    /// warp routine with a shared scratch, its host branch the one-thread routine, one barrier of the team after both).
+    #[test]
+    fn a_warp_eigh_step_is_the_previous_emitters_lines() {
+        let per_lane = [
+            ("tm0_a".to_string(), 1024),
+            ("tm0_info".to_string(), 1),
+            ("tm0_w".to_string(), 32),
+        ];
+        let lines = step_lines(&warp_step(32), &per_lane, &[], None, true, false).unwrap();
+        let (pointers, text) = lines.split_at(3);
+        assert!(
+            pointers[0].starts_with("Real* const hawk_a = "),
+            "{}",
+            pointers[0]
+        );
+        assert!(
+            pointers[1].starts_with("std::int32_t* const hawk_info = "),
+            "{}",
+            pointers[1]
+        );
+        assert!(
+            pointers[2].starts_with("Real* const hawk_w = "),
+            "{}",
+            pointers[2]
+        );
+        assert_eq!(
+            text.join("\n"),
+            [
+                "#if defined(__CUDA_ARCH__)",
+                "__shared__ aether::linalg::warp::EighValuesScratch<Real> hawk_scratch;",
+                "if (hawk_tm.rank < 32) {",
+                "    const auto hawk_r = aether::linalg::warp::eighValues<32>(hawk_scratch, static_cast<const Real*>(hawk_a));",
+                "    hawk_w[hawk_tm.rank] = hawk_r.w;",
+                "    if (hawk_tm.rank == 0) *hawk_info = hawk_r.info;",
+                "}",
+                "#else       // the host's team of one: the one-thread form, same bits",
+                "aether::linalg::EighValues<Real, 32> hawk_r;",
+                "aether::linalg::eighValues<32>(hawk_r, static_cast<const Real*>(hawk_a));",
+                "for (int hawk_k = 0; hawk_k < 32; ++hawk_k) hawk_w[hawk_k] = hawk_r.w[hawk_k];",
+                "*hawk_info = hawk_r.info;",
+                "#endif",
+                "hawk_tm.sync();",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_warp_eigh_of_another_order_is_not_written() {
+        let per_lane = [
+            ("tm0_a".to_string(), 256),
+            ("tm0_info".to_string(), 1),
+            ("tm0_w".to_string(), 16),
+        ];
+        let why = step_lines(&warp_step(16), &per_lane, &[], None, true, false).unwrap_err();
+        assert!(
+            why.reason.contains("a warp eigh of order 16"),
+            "{}",
+            why.reason
+        );
     }
 
     #[test]
