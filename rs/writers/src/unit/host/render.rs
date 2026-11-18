@@ -884,4 +884,147 @@ mod tests {
             .contains("trm_x.lanes(hawk_lanes0, hawk_blo, hawk_bhi)"));
         assert_eq!(contiguous_close(&[], None), "    }");
     }
+
+    /// The host's vectorising verdict over a built graph (linked only when the IR core's library is).
+    #[cfg(raptor_ir_lib)]
+    mod verdict {
+        use super::super::{vectorises, Machine};
+        use crate::contract::types::{Isa, SelectWeight};
+        use crate::ir::door::RxCtx;
+        use crate::unit::Walk;
+        use std::ffi::{c_char, CString};
+
+        extern "C" {
+            fn rx_ctx_new() -> *mut RxCtx;
+            fn rx_ctx_free(ctx: *mut RxCtx);
+            fn rx_make(
+                ctx: *mut RxCtx,
+                cls: *const c_char,
+                dtype: *const c_char,
+                shape: *const i64,
+                rank: usize,
+                tag: *const c_char,
+                ops: *const u32,
+                nops: usize,
+                fields_kt: *const c_char,
+                n: usize,
+                out: *mut u32,
+            ) -> i32;
+            fn rx_canonical(
+                ctx: *mut RxCtx,
+                sinks: *const u32,
+                n: usize,
+                declared_kt: *const c_char,
+                force: *const c_char,
+                exempt_kt: *const c_char,
+                out: *mut u32,
+            ) -> i32;
+        }
+
+        /// A 64-bit node of the class over the operands.
+        fn make(c: *mut RxCtx, class: &str, ops: &[u32], fields: &str) -> u32 {
+            let (class, dtype) = (CString::new(class).unwrap(), CString::new("f64").unwrap());
+            let mut out = u32::MAX;
+            // SAFETY: `c` is a live context and every pointer is valid for the length given beside it.
+            let status = unsafe {
+                rx_make(
+                    c,
+                    class.as_ptr(),
+                    dtype.as_ptr(),
+                    [].as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    ops.as_ptr(),
+                    ops.len(),
+                    fields.as_ptr().cast(),
+                    fields.len(),
+                    &mut out,
+                )
+            };
+            assert_eq!(status, 0);
+            out
+        }
+
+        /// Whether the host loop of `out = kind(x, y)` (two operands for `pow`, one for `sin`) vectorises on a machine whose
+        /// libm is exact or not and which routes `pow` or not.
+        fn vectorised(kind: &str, exact_libm: bool, routed_pow: bool) -> bool {
+            // SAFETY: the context is made here, used only through the calls below and freed at the end.
+            let c = unsafe { rx_ctx_new() };
+            let plane = |name: &str| {
+                make(
+                    c,
+                    "Leaf",
+                    &[],
+                    &format!("(('kind', 'vocab_read'), ('role', 'per_sample'), ('name', '{name}'), ('quantity', None), ('wire_index', 0), ('sorted', False))"),
+                )
+            };
+            let operands: Vec<u32> = if kind == "pow" {
+                vec![plane("x"), plane("y")]
+            } else {
+                vec![plane("x")]
+            };
+            let call = make(
+                c,
+                "Op",
+                &operands,
+                &format!("(('kind', '{kind}'), ('literal', None))"),
+            );
+            let sink = make(c, "Assign", &[call], "(('name', 'o'),)");
+            let mut walk = 0u32;
+            // SAFETY: one sink handle, the empty declared-slot lists, and a live context.
+            let status = unsafe {
+                rx_canonical(
+                    c,
+                    &sink,
+                    1,
+                    c"[]".as_ptr(),
+                    std::ptr::null(),
+                    c"[]".as_ptr(),
+                    &mut walk,
+                )
+            };
+            assert_eq!(status, 0);
+            let machine = Machine {
+                isa: Some(Isa::Arm64),
+                vector_isa: Some("neon".into()),
+                exact_libm,
+                routed_pow,
+                caches: None,
+                select_weight: SelectWeight {
+                    float64: None,
+                    float32: None,
+                },
+            };
+            let sample_local = Walk {
+                cls: "sample_local".into(),
+                finish: None,
+                slots: vec![],
+            };
+            let answer = vectorises(c, walk, &sample_local, &machine).unwrap();
+            // SAFETY: the context is not used again.
+            unsafe { rx_ctx_free(c) };
+            answer
+        }
+
+        // The old rule (the host vector verdict): a library call stays scalar under an exact libm, except that a machine that
+        // routes powers keeps `pow` alone among them in the vector loop; where the libm is not exact no library call blocks.
+        #[test]
+        fn a_pow_call_vectorises_under_an_exact_libm_only_when_the_machine_routes_powers() {
+            assert!(vectorised("pow", true, true));
+            assert!(!vectorised("pow", true, false));
+        }
+
+        #[test]
+        fn another_library_call_stays_scalar_under_an_exact_libm_whether_or_not_powers_are_routed()
+        {
+            assert!(!vectorised("sin", true, true));
+            assert!(!vectorised("sin", true, false));
+        }
+
+        #[test]
+        fn no_library_call_blocks_the_vector_loop_where_the_libm_is_not_exact() {
+            assert!(vectorised("sin", false, false));
+            assert!(vectorised("pow", false, false));
+        }
+    }
 }
