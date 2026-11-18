@@ -52,3 +52,33 @@ pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, Refusal> {
         _ => Err(bad(format!("unknown role {role:?}"))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! The launch-boundary shape of a slot by its role and rank.
+    use super::mirror_of;
+
+    /// Oracle: the table above, read by hand: a role pinned to the scalar handle refuses a plane of a rank (a plane needs the larger
+    /// mirror, which that role has no packing for) and takes a rank-0 slot; a role read by reference takes any rank.
+    #[test]
+    fn a_ranked_plane_in_a_handle_only_role_is_refused_and_its_neighbours_are_not() {
+        for role in [
+            "per_sample",
+            "lookup",
+            "terminated",
+            "wide_in",
+            "wide_out",
+            "accum_out",
+        ] {
+            let why = mirror_of(role, 1).unwrap_err();
+            assert_eq!(
+                why.reason,
+                format!("role {role:?} carries a rank-1 plane, but the map pins it to the scalar handle")
+            );
+            assert_eq!(mirror_of(role, 0).unwrap(), "ScalarHandle", "{role}");
+        }
+        assert_eq!(mirror_of("vec_in", 1).unwrap(), "GRefMirror");
+        assert_eq!(mirror_of("mutable", 2).unwrap(), "GRefMirror");
+        assert_eq!(mirror_of("mutable", 0).unwrap(), "ScalarHandle");
+    }
+}
