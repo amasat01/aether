@@ -141,11 +141,11 @@ pub fn store_lambda(
         lines.push("        const long long hawk_row = hawk_row0 + hawk_rr;".to_string());
         lines.push(format!("        hawk_col %= {};", sinks.len()));
     }
+    // A flat switch, not an if/else-if chain: with thousands of sinks a chain nests one level per
+    // sink in the compiler's parser and exhausts it, while the cases stay flat.
+    lines.push("        switch (hawk_col) {".to_string());
     for (k, sink) in sinks.iter().enumerate() {
-        lines.push(format!(
-            "        {}if (hawk_col == {k}) {{",
-            if k > 0 { "else " } else { "" }
-        ));
+        lines.push(format!("        case {k}: {{"));
         lines.push(format!(
             "            {}.data()[hawk_row] = {out};",
             binding_name(&sink.role, &sink.name)?
@@ -156,8 +156,55 @@ pub fn store_lambda(
                 binding_name(&sink.role, &format!("{}_comp", sink.name))?
             ));
         }
-        lines.push("        }".to_string());
+        lines.push("        } break;".to_string());
     }
+    lines.push("        }".to_string());
     lines.push("    };".to_string());
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink(op: &str, name: &str) -> SumSink {
+        SumSink {
+            op: op.into(),
+            role: "out".into(),
+            name: name.into(),
+            element: "double".into(),
+        }
+    }
+
+    #[test]
+    fn the_store_is_a_switch_with_a_case_per_sink() {
+        let sinks = [sink("sum", "a"), sink("max", "b")];
+        let text = store_lambda(&sinks, 1, 0, false).unwrap();
+        let (first, second) = (
+            binding_name("out", "a").unwrap(),
+            binding_name("out", "b").unwrap(),
+        );
+        let want = format!(
+            "    auto hawk_ss_store = [&](int hawk_col, auto hawk_s, auto hawk_c) {{
+        switch (hawk_col) {{
+        case 0: {{
+            {first}.data()[hawk_row] = hawk_s;
+            {first}_comp.data()[hawk_row] = hawk_c;
+        }} break;
+        case 1: {{
+            {second}.data()[hawk_row] = hawk_s;
+        }} break;
+        }}
+    }};"
+        );
+        assert_eq!(text, want);
+    }
+
+    #[test]
+    fn six_thousand_sinks_write_no_else_if_chain() {
+        let sinks: Vec<SumSink> = (0..6000).map(|k| sink("sum", &format!("s{k}"))).collect();
+        let text = store_lambda(&sinks, 1, 0, false).unwrap();
+        assert!(!text.contains("else if (hawk_col"));
+        assert_eq!(text.matches("        case ").count(), 6000);
+    }
 }
