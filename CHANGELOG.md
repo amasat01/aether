@@ -4,7 +4,11 @@ Releases after 0.2.7 are on [GitHub](https://github.com/amasat01/aether/releases
 
 ## Unreleased
 
-This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ version. The public API is unchanged; the banded mode (double precision on GPUs with weak or no FP64) grows.
+This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ version. The banded mode (double precision on GPUs with weak or no FP64) grows.
+
+### Breaking
+
+- **The host Fourier transforms take their loop from the caller.** `aether::fft::c2c`, `r2c` and `c2r` no longer take a thread count and no longer use OpenMP: the last argument is a loop that runs the independent chunks (`aether::fft::SerialLoop`, the default, runs them in order on the calling thread). Results are bit-identical for any loop. A caller that wants threads passes its own pool; `aether.fft` in Python runs the host transform on one thread.
 
 ### Added
 

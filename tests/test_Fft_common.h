@@ -16,11 +16,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <limits>
 #include <random>
+#include <thread>
 #include <cstring>
 #include <vector>
 
@@ -216,46 +218,69 @@ TEST(Fft, AdjointOfUnscaledForwardIsUnscaledInverse) {
     EXPECT_LT(double(std::abs(lhs - rhs)), 1e-12);
 }
 
-// The chunking depends on the shape only: every thread count gives the same bits as one thread, on every route.
-template <class T> void threadInvariant() {
-    auto run = [](int threads) {
+// A test-local loop on std::thread: `workers` threads claim chunk indices from one counter.
+struct ThreadLoop {
+    int workers;
+    template <class F> void operator()(std::size_t count, F&& chunkBody) const {
+        std::atomic<std::size_t> next{0};
+        auto drain = [&] {
+            for (std::size_t c; (c = next.fetch_add(1)) < count;) chunkBody(c);
+        };
+        std::vector<std::thread> pool;
+        for (int i = 0; i < workers; ++i) pool.emplace_back(drain);
+        for (auto& t : pool) t.join();
+    }
+};
+
+// The chunking depends on the shape only: every loop gives the same bits as the serial one, on every route.
+template <class T> void loopInvariant() {
+    auto run = [](auto&& loop) {
         std::vector<std::vector<T>> outs;
         for (Idx shape : {Idx{37, 100}, Idx{9, 20, 11}}) {
             std::size_t total = prodOf(shape);
             auto x = randomVec<T>(2 * total, 77);
             for (Idx axes : {Idx{shape.size() - 1}, Idx{0}, Idx{0, shape.size() - 1}}) {
                 std::vector<T> y(2 * total);
-                aether::fft::c2c<T>(x.data(), y.data(), shape, axes, true, aether::fft::Norm::Backward, threads);
+                aether::fft::c2c<T>(x.data(), y.data(), shape, axes, true, aether::fft::Norm::Backward, loop);
                 outs.push_back(y);
                 auto re = randomVec<T>(total, 78);
                 Idx half = shape;
                 half[axes.back()] = shape[axes.back()] / 2 + 1;
                 std::vector<T> spec(2 * prodOf(half)), back(total);
-                aether::fft::r2c<T>(re.data(), spec.data(), shape, axes, aether::fft::Norm::Backward, threads);
-                aether::fft::c2r<T>(spec.data(), back.data(), shape, axes, aether::fft::Norm::Backward, threads);
+                aether::fft::r2c<T>(re.data(), spec.data(), shape, axes, aether::fft::Norm::Backward, loop);
+                aether::fft::c2r<T>(spec.data(), back.data(), shape, axes, aether::fft::Norm::Backward, loop);
                 outs.push_back(spec);
                 outs.push_back(back);
             }
         }
         return outs;
     };
-    auto one = run(1);
-    for (int threads : {2, 3, 0}) {
-        auto other = run(threads);
-        ASSERT_EQ(one.size(), other.size());
-        for (std::size_t i = 0; i < one.size(); ++i)
-            EXPECT_EQ(0, std::memcmp(one[i].data(), other[i].data(), one[i].size() * sizeof(T)))
-                << "threads " << threads << " case " << i;
+    auto serial = run(aether::fft::SerialLoop{});
+    for (int workers : {2, 7}) {
+        auto other = run(ThreadLoop{workers});
+        ASSERT_EQ(serial.size(), other.size());
+        for (std::size_t i = 0; i < serial.size(); ++i)
+            EXPECT_EQ(0, std::memcmp(serial[i].data(), other[i].data(), serial[i].size() * sizeof(T)))
+                << "workers " << workers << " case " << i;
     }
 }
 
-TEST(Fft, ThreadCountDoesNotChangeTheBitsF32) { threadInvariant<float>(); }
-TEST(Fft, ThreadCountDoesNotChangeTheBitsF64) { threadInvariant<double>(); }
+TEST(Fft, ExecutorDoesNotChangeTheBitsF32) { loopInvariant<float>(); }
+TEST(Fft, ExecutorDoesNotChangeTheBitsF64) { loopInvariant<double>(); }
 
-TEST(Fft, NegativeThreadCountIsRefused) {
-    using aether::fft::Norm;
-    std::vector<double> a(8), b(8), c(6);
-    EXPECT_THROW(aether::fft::c2c<double>(a.data(), b.data(), Idx{4}, Idx{0}, true, Norm::Backward, -1), aether::Error);
-    EXPECT_THROW(aether::fft::r2c<double>(a.data(), b.data(), Idx{4}, Idx{0}, Norm::Backward, -1), aether::Error);
-    EXPECT_THROW(aether::fft::c2r<double>(b.data(), c.data(), Idx{4}, Idx{0}, Norm::Backward, -1), aether::Error);
+// forChunks runs every chunk exactly once, whatever the loop, and a failing chunk does not stop the others: the
+// first failure is rethrown after the loop.
+TEST(Fft, ChunkFailureIsRethrownAfterEveryChunkRan) {
+    const pocketfft::shape_t shape{64, 8};
+    for (int workers : {1, 4}) {
+        ThreadLoop loop{workers};
+        std::atomic<int> ran{0};
+        EXPECT_THROW(aether::fft::detail::forChunks(shape, 1, loop,
+                                                    [&](const pocketfft::shape_t&, std::size_t begin, std::size_t, std::size_t) {
+                                                        ++ran;
+                                                        if (begin == 0) throw aether::Error("chunk failed");
+                                                    }),
+                     aether::Error);
+        EXPECT_EQ(ran.load(), 4);   // 64 lines in chunks of 16
+    }
 }

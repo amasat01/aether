@@ -572,18 +572,18 @@ Ff2Cert.WidthTagAndClassification
 Fft.AdjointOfUnscaledForwardIsUnscaledInverse
 Fft.C2cLengthsF32
 Fft.C2cLengthsF64
+Fft.ChunkFailureIsRethrownAfterEveryChunkRan
 Fft.ErrorsAreAetherErrors
+Fft.ExecutorDoesNotChangeTheBitsF32
+Fft.ExecutorDoesNotChangeTheBitsF64
 Fft.MultiAxisF32
 Fft.MultiAxisF64
-Fft.NegativeThreadCountIsRefused @debug
 Fft.NormsF32
 Fft.NormsF64
 Fft.RealTransformsF32
 Fft.RealTransformsF64
 Fft.RoundTripF32
 Fft.RoundTripF64
-Fft.ThreadCountDoesNotChangeTheBitsF32
-Fft.ThreadCountDoesNotChangeTheBitsF64
 ItemRank0Test.Rank0ItemReadsAndWrites
 ItemRank0Test.ScalarViewGetMaterializesARank0Item
 ItemTest.CompileTimeGetMatchesRuntimeOperatorParen

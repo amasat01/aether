@@ -51,7 +51,7 @@ message(STATUS "aether headers: ${_root}")
 nanobind_add_module(_core NB_STATIC FREE_THREADED src/aether_core.cpp)
 target_include_directories(_core PRIVATE "${_root}" src)
 target_compile_definitions(_core PRIVATE AETHER_CPP_MODE=1)
-find_package(OpenMP REQUIRED COMPONENTS CXX)   # the host FFT runs its lines on an OpenMP team
+find_package(OpenMP REQUIRED COMPONENTS CXX)
 target_link_libraries(_core PRIVATE ${CMAKE_DL_LIBS} OpenMP::OpenMP_CXX)
 install(TARGETS _core LIBRARY DESTINATION aether)
 
