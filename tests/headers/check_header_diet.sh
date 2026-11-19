@@ -91,8 +91,15 @@ for f in aether/aether.h aether/dtype/Format.h aether/interop/Mdspan.h \
     fi
 done
 
+# The headers read the generated facts header of the raptor wing, pre-included as in the build of the library.
+: "${AETHER_FACTS_DIR:?set AETHER_FACTS_DIR to the directory holding the generated raptor_facts.h of the raptor wing}"
+if [ ! -f "${AETHER_FACTS_DIR}/raptor_facts.h" ]; then
+    echo "WARNING [fatal]: ${AETHER_FACTS_DIR} holds no raptor_facts.h; this gate cannot run"
+    exit 1
+fi
 NVFLAGS=(-forward-unknown-to-host-compiler -std=c++20 -arch=sm_61
-         -DAETHER_HAS_CUDA=1 -Wno-deprecated-gpu-targets -march=x86-64-v3 -fopenmp)
+         -DAETHER_HAS_CUDA=1 -Wno-deprecated-gpu-targets -march=x86-64-v3 -fopenmp
+         -I"${AETHER_FACTS_DIR}" --pre-include raptor_facts.h)
 
 echo "=========================================="
 echo "  header-diet gate (aether umbrella exclusions, ${NVCC}, sm_61)"

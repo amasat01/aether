@@ -285,7 +285,7 @@ gate-docs: gate-venv
 # CUDA build (native architectures, warnings as errors) and the manifest gate on the GPU
 gate-gpu-build: gate-need-cxx gate-need-cuda
 	$(gate_sub) builddir=$(GATE_DIR)/cuda cpp=OFF nvcc=$(CUDA_PATH)/bin/nvcc cuda_host="$$CXX" debug=ON build
-	NVCC=$(CUDA_PATH)/bin/nvcc tests/headers/check_header_diet.sh
+	NVCC=$(CUDA_PATH)/bin/nvcc AETHER_FACTS_DIR=$(facts_dir) tests/headers/check_header_diet.sh
 
 gate-gpu: gate-gpu-build
 	$(gate_sub) builddir=$(GATE_DIR)/cuda cpp=OFF nvcc=$(CUDA_PATH)/bin/nvcc cuda_host="$$CXX" debug=ON test
