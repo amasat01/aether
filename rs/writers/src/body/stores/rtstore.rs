@@ -1,7 +1,7 @@
 //! Reads and stores at a runtime index into a vector.
 use crate::body::values::{literal_of, text_field};
+use crate::body::Class;
 use crate::body::{linalg, Frame, Out};
-use crate::body::{Class, OpKind};
 use crate::ir::door;
 use crate::ir::door::Scalar;
 use crate::refuse::{nib, Refusal};
@@ -9,7 +9,9 @@ use crate::spell::binding_name;
 
 /// A component read at a runtime index: `plane[i].at(k)` straight from the view of a read-only
 /// input row, else
-/// `item(k)` of the value held once as an item.
+/// `item(k)` of the value held once as an item. A read of an element-wise value that the read-pushing
+/// rewrite could not move to its operands (a loop-variable index) takes the held item as well: the value is
+/// computed once before the loop and indexed at run time.
 pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (source, index) = (f.opp(p)[0], f.text(f.opp(p)[1]).clone());
     let warp = match literal_of(f.ctx(), f.node(p).h)? {
@@ -20,30 +22,6 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     // a source already held in a placed plane is read from the plane, whatever made it
     if f.proxies.iter().any(|x| x.name == *f.peek(source)) {
         return Ok(Out::Value(format!("{}.at({index})", f.text(source)), None));
-    }
-    // an element-wise source is rewritten first: the read moves to its operands (a rewrite of the
-    // walk, not written)
-    if let (Some(kind), 1) = (f.node(source).kind, f.node(source).rank()) {
-        if !matches!(
-            kind,
-            OpKind::Vec
-                | OpKind::Mv
-                | OpKind::Mm
-                | OpKind::Cross
-                | OpKind::AsVec3
-                | OpKind::AsPure
-                | OpKind::QuatMul
-                | OpKind::QuatRotate
-                | OpKind::QuatConj
-                | OpKind::QuatRecip
-                | OpKind::Splat
-                | OpKind::Transpose
-                | OpKind::AddAt
-                | OpKind::SetComponentAt
-        ) && !linalg::is_factor_kind(kind)
-        {
-            return Err(nib("a runtime-index read of an element-wise value (the read is pushed to its operands first)"));
-        }
     }
     if f.node(source).class == Class::Leaf {
         let (role, name) = (
