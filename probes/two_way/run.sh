@@ -12,7 +12,8 @@ cd "$(dirname "$0")" || exit 2
 aether=$(cd ../.. && pwd)
 ir="-I$RAPTOR_IR/rs/ir/include"
 lib="$RAPTOR_IR/target/release/libraptor_ir.a ${LDLIBS:-}"
-flags="-std=c++20 -O1 -Wall -Wextra"
+# no fusing of a multiply with an add: the normal arm then computes the same on every machine and compiler
+flags="-std=c++20 -O1 -Wall -Wextra -ffp-contract=off"
 red=0
 leg() { if [ "$2" = 0 ]; then echo "LEG $1: PASS"; else echo "LEG $1: RED"; red=$((red + 1)); fi; }
 rm -rf out && mkdir -p out/shadow/model
@@ -72,6 +73,10 @@ $CXX $flags -DAETHER_TRACE -Iinclude $ir leaky.cpp $lib -o out/leaky && ./out/le
 leg "a plain variable assigned under a traced condition is refused" $?
 
 if [ -n "${PYTHON:-}" ]; then
+    # The value legs compare a unit the backend builds with the normal arm built above. The normal arm
+    # is built without fusing; the backend's default profile for some compilers fuses, the plain
+    # native profile does not: with it the two arms compute alike.
+    export HAWK_HOST_PROFILE=native
     "$PYTHON" e2e2.py > out/e2e.log 2>&1 && [ "$(grep -c 'difference to the normal C++ arm 0$' out/e2e.log)" = 8 ]
     leg "eight raised kernels build and run through hawk, exact against the normal arm" $?
     grep "^digest " out/e2e.log > out/digests.txt; cmp -s expected/digests.txt out/digests.txt
