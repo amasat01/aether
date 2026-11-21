@@ -1,0 +1,1110 @@
+//! The statement reader: finds function bodies in a token stream and reads the control statements
+//! inside them as a tree. Conditions, headers and bodies stay text (byte spans); only the shape
+//! of the statements is read, so no type information is needed.
+
+use crate::lex::{lex, TokKind, Token};
+
+/// A source file with its tokens, ready to be read.
+pub struct Source<'a> {
+    /// The file text.
+    pub text: &'a str,
+    /// Every token, spans tiling the text.
+    pub tokens: Vec<Token>,
+    /// Indices into `tokens` of the tokens a reader looks at: no space, comment or directive.
+    sig: Vec<usize>,
+    /// Byte starts of the conditional directives (`#if`, `#else`, `#endif`, ...).
+    conditionals: Vec<usize>,
+    line_starts: Vec<usize>,
+}
+
+impl<'a> Source<'a> {
+    /// Lexes `text`.
+    #[must_use]
+    pub fn new(text: &'a str) -> Self {
+        let tokens = lex(text);
+        let mut sig = Vec::new();
+        let mut conditionals = Vec::new();
+        for (i, t) in tokens.iter().enumerate() {
+            match t.kind {
+                TokKind::Space | TokKind::LineComment | TokKind::BlockComment => {}
+                TokKind::Preproc => {
+                    if is_conditional_directive(&text[t.start..t.end]) {
+                        conditionals.push(t.start);
+                    }
+                }
+                _ => sig.push(i),
+            }
+        }
+        let line_starts = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        Source {
+            text,
+            tokens,
+            sig,
+            conditionals,
+            line_starts,
+        }
+    }
+
+    /// The 1-based line of a byte offset.
+    #[must_use]
+    pub fn line(&self, byte: usize) -> usize {
+        self.line_starts.partition_point(|&s| s <= byte)
+    }
+
+    /// Text of the `k`-th significant token, or "" past the end.
+    fn word(&self, k: usize) -> &'a str {
+        self.sig.get(k).map_or("", |&i| {
+            &self.text[self.tokens[i].start..self.tokens[i].end]
+        })
+    }
+
+    fn token(&self, k: usize) -> &Token {
+        &self.tokens[self.sig[k.min(self.sig.len() - 1)]]
+    }
+
+    fn kind(&self, k: usize) -> Option<TokKind> {
+        self.sig.get(k).map(|&i| self.tokens[i].kind)
+    }
+
+    /// The texts of the significant tokens whose start lies in `[from, to)`.
+    #[must_use]
+    pub fn words_in(&self, from: usize, to: usize) -> Vec<&'a str> {
+        let first = self.sig.partition_point(|&i| self.tokens[i].start < from);
+        (first..self.sig.len())
+            .take_while(|&k| self.tokens[self.sig[k]].start < to)
+            .map(|k| self.word(k))
+            .collect()
+    }
+
+    /// Byte range from the start of significant token `from` to the end of token `to - 1`.
+    #[must_use]
+    pub fn bytes_of(&self, from: usize, to: usize) -> (usize, usize) {
+        (self.token(from).start, self.token(to.max(from + 1) - 1).end)
+    }
+
+    /// Operands of the `?` of `t`, found by bracket depth and the statement or argument
+    /// boundary; `None` when the extent is not certain.
+    #[must_use]
+    pub fn ternary_extent(&self, t: &Ternary) -> Option<Extent> {
+        // A constant expression cannot hold the callables a choice is made of.
+        if matches!(
+            self.word(t.lo),
+            "static_assert" | "constexpr" | "consteval" | "constinit"
+        ) {
+            return None;
+        }
+        let colon = self.matching_colon(t)?;
+        let start = self.operand_start(t);
+        let end = self.operand_end(t, colon);
+        let (from, to) = self.bytes_of(start, end);
+        let certain = start < t.tok && t.tok + 1 < colon && colon + 1 < end;
+        // Text between the operands is dropped, so a directive there cannot be kept.
+        (certain && !self.has_conditional(from, to)).then_some(Extent {
+            cond: (start, t.tok),
+            then_: (t.tok + 1, colon),
+            else_: (colon + 1, end),
+        })
+    }
+
+    /// The `:` that pairs with the `?` of `t`.
+    fn matching_colon(&self, t: &Ternary) -> Option<usize> {
+        let (mut depth, mut nested) = (0usize, 0usize);
+        for j in t.tok + 1..t.hi {
+            match self.word(j) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth = depth.checked_sub(1)?,
+                "?" if depth == 0 => nested += 1,
+                ":" if depth == 0 && nested == 0 => return Some(j),
+                ":" if depth == 0 => nested -= 1,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// First token of the condition: scanning left to the start of the region, an enclosing
+    /// bracket, or an operator that binds looser than `?:`.
+    fn operand_start(&self, t: &Ternary) -> usize {
+        let mut depth = 0usize;
+        for j in (t.lo..t.tok).rev() {
+            let w = self.word(j);
+            match w {
+                ")" | "]" | "}" => depth += 1,
+                "(" | "[" | "{" if depth == 0 => return j + 1,
+                "(" | "[" | "{" => depth -= 1,
+                ";" | "," | ":" | "?" | "return" | "co_return" | "co_yield" | "throw" | "case"
+                    if depth == 0 =>
+                {
+                    return j + 1
+                }
+                _ if depth == 0 && ASSIGN_OPS.contains(&w) => return j + 1,
+                _ => {}
+            }
+        }
+        t.lo
+    }
+
+    /// One past the last token of the value when false: to the end of the region, an enclosing
+    /// bracket, a `,`, or the `:` of an enclosing `?:`.
+    fn operand_end(&self, t: &Ternary, colon: usize) -> usize {
+        let (mut depth, mut nested) = (0usize, 0usize);
+        for j in colon + 1..t.hi {
+            match self.word(j) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" | "," | ";" if depth == 0 => return j,
+                ")" | "]" | "}" => depth -= 1,
+                "?" if depth == 0 => nested += 1,
+                ":" if depth == 0 && nested == 0 => return j,
+                ":" if depth == 0 => nested -= 1,
+                _ => {}
+            }
+        }
+        t.hi
+    }
+
+    /// True when a conditional directive starts in `[from, to)`.
+    #[must_use]
+    pub fn has_conditional(&self, from: usize, to: usize) -> bool {
+        let first = self.conditionals.partition_point(|&b| b < from);
+        self.conditionals.get(first).is_some_and(|&b| b < to)
+    }
+}
+
+fn is_conditional_directive(line: &str) -> bool {
+    let name: String = line[1..]
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect();
+    matches!(
+        name.as_str(),
+        "if" | "ifdef" | "ifndef" | "elif" | "elifdef" | "elifndef" | "else" | "endif"
+    )
+}
+
+/// A read statement: its byte span, its first line and what it is.
+#[derive(Debug)]
+pub struct Stmt {
+    /// What the statement is, with its parts.
+    pub kind: Kind,
+    /// Byte offset of its first byte.
+    pub start: usize,
+    /// Byte offset one past its last byte.
+    pub end: usize,
+    /// 1-based line of its first byte.
+    pub line: usize,
+}
+
+/// What an expression region contains that the reader reports or reads: lambda bodies (whose
+/// statements are read like any other) and the lines of `?:` operators.
+#[derive(Debug, Default)]
+pub struct Expr {
+    /// Lambda bodies inside the region, as blocks.
+    pub lambdas: Vec<Stmt>,
+    /// Each `?` outside the lambda bodies.
+    pub ternaries: Vec<Ternary>,
+}
+
+/// A `?` operator and the region of significant tokens it was found in.
+#[derive(Debug, Clone, Copy)]
+pub struct Ternary {
+    /// 1-based line of the `?`.
+    pub line: usize,
+    /// Index of the `?` among the significant tokens.
+    pub tok: usize,
+    /// First significant token of the region (inclusive).
+    pub lo: usize,
+    /// End of the region (exclusive).
+    pub hi: usize,
+}
+
+/// Where the three operands of a `?:` lie, as ranges `[from, to)` of significant tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct Extent {
+    /// The condition.
+    pub cond: (usize, usize),
+    /// The value when true.
+    pub then_: (usize, usize),
+    /// The value when false.
+    pub else_: (usize, usize),
+}
+
+/// The two arguments of `aether::bounded(C, N)`.
+#[derive(Debug)]
+pub struct Bounded {
+    /// Byte range of the condition.
+    pub cond: (usize, usize),
+    /// Byte range of the bound.
+    pub limit: (usize, usize),
+}
+
+/// A statement with a condition or header, and a body (`while`, `switch`, and the body of `for`).
+#[derive(Debug)]
+pub struct Ctl {
+    /// Byte range between the parentheses of the header.
+    pub cond: (usize, usize),
+    /// The bounded-loop form of a `while`, when it is that.
+    pub bound: Option<Bounded>,
+    /// The header or condition region.
+    pub head: Expr,
+    /// The body statement.
+    pub body: Box<Stmt>,
+    /// True when a conditional preprocessor directive sits inside the statement's own structure
+    /// (header, or between its parts), so the statement is cut by it.
+    pub cut: bool,
+}
+
+/// What the parentheses of an `if` hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Condition {
+    /// An expression.
+    Plain,
+    /// An init statement then a condition: `if (init; cond)`.
+    Init,
+    /// A declaration or an assignment (a top-level `=`) used as the condition.
+    Declaration,
+}
+
+/// `if`, with its optional `else` (which is itself an `if` for `else if`).
+#[derive(Debug)]
+pub struct IfStmt {
+    /// Byte range between the parentheses of the condition.
+    pub cond: (usize, usize),
+    /// The condition region.
+    pub head: Expr,
+    /// `if constexpr` or `if consteval`.
+    pub constexpr: bool,
+    /// What the parentheses hold.
+    pub condition: Condition,
+    /// The taken branch.
+    pub then_: Box<Stmt>,
+    /// The `else` branch.
+    pub else_: Option<Box<Stmt>>,
+    /// A conditional directive sits in the structure of the statement.
+    pub cut: bool,
+}
+
+/// The pieces of a classic `for (int i = a; i < b; ++i)` header.
+#[derive(Debug)]
+pub struct ForHeader {
+    /// The index variable.
+    pub index: String,
+    /// Byte range of the start expression.
+    pub start: (usize, usize),
+    /// Byte range of the stop expression.
+    pub stop: (usize, usize),
+    /// Byte range of the step expression; `None` for `++i` and `i++` (step one).
+    pub step: Option<(usize, usize)>,
+}
+
+/// A `for` statement.
+#[derive(Debug)]
+pub struct ForStmt {
+    /// Header and body.
+    pub ctl: Ctl,
+    /// Range-based (`for (x : range)`).
+    pub range: bool,
+    /// Present when the classic header is exactly the convertible form.
+    pub header: Option<ForHeader>,
+    /// Byte ranges of the header parts: init, condition, step (classic) or declaration, range.
+    pub parts: Vec<(usize, usize)>,
+}
+
+/// The kinds of statement the reader tells apart.
+#[derive(Debug)]
+pub enum Kind {
+    /// `{ ... }`.
+    Block(Vec<Stmt>),
+    /// `if`.
+    If(IfStmt),
+    /// `for`, classic or range-based.
+    For(ForStmt),
+    /// `while`.
+    While(Ctl),
+    /// `do ... while (...)`; the body and the condition.
+    Do(Ctl),
+    /// `switch`.
+    Switch(Ctl),
+    /// `try` with its handlers, as blocks.
+    Try(Vec<Stmt>),
+    /// `break;`
+    Break,
+    /// `continue;`
+    Continue,
+    /// `return ...;`
+    Return(Expr),
+    /// `goto label;`
+    Goto,
+    /// `case X:`, `default:` or a named label.
+    Label,
+    /// Any other statement, up to its `;`.
+    Expr(Expr),
+}
+
+impl Stmt {
+    /// The statements read inside this one, in source order: nested bodies, branches and lambda
+    /// bodies of the regions it holds.
+    #[must_use]
+    pub fn children(&self) -> Vec<&Stmt> {
+        match &self.kind {
+            Kind::Block(v) | Kind::Try(v) => v.iter().collect(),
+            Kind::If(i) => {
+                let mut out = i.head.lambdas.iter().collect::<Vec<_>>();
+                out.push(&i.then_);
+                out.extend(i.else_.as_deref());
+                out
+            }
+            Kind::For(f) => ctl_children(&f.ctl),
+            Kind::While(c) | Kind::Switch(c) => ctl_children(c),
+            Kind::Do(c) => {
+                let mut out = vec![&*c.body];
+                out.extend(c.head.lambdas.iter());
+                out
+            }
+            Kind::Return(e) | Kind::Expr(e) => e.lambdas.iter().collect(),
+            Kind::Break | Kind::Continue | Kind::Goto | Kind::Label => Vec::new(),
+        }
+    }
+}
+
+fn ctl_children(c: &Ctl) -> Vec<&Stmt> {
+    let mut out: Vec<&Stmt> = c.head.lambdas.iter().collect();
+    out.push(&c.body);
+    out
+}
+
+/// A construct the reader could not read; the enclosing function body is left untouched.
+#[derive(Debug)]
+pub struct ParseError {
+    /// 1-based line where reading stopped.
+    pub line: usize,
+    /// What was wrong.
+    pub message: &'static str,
+}
+
+type Res<T> = Result<T, ParseError>;
+
+/// Qualifiers that may sit between a function's `)` and its `{`.
+const QUALIFIERS: [&str; 9] = [
+    "const",
+    "noexcept",
+    "override",
+    "final",
+    "mutable",
+    "volatile",
+    "&",
+    "&&",
+    "constexpr",
+];
+
+/// The integer types a convertible loop index may be declared with.
+const INDEX_TYPES: [&str; 20] = [
+    "int",
+    "long",
+    "short",
+    "unsigned",
+    "signed",
+    "size_t",
+    "ptrdiff_t",
+    "auto",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
+    "intptr_t",
+    "uintptr_t",
+    "std",
+    "::",
+];
+
+/// Operators that assign to their left operand.
+pub const ASSIGN_OPS: [&str; 11] = [
+    "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+];
+
+/// A function body and what its head says about the returned value.
+#[derive(Debug)]
+pub struct Function {
+    /// The body block.
+    pub body: Stmt,
+    /// The declared return type has a `&` or `&&`: a callable that returns by value would copy.
+    pub returns_reference: bool,
+}
+
+/// Reads the function bodies of a source. Bodies that cannot be read are returned as errors.
+#[must_use]
+pub fn read_functions(src: &Source) -> (Vec<Function>, Vec<ParseError>) {
+    let mut parser = Parser { s: src, k: 0 };
+    let mut funcs = Vec::new();
+    let mut errors = Vec::new();
+    parser.scan_scope(&mut funcs, &mut errors, false);
+    (funcs, errors)
+}
+
+struct Parser<'s, 'a> {
+    s: &'s Source<'a>,
+    k: usize,
+}
+
+#[derive(PartialEq)]
+enum Brace {
+    Scope,
+    Function,
+    Opaque,
+}
+
+impl Parser<'_, '_> {
+    fn word(&self) -> &str {
+        self.s.word(self.k)
+    }
+
+    fn err<T>(&self, message: &'static str) -> Res<T> {
+        let byte = if self.s.sig.is_empty() {
+            0
+        } else {
+            self.s.token(self.k).start
+        };
+        Err(ParseError {
+            line: self.s.line(byte),
+            message,
+        })
+    }
+
+    /// Index of the bracket that closes the one at `k`.
+    fn matching(&self, k: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        for j in k..self.s.sig.len() {
+            match self.s.word(j) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Ranges of the tokens in `[from, to)` split at top-level occurrences of `sep`.
+    fn split_top(&self, from: usize, to: usize, sep: &str) -> Vec<(usize, usize)> {
+        let mut parts = Vec::new();
+        let (mut depth, mut begin) = (0usize, from);
+        for j in from..to {
+            match self.s.word(j) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth = depth.saturating_sub(1),
+                w if w == sep && depth == 0 => {
+                    parts.push((begin, j));
+                    begin = j + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push((begin, to));
+        parts
+    }
+
+    fn scan_scope(
+        &mut self,
+        funcs: &mut Vec<Function>,
+        errors: &mut Vec<ParseError>,
+        nested: bool,
+    ) {
+        let mut head = self.k;
+        while self.k < self.s.sig.len() {
+            match self.word() {
+                "}" => {
+                    self.k += 1;
+                    if nested {
+                        return;
+                    }
+                    head = self.k;
+                }
+                ";" => {
+                    self.k += 1;
+                    head = self.k;
+                }
+                "{" => {
+                    self.scan_brace(head, funcs, errors);
+                    head = self.k;
+                }
+                ":" if self.k == head + 1
+                    && matches!(self.s.word(head), "public" | "private" | "protected") =>
+                {
+                    self.k += 1;
+                    head = self.k;
+                }
+                _ => self.k += 1,
+            }
+        }
+    }
+
+    /// Handles the `{` at the cursor of a declaration scope: a scope is entered, a function body
+    /// is read, anything else is skipped.
+    fn scan_brace(&mut self, head: usize, funcs: &mut Vec<Function>, errors: &mut Vec<ParseError>) {
+        let open = self.k;
+        match self.classify_brace(head, open) {
+            Brace::Scope => {
+                self.k += 1;
+                self.scan_scope(funcs, errors, true);
+            }
+            Brace::Function => match self.parse_block() {
+                Ok(body) => {
+                    let returns_reference = self.head_returns_reference(head, open);
+                    funcs.push(Function {
+                        body,
+                        returns_reference,
+                    });
+                }
+                Err(e) => {
+                    errors.push(e);
+                    self.k = self.matching(open).map_or(self.s.sig.len(), |c| c + 1);
+                }
+            },
+            Brace::Opaque => {
+                self.k = self.matching(open).map_or(self.s.sig.len(), |c| c + 1);
+            }
+        }
+    }
+
+    /// True when the declaration `[head, open)` names a `&` or `&&` before its parameter list or
+    /// after a trailing `->`.
+    fn head_returns_reference(&self, head: usize, open: usize) -> bool {
+        let is_ref = |j: usize| matches!(self.s.word(j), "&" | "&&");
+        let params = (head..open)
+            .find(|&j| self.s.word(j) == "(")
+            .unwrap_or(open);
+        let arrow = (head..open).find(|&j| self.s.word(j) == "->");
+        (head..params).any(is_ref) || arrow.is_some_and(|a| (a..open).any(is_ref))
+    }
+
+    /// What the declaration `[head, open)` that ends in a `{` opens.
+    fn classify_brace(&self, head: usize, open: usize) -> Brace {
+        let mut i = head;
+        while self.s.word(i) == "template" && self.s.word(i + 1) == "<" {
+            i = self.skip_angles(i + 1);
+        }
+        let first = i;
+        let mut depth = 0usize;
+        while i < open {
+            match self.s.word(i) {
+                "(" | "[" => depth += 1,
+                ")" | "]" => depth = depth.saturating_sub(1),
+                "namespace" | "class" | "struct" | "union" if depth == 0 => return Brace::Scope,
+                "enum" if depth == 0 => return Brace::Opaque,
+                "extern" if i + 2 == open && self.s.kind(i + 1) == Some(TokKind::Str) => {
+                    return Brace::Scope
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if self.ends_in_call_parens(first, open) {
+            Brace::Function
+        } else {
+            Brace::Opaque
+        }
+    }
+
+    /// Past the `<...>` that opens at `k`.
+    fn skip_angles(&self, k: usize) -> usize {
+        let mut depth = 0usize;
+        for j in k..self.s.sig.len() {
+            match self.s.word(j) {
+                "<" => depth += 1,
+                ">" => depth = depth.saturating_sub(1),
+                ">>" => depth = depth.saturating_sub(2),
+                _ => {}
+            }
+            if depth == 0 {
+                return j + 1;
+            }
+        }
+        self.s.sig.len()
+    }
+
+    /// True when `[first, open)` ends in `)` once qualifiers and a trailing return type are set
+    /// aside: a function or lambda header.
+    fn ends_in_call_parens(&self, first: usize, open: usize) -> bool {
+        let skip_qualifiers = |mut j: usize| {
+            while j > first && QUALIFIERS.contains(&self.s.word(j - 1)) {
+                j -= 1;
+            }
+            j
+        };
+        let end = skip_qualifiers(open);
+        if end > first && self.s.word(end - 1) == ")" {
+            return true;
+        }
+        (first..open)
+            .find(|&j| self.s.word(j) == "->")
+            .is_some_and(|arrow| {
+                let before = skip_qualifiers(arrow);
+                before > first && self.s.word(before - 1) == ")"
+            })
+    }
+
+    fn parse_block(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        self.k += 1;
+        let mut stmts = Vec::new();
+        loop {
+            if self.k >= self.s.sig.len() {
+                self.k = k0;
+                return self.err("unbalanced brace: the block is never closed");
+            }
+            if self.word() == "}" {
+                break;
+            }
+            stmts.push(self.parse_stmt()?);
+        }
+        let close = self.k;
+        self.k += 1;
+        Ok(self.make(Kind::Block(stmts), k0, close))
+    }
+
+    /// A statement spanning the significant tokens `first..=last`.
+    fn make(&self, kind: Kind, first: usize, last: usize) -> Stmt {
+        let start = self.s.token(first).start;
+        Stmt {
+            kind,
+            start,
+            end: self.s.token(last).end,
+            line: self.s.line(start),
+        }
+    }
+
+    fn parse_stmt(&mut self) -> Res<Stmt> {
+        if self.k >= self.s.sig.len() {
+            return self.err("a statement was expected before the end of the file");
+        }
+        match self.word() {
+            "{" => self.parse_block(),
+            "if" => self.parse_if(),
+            "for" => self.parse_for(),
+            "while" => self.parse_while(),
+            "do" => self.parse_do(),
+            "switch" => self.parse_switch(),
+            "try" => self.parse_try(),
+            "break" => Ok(self.parse_jump(Kind::Break)),
+            "continue" => Ok(self.parse_jump(Kind::Continue)),
+            "goto" => Ok(self.parse_jump(Kind::Goto)),
+            "return" => self.parse_return(),
+            "case" => self.parse_label(),
+            "default" if self.s.word(self.k + 1) == ":" => self.parse_label(),
+            "else" => self.err("`else` without a matching `if`"),
+            w if is_name(w) && self.s.word(self.k + 1) == ":" => self.parse_label(),
+            _ => self.parse_expr_stmt(),
+        }
+    }
+
+    fn parse_jump(&mut self, kind: Kind) -> Stmt {
+        let k0 = self.k;
+        let end = self.statement_end(k0);
+        self.k = end + 1;
+        self.make(kind, k0, end.min(self.s.sig.len() - 1))
+    }
+
+    fn parse_return(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let end = self.statement_end(k0);
+        let expr = self.scan_range(k0 + 1, end)?;
+        self.k = end + 1;
+        Ok(self.make(Kind::Return(expr), k0, end.min(self.s.sig.len() - 1)))
+    }
+
+    fn parse_label(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let mut j = k0;
+        while j < self.s.sig.len() && self.s.word(j) != ":" {
+            j += 1;
+        }
+        if j >= self.s.sig.len() {
+            return self.err("a label without its `:`");
+        }
+        self.k = j + 1;
+        Ok(self.make(Kind::Label, k0, j))
+    }
+
+    fn parse_expr_stmt(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let end = self.statement_end(k0);
+        let expr = self.scan_range(k0, end)?;
+        let terminated = self.s.word(end) == ";";
+        self.k = if terminated { end + 1 } else { end };
+        let last = if terminated || end == k0 {
+            end
+        } else {
+            end - 1
+        };
+        Ok(self.make(Kind::Expr(expr), k0, last.min(self.s.sig.len() - 1)))
+    }
+
+    /// Index of the `;` that ends the statement starting at `k`, or of the `}` or the end of
+    /// the file when it has none.
+    fn statement_end(&self, k: usize) -> usize {
+        let mut depth = 0usize;
+        for j in k..self.s.sig.len() {
+            match self.s.word(j) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" => depth = depth.saturating_sub(1),
+                "}" | ";" if depth == 0 => return j,
+                "}" => depth -= 1,
+                _ => {}
+            }
+        }
+        self.s.sig.len()
+    }
+
+    /// Reads the expression region `[from, to)`: lambda bodies become blocks, `?` is noted.
+    fn scan_range(&mut self, from: usize, to: usize) -> Res<Expr> {
+        let mut expr = Expr::default();
+        let mut j = from;
+        while j < to {
+            match self.s.word(j) {
+                "?" => {
+                    let line = self.s.line(self.s.token(j).start);
+                    expr.ternaries.push(Ternary {
+                        line,
+                        tok: j,
+                        lo: from,
+                        hi: to,
+                    });
+                }
+                "{" if self.is_lambda_body(j) => {
+                    self.k = j;
+                    expr.lambdas.push(self.parse_block()?);
+                    j = self.k;
+                    continue;
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        Ok(expr)
+    }
+
+    /// A `{` after `)`, `]` or a trailing return type opens a lambda body inside an expression.
+    fn is_lambda_body(&self, open: usize) -> bool {
+        let mut j = open;
+        while j > 0 && QUALIFIERS.contains(&self.s.word(j - 1)) {
+            j -= 1;
+        }
+        if j > 0 && matches!(self.s.word(j - 1), ")" | "]") {
+            return true;
+        }
+        let from = j.saturating_sub(12);
+        (from..j).any(|a| self.s.word(a) == "->")
+            && (from..j).all(|a| !matches!(self.s.word(a), ";" | "{" | "}" | "="))
+    }
+
+    /// Reads `( ... )` at the cursor: the index of `(`, of its `)`, and the cursor moved past it.
+    fn parenthesis(&mut self) -> Res<(usize, usize)> {
+        let open = self.k;
+        if self.word() != "(" {
+            return self.err("`(` expected after the keyword");
+        }
+        let Some(close) = self.matching(open) else {
+            return self.err("unbalanced parenthesis");
+        };
+        self.k = close + 1;
+        Ok((open, close))
+    }
+
+    /// True when a conditional directive lies in `[from, to)` of the structure.
+    fn cut(&self, ranges: &[(usize, usize)]) -> bool {
+        ranges.iter().any(|&(a, b)| self.s.has_conditional(a, b))
+    }
+
+    fn parse_if(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        self.k += 1;
+        let consteval = self.word() == "consteval"
+            || (self.word() == "!" && self.s.word(self.k + 1) == "consteval");
+        let constexpr = consteval || self.word() == "constexpr";
+        if constexpr && !consteval {
+            self.k += 1;
+        }
+        let (mut cond, mut head, mut condition) = ((0, 0), Expr::default(), Condition::Plain);
+        let mut header_end = self.s.token(k0).end;
+        if consteval {
+            while self.word() != "{" && self.k < self.s.sig.len() {
+                self.k += 1;
+            }
+        } else {
+            let (open, close) = self.parenthesis()?;
+            if self.split_top(open + 1, close, ";").len() > 1 {
+                condition = Condition::Init;
+            } else if self.split_top(open + 1, close, "=").len() > 1 {
+                condition = Condition::Declaration;
+            }
+            cond = (self.s.token(open).end, self.s.token(close).start);
+            head = self.scan_range(open + 1, close)?;
+            self.k = close + 1;
+            header_end = self.s.token(close).end;
+        }
+        let then_ = Box::new(self.parse_stmt()?);
+        let mut gaps = vec![(self.s.token(k0).start, header_end)];
+        if !matches!(then_.kind, Kind::Block(_)) {
+            gaps.push((then_.start, then_.end));
+        }
+        let mut else_ = None;
+        if self.word() == "else" {
+            let kw = self.s.token(self.k);
+            gaps.push((then_.end, kw.end));
+            self.k += 1;
+            let body = self.parse_stmt()?;
+            if !matches!(body.kind, Kind::Block(_) | Kind::If(_)) {
+                gaps.push((body.start, body.end));
+            }
+            else_ = Some(Box::new(body));
+        }
+        let end = else_.as_ref().map_or(then_.end, |e| e.end);
+        let cut = self.cut(&gaps);
+        let kind = Kind::If(IfStmt {
+            cond,
+            head,
+            constexpr,
+            condition,
+            then_,
+            else_,
+            cut,
+        });
+        Ok(Stmt {
+            kind,
+            start: self.s.token(k0).start,
+            end,
+            line: self.s.line(self.s.token(k0).start),
+        })
+    }
+
+    /// Reads the header and the body of `for`, `while` or `switch`; also gives the indices of the
+    /// header's parentheses.
+    fn parse_headed(&mut self) -> Res<(Ctl, usize, usize)> {
+        let k0 = self.k;
+        self.k += 1;
+        let (open, close) = self.parenthesis()?;
+        let head = self.scan_range(open + 1, close)?;
+        self.k = close + 1;
+        let body = Box::new(self.parse_stmt()?);
+        let mut gaps = vec![(self.s.token(k0).start, self.s.token(close).end)];
+        if !matches!(body.kind, Kind::Block(_)) {
+            gaps.push((body.start, body.end));
+        }
+        let cut = self.cut(&gaps);
+        let cond = (self.s.token(open).end, self.s.token(close).start);
+        Ok((
+            Ctl {
+                cond,
+                bound: None,
+                head,
+                body,
+                cut,
+            },
+            open,
+            close,
+        ))
+    }
+
+    fn finish(&self, kind: Kind, k0: usize, end: usize) -> Stmt {
+        let start = self.s.token(k0).start;
+        Stmt {
+            kind,
+            start,
+            end,
+            line: self.s.line(start),
+        }
+    }
+
+    fn parse_for(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let (ctl, open, close) = self.parse_headed()?;
+        let semicolons = self.split_top(open + 1, close, ";");
+        let classic = semicolons.len() > 1;
+        let colons = self.split_top(open + 1, close, ":");
+        let range = !classic && colons.len() > 1;
+        let header = if semicolons.len() == 3 {
+            self.convertible_header(&semicolons)
+        } else {
+            None
+        };
+        let parts = if classic { semicolons } else { colons };
+        let parts = parts.iter().map(|&(a, b)| self.byte_range(a, b)).collect();
+        let end = ctl.body.end;
+        Ok(self.finish(
+            Kind::For(ForStmt {
+                ctl,
+                range,
+                header,
+                parts,
+            }),
+            k0,
+            end,
+        ))
+    }
+
+    /// Byte range of the tokens `[a, b)`; empty at the first token's start when there are none.
+    fn byte_range(&self, a: usize, b: usize) -> (usize, usize) {
+        if a >= b {
+            let at = self.s.token(a).start;
+            return (at, at);
+        }
+        (self.s.token(a).start, self.s.token(b - 1).end)
+    }
+
+    /// The exact form `T i = a; i < b; ++i | i++ | i += s`, with `T` an integer type.
+    fn convertible_header(&self, parts: &[(usize, usize)]) -> Option<ForHeader> {
+        if parts
+            .iter()
+            .any(|&(a, b)| self.split_top(a, b, ",").len() > 1)
+        {
+            return None;
+        }
+        let w = |p: (usize, usize)| (p.0..p.1).map(|j| self.s.word(j)).collect::<Vec<_>>();
+        let (init, cond, step) = (w(parts[0]), w(parts[1]), w(parts[2]));
+        let eq = init.iter().position(|&x| x == "=")?;
+        let index = *init.get(eq.checked_sub(1)?)?;
+        let type_words = &init[..eq - 1];
+        let integer = !type_words.is_empty() && type_words.iter().all(|t| INDEX_TYPES.contains(t));
+        if !integer || !is_name(index) || eq + 1 >= init.len() {
+            return None;
+        }
+        if cond.len() < 3 || cond[0] != index || cond[1] != "<" {
+            return None;
+        }
+        let step_range = match step.as_slice() {
+            ["++", i] | [i, "++"] if *i == index => None,
+            [i, "+=", _, ..] if *i == index => Some(self.byte_range(parts[2].0 + 2, parts[2].1)),
+            _ => return None,
+        };
+        Some(ForHeader {
+            index: index.to_string(),
+            start: self.byte_range(parts[0].0 + eq + 1, parts[0].1),
+            stop: self.byte_range(parts[1].0 + 2, parts[1].1),
+            step: step_range,
+        })
+    }
+
+    /// `aether::bounded(C, N)` filling the header `[from, to)` exactly.
+    fn bounded_args(&self, from: usize, to: usize) -> Option<Bounded> {
+        let named = self.s.word(from) == "aether"
+            && self.s.word(from + 1) == "::"
+            && self.s.word(from + 2) == "bounded"
+            && self.s.word(from + 3) == "(";
+        if !named || self.matching(from + 3) != Some(to - 1) {
+            return None;
+        }
+        let args = self.split_top(from + 4, to - 1, ",");
+        match args.as_slice() {
+            [(a, b), (c, d)] if a < b && c < d => Some(Bounded {
+                cond: self.byte_range(*a, *b),
+                limit: self.byte_range(*c, *d),
+            }),
+            _ => None,
+        }
+    }
+
+    fn parse_while(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let (mut ctl, open, close) = self.parse_headed()?;
+        ctl.bound = self.bounded_args(open + 1, close);
+        let end = ctl.body.end;
+        Ok(self.finish(Kind::While(ctl), k0, end))
+    }
+
+    fn parse_switch(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        let (ctl, _, _) = self.parse_headed()?;
+        let end = ctl.body.end;
+        Ok(self.finish(Kind::Switch(ctl), k0, end))
+    }
+
+    fn parse_do(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        self.k += 1;
+        let body = Box::new(self.parse_stmt()?);
+        if self.word() != "while" {
+            return self.err("`while` expected after the body of `do`");
+        }
+        let while_kw = self.k;
+        self.k += 1;
+        let (open, close) = self.parenthesis()?;
+        let head = self.scan_range(open + 1, close)?;
+        let mut end = close;
+        if self.word() == ";" {
+            end = self.k;
+            self.k += 1;
+        }
+        let gaps = [
+            (self.s.token(k0).start, body.start),
+            (body.end, self.s.token(while_kw).end),
+            (self.s.token(open).start, self.s.token(close).end),
+        ];
+        let cut = self.cut(&gaps);
+        let last = self.s.token(end).end;
+        let cond = (self.s.token(open).end, self.s.token(close).start);
+        Ok(self.finish(
+            Kind::Do(Ctl {
+                cond,
+                bound: None,
+                head,
+                body,
+                cut,
+            }),
+            k0,
+            last,
+        ))
+    }
+
+    fn parse_try(&mut self) -> Res<Stmt> {
+        let k0 = self.k;
+        self.k += 1;
+        let mut blocks = vec![self.parse_block()?];
+        while self.word() == "catch" {
+            self.k += 1;
+            self.parenthesis()?;
+            blocks.push(self.parse_block()?);
+        }
+        let end = blocks.last().map_or(0, |b| b.end);
+        Ok(self.finish(Kind::Try(blocks), k0, end))
+    }
+}
+
+/// True for a word that can name a variable or label: an identifier that is no keyword that
+/// starts a statement or an expression of its own.
+#[must_use]
+pub fn is_name(w: &str) -> bool {
+    let starts = w
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_');
+    starts
+        && !matches!(
+            w,
+            "return"
+                | "break"
+                | "continue"
+                | "goto"
+                | "case"
+                | "default"
+                | "else"
+                | "new"
+                | "delete"
+                | "throw"
+                | "co_return"
+                | "co_yield"
+                | "sizeof"
+                | "typedef"
+                | "using"
+                | "static_assert"
+        )
+}

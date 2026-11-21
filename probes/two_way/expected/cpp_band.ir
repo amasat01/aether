@@ -1,0 +1,13 @@
+raptor.ir.dump/1
+n|Leaf|f64|()|None|()|(('kind', 'vocab_read'), ('role', 'per_sample'), ('name', 'v'), ('quantity', None), ('wire_index', 0), ('sorted', False))
+n|Leaf|f64|()|None|()|(('kind', 'uniform'), ('role', 'uniform'), ('name', 'w'), ('quantity', None), ('wire_index', 0), ('sorted', False))
+n|Op|bool|()|None|(#0, #1)|(('kind', 'gt'), ('literal', None))
+n|Op|f64|()|None|(#0, #1)|(('kind', 'sub'), ('literal', None))
+n|Op|f64|()|None|(#0,)|(('kind', 'neg'), ('literal', None))
+n|Op|bool|()|None|(#4, #1)|(('kind', 'gt'), ('literal', None))
+n|Op|f64|()|None|(#0, #1)|(('kind', 'add'), ('literal', None))
+n|Const|f64|()|None|()|(('literal', 0.0),)
+n|Select|f64|()|None|(#5, #6, #7)|()
+n|Select|f64|()|None|(#2, #3, #8)|()
+n|Assign|f64|()|None|(#9,)|(('kind', 'assign'), ('role', 'mutable'), ('name', 'y'))
+root|#10

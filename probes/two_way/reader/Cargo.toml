@@ -1,0 +1,10 @@
+[package]
+name = "reader"
+version = "0.1.0"
+edition = "2021"
+description = "Type-free statement reader and control-statement rewriter for C++ kernel sources (prototype)"
+
+[dependencies]
+
+[lints.rust]
+missing_docs = "warn"

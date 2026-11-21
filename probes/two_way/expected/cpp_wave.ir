@@ -1,0 +1,15 @@
+raptor.ir.dump/1
+n|Leaf|f64|()|None|()|(('kind', 'vocab_read'), ('role', 'per_sample'), ('name', 'v'), ('quantity', None), ('wire_index', 0), ('sorted', False))
+n|Leaf|f64|()|None|()|(('kind', 'uniform'), ('role', 'uniform'), ('name', 'k'), ('quantity', None), ('wire_index', 0), ('sorted', False))
+n|Op|f64|()|None|(#0, #1)|(('kind', 'hypot'), ('literal', None))
+n|Op|f64|()|None|(#0,)|(('kind', 'sinh'), ('literal', None))
+n|Op|f64|()|None|(#0, #1)|(('kind', 'atan2'), ('literal', None))
+n|Op|f64|()|None|(#3, #4)|(('kind', 'mul'), ('literal', None))
+n|Const|f64|()|None|()|(('literal', 1.5),)
+n|Op|f64|()|None|(#2, #6)|(('kind', 'fmod'), ('literal', None))
+n|Op|f64|()|None|(#5, #7)|(('kind', 'add'), ('literal', None))
+n|Op|f64|()|None|(#2, #2)|(('kind', 'mul'), ('literal', None))
+n|Op|f64|()|None|(#9,)|(('kind', 'cbrt'), ('literal', None))
+n|Op|f64|()|None|(#8, #10)|(('kind', 'add'), ('literal', None))
+n|Assign|f64|()|None|(#11,)|(('kind', 'assign'), ('role', 'mutable'), ('name', 'y'))
+root|#12
