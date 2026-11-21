@@ -67,6 +67,18 @@ driver/target/release/raise --entry $example/negative/bad.h --kernel bad::unboun
 [ $? != 0 ] && grep -q "bad.h:9" out/driver_negative.log
 leg "raise driver stops an unbounded while on a traced value, naming the source line" $?
 
+status=0
+$CXX $flags -DAETHER_CPP_MODE "-I$aether" -Iinclude -I$example/physics/include views_values.cpp -o out/views_values \
+    && ./out/views_values > out/views_values.txt || status=1
+leg "the view kernels, unchanged, build on the library's own view headers and run" $status
+
+mkdir -p out/views_driver
+driver/target/release/raise --entry $example/physics/view_kernels.cpp --kernel physics::vscale --kernel physics::gather \
+    --kernel physics::scatter --kernel physics::tally --kernel physics::vgate --kernel physics::vsum --root $example/physics \
+    -I $example/physics/include --cxx "$CXX" --trace-include include --ir "$RAPTOR_IR" --out out/views_driver $link \
+    > out/views_driver.log 2>&1 && [ "$(ls out/views_driver/*.ir | wc -l | tr -d ' ')" = 6 ] && [ ! -s out/views_driver/left.txt ]
+leg "raise driver raises the six view kernels (component access, gather, scatter, accumulate, store under a branch, component loop)" $?
+
 $CXX $flags -DAETHER_TRACE -Iinclude $ir leaky.cpp $lib -o out/leaky && ./out/leaky > out/leaky.log 2>&1
 [ $? = 3 ]
 leg "a plain variable assigned under a traced condition is refused" $?
@@ -85,6 +97,9 @@ if [ -n "${PYTHON:-}" ]; then
         && ./out/driver_values > out/driver/values.txt && "$PYTHON" driver_check.py > out/driver_values.log 2>&1 \
         && [ "$(grep -c 'within the bound$' out/driver_values.log)" = 4 ]
     leg "the four kernels the driver raised run through hawk, within their ulp bound of the normal arm" $?
+    "$PYTHON" views_check.py > out/views_values.log 2>&1 && [ "$(grep -c '^digest .* equal True$' out/views_values.log)" = 6 ] \
+        && [ "$(grep -c 'within the bound$' out/views_values.log)" = 6 ]
+    leg "the six view kernels: digests equal their hawk twins, built units within their ulp bound of the normal arm" $?
     "$PYTHON" wave_unit.py > out/wave_values.log 2>&1 && grep -q "within the bound$" out/wave_values.log
     leg "the math kernel as a built unit is within its ulp bound of the normal arm" $?
 fi

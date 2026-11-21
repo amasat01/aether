@@ -802,22 +802,42 @@ impl Parser<'_, '_> {
         params
     }
 
+    /// The role the type in tokens `[from, to)` spells. A role type is the word before the first
+    /// `<`: `aether::PerSample<T>` gives `PerSample`, while `std::array<PerSample<T>, 2>` gives
+    /// `array`, which is no role. A view (`View`, `ScalarView`, `VecView`, `MatView`) is read when
+    /// it is const-qualified or its element type is `const`, and written otherwise; `TableView`
+    /// is always read. A `SampleIndex` is the index of the sample being run.
+    fn type_role(&self, from: usize, to: usize) -> Option<&'static str> {
+        let angle = (from..to)
+            .find(|&j| self.s.word(j) == "<")
+            .filter(|&j| j > from);
+        let Some(angle) = angle else {
+            return (to > from && self.s.word(to - 1) == "SampleIndex").then_some("sample_index");
+        };
+        match self.s.word(angle - 1) {
+            "PerSample" => Some("per_sample"),
+            "Uniform" => Some("uniform"),
+            "Mutable" => Some("mutable"),
+            "TableView" => Some("view_read"),
+            "View" | "ScalarView" | "VecView" | "MatView" => {
+                let const_view = (from..angle).any(|j| self.s.word(j) == "const");
+                let const_element = self.s.word(angle + 1) == "const";
+                Some(if const_view || const_element {
+                    "view_read"
+                } else {
+                    "view_write"
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// The parameter in tokens `[from, to)`: its name, the role its type spells and its type.
     fn parameter(&self, from: usize, to: usize) -> Param {
         let end = (from..to).find(|&j| self.s.word(j) == "=").unwrap_or(to);
         let named = end >= from + 2 && is_name(self.s.word(end - 1));
         let type_end = if named { end - 1 } else { end };
-        // The role is the word before the first `<`: `aether::PerSample<T>` gives `PerSample`,
-        // while `std::array<PerSample<T>, 2>` gives `array`, which is no role.
-        let role = (from..type_end)
-            .find(|&j| self.s.word(j) == "<")
-            .filter(|&j| j > from)
-            .and_then(|j| match self.s.word(j - 1) {
-                "PerSample" => Some("per_sample"),
-                "Uniform" => Some("uniform"),
-                "Mutable" => Some("mutable"),
-                _ => None,
-            });
+        let role = self.type_role(from, type_end);
         let type_text = if from < type_end {
             let (a, b) = self.byte_range(from, type_end);
             self.s.text[a..b]

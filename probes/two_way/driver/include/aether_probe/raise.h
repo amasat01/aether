@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "aether_probe/real.h"
+#include "aether_probe/views.h"
 
 namespace aether::trace::raising {
 
@@ -23,6 +24,11 @@ struct Param {
     const char* name;
     const char* role;
 };
+
+inline std::deque<planes::ViewPlane>& viewStorage() {
+    static auto* kept = new std::deque<planes::ViewPlane>;
+    return *kept;
+}
 
 template <class T>
 std::deque<T>& storage() {
@@ -34,6 +40,8 @@ std::deque<T>& storage() {
 struct Run {
     std::vector<std::pair<std::string, Var*>> written;
     std::vector<std::string> declared;
+    /// The view planes, and where in `declared` the line of each goes once its use is known.
+    std::vector<std::pair<planes::ViewPlane*, std::size_t>> views;
 };
 
 inline Run& run() {
@@ -55,9 +63,7 @@ struct Arg {
         run().declared.push_back(role + " " + p.name + " " + dtype);
         const char* kind = role == "uniform" ? "uniform" : "vocab_read";
         return T(makeNode("Leaf", dtype.c_str(), {},
-                          std::string("(('kind', '") + kind + "'), ('role', '" + role +
-                              "'), ('name', '" + p.name +
-                              "'), ('quantity', None), ('wire_index', 0), ('sorted', False))"));
+                          planes::leafFields(kind, role.c_str(), p.name)));
     }
 };
 
@@ -78,6 +84,36 @@ struct Arg<T&> {
     }
 };
 
+/// A view parameter: a plane of the kernel, read or written by what its declaration says.
+template <class T, class E, class L, bool Volatile, bool ReadOnly>
+struct Arg<aether::View<T, E, L, Volatile, ReadOnly>> {
+    static aether::View<T, E, L, Volatile, ReadOnly> make(const Param& p) {
+        const std::string role = p.role;
+        if (role != "view_read" && role != "view_write") {
+            std::fprintf(stderr, "raise: parameter %s is a view and has the role %s\n", p.name, p.role);
+            std::exit(4);
+        }
+        using Kind = planes::Element<std::remove_const_t<T>>;
+        viewStorage().emplace_back(p.name, Kind::dtype, Kind::tag, planes::ElementShape<E>::get(),
+                                   role == "view_read");
+        run().views.emplace_back(&viewStorage().back(), run().declared.size());
+        run().declared.emplace_back();
+        return aether::View<T, E, L, Volatile, ReadOnly>(&viewStorage().back());
+    }
+};
+
+/// The sample index parameter: no plane, the kernel runs for the one sample traced.
+template <>
+struct Arg<aether::SampleIndex> {
+    static aether::SampleIndex make(const Param& p) {
+        if (std::string(p.role) != "sample_index") {
+            std::fprintf(stderr, "raise: parameter %s is a sample index and has the role %s\n", p.name, p.role);
+            std::exit(4);
+        }
+        return {};
+    }
+};
+
 /// The arguments of a kernel; braces fix the order they are made in, so the leaves follow the
 /// parameters.
 template <class... A, std::size_t... I>
@@ -90,6 +126,7 @@ std::tuple<A...> arguments(const std::array<Param, sizeof...(A)>& params,
 template <class... A>
 std::string record(void (*body)(A...), const std::array<Param, sizeof...(A)>& params) {
     run() = Run{};
+    tape().sinks.clear();
     std::tuple<A...> args = arguments<A...>(params, std::index_sequence_for<A...>{});
     char entry = 0; // the kernel's frames lie below this local
     tape().stackBase = &entry;
@@ -101,6 +138,11 @@ std::string record(void (*body)(A...), const std::array<Param, sizeof...(A)>& pa
                                  "(('kind', 'assign'), ('role', 'mutable'), ('name', '" + plane +
                                      "'))"));
     }
+    for (auto& [plane, at] : run().views) {
+        run().declared[at] = plane->report();
+        if (const rx_node root = plane->assignRoot(); root != kNone) roots.push_back(root);
+    }
+    roots.insert(roots.end(), tape().sinks.begin(), tape().sinks.end());
     std::size_t length = 0;
     rx_dump(tape().ctx, roots.data(), roots.size(), nullptr, 0, &length);
     std::string text(length + 1, '\0');

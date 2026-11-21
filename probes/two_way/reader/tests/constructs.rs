@@ -824,3 +824,33 @@ fn a_return_in_a_branch_spans_the_if_around_it() {
     assert_eq!((r.kind, r.line, r.span), ("return-in-branch", 3, (2, 4)));
     assert!(r.way_out().contains("returns a reference"));
 }
+
+#[test]
+fn a_view_is_read_when_its_element_or_the_view_is_const_and_written_otherwise() {
+    let got = roles(
+        "void k(const View<double, extents<3, dyn>> a, View<const double, extents<dyn>> b, aether::View<double, extents<dyn>> c, const aether::View<const double, extents<dyn>> d, TableView<double, extents<dyn>> e, ScalarView<const double> f, VecView<double, 3> g) { }",
+    );
+    let roles: Vec<_> = got.iter().map(|g| g.1).collect();
+    assert_eq!(
+        roles,
+        [
+            Some("view_read"),
+            Some("view_read"),
+            Some("view_write"),
+            Some("view_read"),
+            Some("view_read"),
+            Some("view_read"),
+            Some("view_write"),
+        ]
+    );
+}
+
+#[test]
+fn a_sample_index_has_its_own_role_and_an_alias_hides_a_view_role() {
+    let got = roles("void k(SampleIndex i, aether::SampleIndex j, Vec3In in, const Real& r) { }");
+    let roles: Vec<_> = got.iter().map(|g| g.1).collect();
+    assert_eq!(
+        roles,
+        [Some("sample_index"), Some("sample_index"), None, None]
+    );
+}

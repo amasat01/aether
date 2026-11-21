@@ -14,6 +14,8 @@ import numpy as np
 _SAME_IN_EVERY_BUILD = {
     "add", "sub", "mul", "truediv", "div", "neg", "abs", "sqrt", "min", "max", "select",
     "lt", "le", "gt", "ge", "eq", "ne", "lnot", "land", "lor",
+    # Element access moves values without computing on them.
+    "component", "component_at", "set_component_at", "vec", "cast", "clamp_index",
 }
 
 

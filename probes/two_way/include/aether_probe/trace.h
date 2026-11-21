@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,7 @@ struct Tape {
     std::vector<Var*> live;
     std::vector<rx_node> sinks;
     int loopDepth = 0;
+    int branchDepth = 0;   // traced branches being recorded now
     const char* stackBase = nullptr;   // above the kernel's frames: set by whoever calls the kernel
 };
 
@@ -41,17 +43,28 @@ inline void check(int status, const char* what) {
     }
 }
 
-inline rx_node makeNode(const char* cls, const char* dtype, const std::vector<rx_node>& ops,
-                        const std::string& fields) {
+/// The shape of a value: empty for a scalar, the extents of a vector (one) or a matrix (two).
+using Shape = std::vector<std::int64_t>;
+
+/// A node of class `cls` with the given type; `tag` is the type's tag (null: none).
+inline rx_node makeNode(const char* cls, const char* dtype, const Shape& shape,
+                        const std::vector<rx_node>& ops, const std::string& fields,
+                        const char* tag = nullptr) {
     rx_node out = 0;
-    check(rx_make(tape().ctx, cls, dtype, nullptr, 0, nullptr, ops.data(), ops.size(),
+    check(rx_make(tape().ctx, cls, dtype, shape.data(), shape.size(), tag, ops.data(), ops.size(),
                   fields.c_str(), fields.size(), &out), cls);
     return out;
 }
 
-inline rx_node makeOp(const char* kind, const std::vector<rx_node>& ops) {
+inline rx_node makeNode(const char* cls, const char* dtype, const std::vector<rx_node>& ops,
+                        const std::string& fields) {
+    return makeNode(cls, dtype, Shape{}, ops, fields);
+}
+
+/// An operation whose result type the IR infers; `literal` is the text of its literal field.
+inline rx_node makeOp(const char* kind, const std::vector<rx_node>& ops, const std::string& literal = "") {
     rx_node out = 0;
-    check(rx_make_op(tape().ctx, kind, ops.data(), ops.size(), "", 0, &out), kind);
+    check(rx_make_op(tape().ctx, kind, ops.data(), ops.size(), literal.c_str(), literal.size(), &out), kind);
     return out;
 }
 
@@ -71,31 +84,40 @@ struct Bool {
     rx_node node;
 };
 
-/// A traced variable of some scalar type. Every live one is known to the tape, so that a recorded
-/// branch or loop can see which variables its body assigned.
+/// A traced variable of some scalar type, or of a vector or matrix shape for a plane. Every live
+/// one is known to the tape, so that a recorded branch or loop can see which variables its body
+/// assigned.
 class Var {
 public:
-    Var(const Var& other) : node_(other.node_), dtype_(other.dtype_) { enter(); }
+    Var(const Var& other) : node_(other.node_), dtype_(other.dtype_), shape_(other.shape_) { enter(); }
     Var& operator=(const Var& other) {
         node_ = other.node_;
         return *this;
     }
-    ~Var() {
+    virtual ~Var() {
         auto& live = tape().live;
         live.erase(std::find(live.rbegin(), live.rend(), this).base() - 1);
     }
     rx_node node() const { return node_; }
     const char* dtype() const { return dtype_; }
+    const Shape& shape() const { return shape_; }
     void rebind(rx_node node) { node_ = node; }
+    /// The value the variable has before the kernel runs, for a branch that leaves one side without
+    /// a value of its own; `kNone` when it has none.
+    virtual rx_node priorNode() const;
 
 protected:
-    Var(rx_node node, const char* dtype) : node_(node), dtype_(dtype) { enter(); }
+    Var(rx_node node, const char* dtype, Shape shape = {})
+        : node_(node), dtype_(dtype), shape_(std::move(shape)) { enter(); }
 
 private:
     void enter() { tape().live.push_back(this); }
     rx_node node_;
     const char* dtype_;
+    Shape shape_;
 };
+
+inline rx_node Var::priorNode() const { return kNone; }
 
 /// A traced real value.
 class Real : public Var {
@@ -200,14 +222,21 @@ inline void merge(Bool condition, const std::vector<rx_node>& before,
                   const std::vector<rx_node>& afterThen, const std::vector<rx_node>& afterElse) {
     for (std::size_t i = 0; i < before.size(); ++i) {
         if (afterThen[i] == before[i] && afterElse[i] == before[i]) continue;
-        if (afterThen[i] == kNone || afterElse[i] == kNone) {
-            std::fprintf(stderr, "raise: a variable or plane gets its first value on one side of a "
-                                 "branch only; give it a value before the branch or on both sides\n");
-            std::exit(2);
-        }
         Var* variable = tape().live[i];
-        variable->rebind(makeNode("Select", variable->dtype(),
-                                  {condition.node, afterThen[i], afterElse[i]}, "()"));
+        rx_node thenNode = afterThen[i];
+        rx_node elseNode = afterElse[i];
+        if (thenNode == kNone || elseNode == kNone) {
+            const rx_node prior = variable->priorNode();
+            if (prior == kNone) {
+                std::fprintf(stderr, "raise: a variable or plane gets its first value on one side of a "
+                                     "branch only; give it a value before the branch or on both sides\n");
+                std::exit(2);
+            }
+            if (thenNode == kNone) thenNode = prior;
+            if (elseNode == kNone) elseNode = prior;
+        }
+        variable->rebind(makeNode("Select", variable->dtype(), variable->shape(),
+                                  {condition.node, thenNode, elseNode}, "()"));
     }
 }
 
@@ -216,11 +245,13 @@ template <class Then, class Else>
 __attribute__((noinline)) void branch(Bool condition, Then&& then, Else&& otherwise) {
     const PlainStateGuard guard(__builtin_frame_address(0));
     const auto before = snapshot();
+    ++tape().branchDepth;
     then();
     guard.check("a branch");
     const auto afterThen = snapshot();
     restore(before);
     otherwise();
+    --tape().branchDepth;
     guard.check("a branch");
     merge(condition, before, afterThen, snapshot());
 }
@@ -241,11 +272,13 @@ __attribute__((noinline)) auto choose(Bool condition, Then&& then, Else&& otherw
     using Value = std::common_type_t<decltype(then()), decltype(otherwise())>;
     const PlainStateGuard guard(__builtin_frame_address(0));
     const auto before = snapshot();
+    ++tape().branchDepth;
     Value a = then();
     guard.check("a branch that returns");
     const auto afterThen = snapshot();
     restore(before);
     Value b = otherwise();
+    --tape().branchDepth;
     guard.check("a branch that returns");
     merge(condition, before, afterThen, snapshot());
     return Value(makeNode("Select", a.dtype(), {condition.node, a.node(), b.node()}, "()"));
