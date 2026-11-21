@@ -71,6 +71,7 @@ aether/geometry/geometry.h
 aether/index/BundleIndex.h
 aether/index/Offset.h
 aether/index/SampleIndex.h
+aether/integer/integer.h
 aether/layout/Extents.h
 aether/layout/Layout.h
 aether/layout/detail/Carray.h
