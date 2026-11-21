@@ -411,7 +411,7 @@ fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<St
     )?;
     let index = if run.clamped {
         f.need(Need::Integers);
-        format!("hawk_abi::int_clamp_index<Int>({index}, static_cast<Int>({plane}.samples()))")
+        format!("aether::integer::clampIndex<Int>({index}, static_cast<Int>({plane}.samples()))")
     } else {
         index
     };

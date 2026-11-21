@@ -14,7 +14,7 @@ pub enum Spelling {
     Refused(&'static str),
     /// The text given, with `{0}`, `{1}` replaced by the operand texts.
     Template(&'static str),
-    /// `hawk_abi::<helper>(args)`, the helper name given (with its template arguments, if any).
+    /// `<helper>(args)`, the qualified helper name given (with its template arguments, if any).
     Helper(&'static str),
     /// `(<operator>a)`, the operator text given.
     Prefix(&'static str),
@@ -72,7 +72,7 @@ impl Row {
                     t.replace(&format!("{{{i}}}"), a)
                 })
             }
-            Spelling::Helper(f) => format!("hawk_abi::{f}({})", args.join(", ")),
+            Spelling::Helper(f) => format!("{f}({})", args.join(", ")),
             Spelling::Infix(op) => format!("({} {op} {})", args[0], args[1]),
             Spelling::Prefix(op) => format!("({op}{})", args[0]),
             Spelling::Call(f) => format!("aether::math::{f}({})", args.join(", ")),
@@ -113,7 +113,7 @@ const fn call(kind: OpKind, arity: usize, function: &'static str) -> Row {
     }
 }
 
-/// A row for an integer helper `hawk_abi::<name>` over `arity` operands of `class`.
+/// A row for the integer helper `aether::integer::<name>` over `arity` operands of `class`.
 const fn integer(kind: OpKind, arity: usize, class: ValueClass, name: &'static str) -> Row {
     Row {
         kind,
@@ -154,23 +154,88 @@ const NORMAL: &str = "aether::random::detail::standardNormal<Real>(static_cast<s
 
 /// Every infix, prefix and math-call operation.
 pub static VOCABULARY: &[Row] = &[
-    integer(OpKind::Floordiv, 2, ValueClass::Any, "int_floordiv"),
-    integer(OpKind::Mod, 2, ValueClass::Any, "int_mod"),
-    integer(OpKind::Band, 2, ValueClass::Any, "int_and"),
-    integer(OpKind::Bor, 2, ValueClass::Any, "int_or"),
-    integer(OpKind::Bxor, 2, ValueClass::Any, "int_xor"),
-    integer(OpKind::Shl, 2, ValueClass::Any, "int_shl"),
-    integer(OpKind::Shr, 2, ValueClass::Any, "int_shr"),
-    integer(OpKind::Invert, 1, ValueClass::Any, "int_invert"),
-    integer(OpKind::Add, 2, ValueClass::IntegerPlane, "int_add"),
-    integer(OpKind::Sub, 2, ValueClass::IntegerPlane, "int_sub"),
-    integer(OpKind::Mul, 2, ValueClass::IntegerPlane, "int_mul"),
-    integer(OpKind::Neg, 1, ValueClass::IntegerPlane, "int_neg"),
-    integer(OpKind::Abs, 1, ValueClass::IntegerPlane, "int_abs"),
-    integer(OpKind::Min, 2, ValueClass::IntegerPlane, "int_min"),
-    integer(OpKind::Max, 2, ValueClass::IntegerPlane, "int_max"),
-    integer(OpKind::Min, 2, ValueClass::WideInteger, "int_min<Int>"),
-    integer(OpKind::Max, 2, ValueClass::WideInteger, "int_max<Int>"),
+    integer(
+        OpKind::Floordiv,
+        2,
+        ValueClass::Any,
+        "aether::integer::floorDiv",
+    ),
+    integer(OpKind::Mod, 2, ValueClass::Any, "aether::integer::mod"),
+    integer(OpKind::Band, 2, ValueClass::Any, "aether::integer::bitAnd"),
+    integer(OpKind::Bor, 2, ValueClass::Any, "aether::integer::bitOr"),
+    integer(OpKind::Bxor, 2, ValueClass::Any, "aether::integer::bitXor"),
+    integer(
+        OpKind::Shl,
+        2,
+        ValueClass::Any,
+        "aether::integer::shiftLeft",
+    ),
+    integer(
+        OpKind::Shr,
+        2,
+        ValueClass::Any,
+        "aether::integer::shiftRight",
+    ),
+    integer(
+        OpKind::Invert,
+        1,
+        ValueClass::Any,
+        "aether::integer::bitNot",
+    ),
+    integer(
+        OpKind::Add,
+        2,
+        ValueClass::IntegerPlane,
+        "aether::integer::add",
+    ),
+    integer(
+        OpKind::Sub,
+        2,
+        ValueClass::IntegerPlane,
+        "aether::integer::sub",
+    ),
+    integer(
+        OpKind::Mul,
+        2,
+        ValueClass::IntegerPlane,
+        "aether::integer::mul",
+    ),
+    integer(
+        OpKind::Neg,
+        1,
+        ValueClass::IntegerPlane,
+        "aether::integer::neg",
+    ),
+    integer(
+        OpKind::Abs,
+        1,
+        ValueClass::IntegerPlane,
+        "aether::integer::abs",
+    ),
+    integer(
+        OpKind::Min,
+        2,
+        ValueClass::IntegerPlane,
+        "aether::integer::min",
+    ),
+    integer(
+        OpKind::Max,
+        2,
+        ValueClass::IntegerPlane,
+        "aether::integer::max",
+    ),
+    integer(
+        OpKind::Min,
+        2,
+        ValueClass::WideInteger,
+        "aether::integer::min<Int>",
+    ),
+    integer(
+        OpKind::Max,
+        2,
+        ValueClass::WideInteger,
+        "aether::integer::max<Int>",
+    ),
     with_helper(
         OpKind::RandomUniform,
         2,
@@ -186,7 +251,7 @@ pub static VOCABULARY: &[Row] = &[
     with_helper(
         OpKind::Spacing,
         1,
-        Spelling::Helper("spacing"),
+        Spelling::Helper("hawk_abi::spacing"),
         Helper::Spacing,
     ),
     refused(OpKind::Dot, 2, "scalar op dot"),
@@ -324,8 +389,8 @@ mod tests {
                 Spelling::Infix(op) => format!("(a {op} b)"),
                 Spelling::Prefix(op) => format!("({op}a)"),
                 Spelling::Template(t) => t.replace("{0}", "a").replace("{1}", "b"),
-                Spelling::Helper(f) if r.arity == 1 => format!("hawk_abi::{f}(a)"),
-                Spelling::Helper(f) => format!("hawk_abi::{f}(a, b)"),
+                Spelling::Helper(f) if r.arity == 1 => format!("{f}(a)"),
+                Spelling::Helper(f) => format!("{f}(a, b)"),
                 Spelling::Call(f) if r.arity == 1 => format!("aether::math::{f}(a)"),
                 Spelling::Call(f) if r.arity == 2 => format!("aether::math::{f}(a, b)"),
                 Spelling::Call(f) => format!("aether::math::{f}(a, b, c)"),

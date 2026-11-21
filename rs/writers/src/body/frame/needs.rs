@@ -19,7 +19,7 @@ pub enum Need {
     Spacing,
     /// `hawk_abi::mix_count(`: the mix counter.
     MixCount,
-    /// `hawk_abi::int_`: an integer helper.
+    /// `aether::integer::`: an integer helper.
     Integers,
     /// `aether::linalg::`: the linear-algebra header.
     Linalg,
@@ -115,7 +115,7 @@ impl Needs {
             (Need::WarpSum, "hawk_abi::warp_sum<"),
             (Need::Spacing, "hawk_abi::spacing("),
             (Need::MixCount, "hawk_abi::mix_count("),
-            (Need::Integers, "hawk_abi::int_"),
+            (Need::Integers, "aether::integer::"),
             (Need::Linalg, "aether::linalg::"),
             (Need::Rt, "aether::rt::"),
             (Need::Geometry, "aether::geometry::"),

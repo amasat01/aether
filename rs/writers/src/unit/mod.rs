@@ -366,6 +366,7 @@ fn include_block(m: &Mode, arms: &Arms, n: &Needs) -> String {
         (n.linalg || n.rays || n.team, FACTS_INCLUDE),
         (!m.includes.is_empty(), m.includes),
         (n.random, RANDOM_INCLUDE),
+        (n.integers, INTEGER_INCLUDE),
         (n.runs, RUN_INCLUDE),
         (
             n.compensated || n.store_compensated || n.fold || n.sample_sum,
@@ -435,9 +436,6 @@ fn helper_block(m: &Mode, q: &str, arms: &Arms, n: &Needs) -> String {
     }
     if n.mix {
         helpers += &fill(MIX_COUNT, q, arms.mix_count)
-    }
-    if n.integers {
-        helpers += &fill(INT_HELPERS, q, "")
     }
     if n.scatter_or {
         helpers += &fill(ACCUM_OR, q, arms.accum_or)
@@ -621,6 +619,52 @@ mod tests {
         assert!(exports(&Exports::Derived, true)
             .unwrap()
             .contains("extern \"C\" __device__ unsigned long long eagle_layout_sizes[5] = {"));
+    }
+    #[test]
+    fn a_unit_needing_integers_includes_the_header_and_carries_no_helper_text() {
+        let arms = Arms {
+            accum_add: "",
+            accum_add_compensated: "",
+            accum_or: "",
+            finish_count: "",
+            mix_count: "",
+            spacing: "",
+            tiled: "",
+            warp_sum: "",
+            sample_sum_warp: "",
+            banded_include: "",
+            banded_sum: "",
+            banded_ss_helpers: "",
+        };
+        let m = mode_of(Scalar::Float32);
+        let mut n = Needs {
+            store_compensated: false,
+            tiled: false,
+            warp_sum: false,
+            random: false,
+            spacing: false,
+            mix: false,
+            integers: false,
+            linalg: false,
+            rt: false,
+            rays: false,
+            team: false,
+            scatter_or: false,
+            compensated: false,
+            fold: false,
+            runs: false,
+            finish: false,
+            narrow_int: false,
+            sample_sum: false,
+            row: 0,
+        };
+        n.integers = true;
+        let with = prelude(&m, "static inline", &arms, &n);
+        assert!(with.contains("#include \"aether/integer/integer.h\""));
+        assert!(!with.contains("int_traits"));
+        n.integers = false;
+        let without = prelude(&m, "static inline", &arms, &n);
+        assert!(!without.contains("aether/integer/integer.h"));
     }
     #[test]
     fn prelude_is_filled() {

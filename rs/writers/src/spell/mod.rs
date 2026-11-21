@@ -108,7 +108,7 @@ pub fn at(role: &str, name: &str, index: &str, rank: usize) -> Result<String, Re
 /// A helper function the spelled text calls, which the unit around it must define.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Helper {
-    /// An integer helper (`hawk_abi::int_..`).
+    /// An integer helper (`aether::integer::..`).
     Integers,
     /// A random draw (`aether::random::..`).
     Random,
@@ -131,7 +131,7 @@ pub fn cast_op(
     elem(source)?;
     Ok(if int_plane(target) && float_src {
         used.push(Helper::Integers);
-        format!("hawk_abi::int_from_real<{e}>({arg})")
+        format!("aether::integer::fromReal<{e}>({arg})")
     } else {
         format!("static_cast<{e}>({arg})")
     })

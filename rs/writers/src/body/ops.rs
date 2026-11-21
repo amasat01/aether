@@ -290,7 +290,7 @@ fn scalar_text(
 /// in range, the plain read guarded by that test.
 fn clamp_index_text(f: &mut Frame, p: usize, args: &[String]) -> String {
     f.need(Need::Integers);
-    let held = format!("hawk_abi::int_clamp_index<Int>({})", args.join(", "));
+    let held = format!("aether::integer::clampIndex<Int>({})", args.join(", "));
     match f.span(p) {
         None => held,
         Some(Span { base, lo, hi }) => {
