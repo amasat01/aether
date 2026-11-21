@@ -1,6 +1,7 @@
 // The trace arm of the probe: a scalar type whose operations build IR nodes through the IR's C
 // interface, and the recording calls a control statement on a traced value is rewritten into.
 #pragma once
+#include <concepts>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -140,9 +141,14 @@ inline void restore(const std::vector<rx_node>& nodes) {
     for (std::size_t i = 0; i < nodes.size(); ++i) tape().live[i]->rebind(nodes[i]);
 }
 
+/// A condition that is not traced: `bool`, or anything an `if` accepts (a pointer, a type with an
+/// explicit conversion to `bool`). The traced boolean is neither, so it never lands here.
+template <class C>
+concept PlainCondition = !std::same_as<std::remove_cvref_t<C>, Bool> && requires(C&& c) { static_cast<bool>(c); };
+
 /// `if` on a plain condition: the ordinary statement.
-template <class Then, class Else>
-void branch(bool condition, Then&& then, Else&& otherwise) {
+template <PlainCondition C, class Then, class Else>
+void branch(C&& condition, Then&& then, Else&& otherwise) {
     if (condition) then(); else otherwise();
 }
 
@@ -210,8 +216,8 @@ __attribute__((noinline)) void branch(Bool condition, Then&& then, Else&& otherw
 }
 
 /// A branch whose sides each return a value, on a plain condition: the ordinary choice.
-template <class Then, class Else>
-auto choose(bool condition, Then&& then, Else&& otherwise)
+template <PlainCondition C, class Then, class Else>
+auto choose(C&& condition, Then&& then, Else&& otherwise)
     -> std::common_type_t<decltype(then()), decltype(otherwise())> {
     if (condition) return then();
     return otherwise();
@@ -246,7 +252,7 @@ struct Exit {
     std::vector<rx_node> values;
 
     /// A plain condition breaks for real; a traced one is recorded and the body goes on.
-    bool when(bool condition_) const { return condition_; }
+    template <PlainCondition C> bool when(C&& condition_) const { return static_cast<bool>(condition_); }
     bool when(Bool condition_) {
         if (pass == Pass::Unroll || (pass == Pass::Record && condition != kNone)) {
             std::fprintf(stderr, pass == Pass::Unroll

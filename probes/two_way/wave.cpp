@@ -6,14 +6,24 @@
 
 #ifdef AETHER_TRACE
 #include "aether_probe/trace.h"
-namespace aether::trace {
-// what aether's math calls for a traced scalar: one node of the kind the function is named after
-inline Real aetherTraceUnary(const char* kind, const Real& x) { return Real(makeOp(kind, {x.node()})); }
-inline Real aetherTraceBinary(const char* kind, const Real& a, const Real& b) {
-    return Real(makeOp(kind, {a.node(), b.node()}));
-}
-} // namespace aether::trace
-namespace aether { using Real = trace::Real; }
+namespace aether {
+using Real = trace::Real;
+namespace math {
+// What the library's math names mean for a traced scalar: one node of the function's kind.
+// Plain overloads, so they win over the library's templates and take a literal beside a traced value.
+#define AETHER_TRACE_UNARY(NAME) \
+    inline Real NAME(const Real& x) { return Real(trace::makeOp(#NAME, {x.node()})); }
+#define AETHER_TRACE_BINARY(NAME) \
+    inline Real NAME(const Real& a, const Real& b) { return Real(trace::makeOp(#NAME, {a.node(), b.node()})); }
+AETHER_TRACE_UNARY(sinh)
+AETHER_TRACE_UNARY(cbrt)
+AETHER_TRACE_BINARY(atan2)
+AETHER_TRACE_BINARY(hypot)
+AETHER_TRACE_BINARY(fmod)
+#undef AETHER_TRACE_UNARY
+#undef AETHER_TRACE_BINARY
+} // namespace math
+} // namespace aether
 #else
 namespace aether { using Real = double; }
 #endif
@@ -21,16 +31,8 @@ namespace aether { using Real = double; }
 #include "aether/math/math.h"
 
 namespace aether {
-template <class T> struct PerSample {
-    using Scalar = T;
-    T value;
-    operator T() const { return value; } // NOLINT(google-explicit-constructor)
-};
-template <class T> struct Uniform {
-    using Scalar = T;
-    T value;
-    operator T() const { return value; } // NOLINT(google-explicit-constructor)
-};
+template <class T> using PerSample = T;
+template <class T> using Uniform = T;
 } // namespace aether
 
 using aether::Real;
@@ -49,7 +51,7 @@ int main() {
         return Real(tr::makeNode("Leaf", "f64", {}, std::string("(('kind', '") + kind + "'), ('role', '" + role +
             "'), ('name', '" + name + "'), ('quantity', None), ('wire_index', 0), ('sorted', False))"));
     };
-    Real y = wave({leaf("vocab_read", "per_sample", "v")}, {leaf("uniform", "uniform", "k")});
+    Real y = wave(leaf("vocab_read", "per_sample", "v"), leaf("uniform", "uniform", "k"));
     rx_node root = tr::makeNode("Assign", "f64", {y.node()}, "(('kind', 'assign'), ('role', 'mutable'), ('name', 'y'))");
     std::size_t length = 0;
     rx_dump(tr::tape().ctx, &root, 1, nullptr, 0, &length);
@@ -60,6 +62,6 @@ int main() {
     std::ofstream("out/cpp_wave.planes") << "per_sample v f64\nuniform k f64\nmutable y f64\n";
     std::printf("raised wave: %zu characters\n", length);
 #else
-    for (double v : {-2.0, -0.3, 0.4, 1.7, 5.0}) std::printf("%.17g %.17g\n", v, wave({v}, {0.8}));
+    for (double v : {-2.0, -0.3, 0.4, 1.7, 5.0}) std::printf("%.17g %.17g\n", v, wave(v, 0.8));
 #endif
 }

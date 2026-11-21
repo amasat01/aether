@@ -15,8 +15,8 @@ pub use rewrite::{analyse, Analysis, Report};
 pub struct Signature {
     /// Qualified name, such as `physics::drag`.
     pub name: String,
-    /// Parameter names in order; "" for an unnamed one.
-    pub params: Vec<String>,
+    /// Parameters in order, each with its name, role and type text.
+    pub params: Vec<read::Param>,
     /// 1-based line of the opening brace of the body.
     pub line: usize,
 }

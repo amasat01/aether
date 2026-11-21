@@ -164,6 +164,21 @@ impl<'a> Source<'a> {
         t.hi
     }
 
+    /// Byte offset of the first line break in `[from, to)` that lies in whitespace, so not inside
+    /// a literal, a comment or a directive.
+    #[must_use]
+    pub fn line_break_in(&self, from: usize, to: usize) -> Option<usize> {
+        let first = self.tokens.partition_point(|t| t.end <= from);
+        self.tokens[first..]
+            .iter()
+            .take_while(|t| t.start < to)
+            .filter(|t| t.kind == TokKind::Space)
+            .find_map(|t| {
+                let (a, b) = (t.start.max(from), t.end.min(to));
+                self.text[a..b].find('\n').map(|p| a + p)
+            })
+    }
+
     /// True when a conditional directive starts in `[from, to)`.
     #[must_use]
     pub fn has_conditional(&self, from: usize, to: usize) -> bool {
@@ -437,8 +452,21 @@ pub struct Function {
     pub returns_reference: bool,
     /// The name with its enclosing namespaces and classes (`ns::name`); empty for a lambda.
     pub name: String,
-    /// The parameter names in order; an unnamed parameter gives "".
-    pub params: Vec<String>,
+    /// The parameters in order.
+    pub params: Vec<Param>,
+}
+
+/// One parameter of a function, as its declaration spells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    /// The name; "" when the parameter is unnamed.
+    pub name: String,
+    /// The role its type spells: `per_sample`, `uniform` or `mutable`; none for any other type.
+    pub role: Option<&'static str>,
+    /// The type as written, without the name and any default value.
+    pub type_text: String,
+    /// 1-based line of the parameter.
+    pub line: usize,
 }
 
 /// Words that may precede a parenthesis without being a function name.
@@ -629,7 +657,7 @@ impl Parser<'_, '_> {
 
     /// The qualified name and the parameter names of the function declared by `[head, open)`:
     /// the last parenthesis at depth zero that follows a name (not a macro's, not `noexcept`).
-    fn signature(&self, head: usize, open: usize) -> (String, Vec<String>) {
+    fn signature(&self, head: usize, open: usize) -> (String, Vec<Param>) {
         let mut first = head;
         while self.s.word(first) == "template" && self.s.word(first + 1) == "<" {
             first = self.skip_angles(first + 1);
@@ -668,7 +696,7 @@ impl Parser<'_, '_> {
     }
 
     /// The name of each parameter in `[from, to)`: the last word before a default value.
-    fn parameter_names(&self, from: usize, to: usize) -> Vec<String> {
+    fn parameter_names(&self, from: usize, to: usize) -> Vec<Param> {
         let mut params = Vec::new();
         let (mut depth, mut angles, mut begin) = (0usize, 0usize, from);
         for j in from..=to {
@@ -680,25 +708,54 @@ impl Parser<'_, '_> {
                 ">" if !at_end => angles = angles.saturating_sub(1),
                 ">>" if !at_end => angles = angles.saturating_sub(2),
                 "," if depth == 0 && angles == 0 && !at_end => {
-                    params.push(self.parameter_name(begin, j));
+                    params.push(self.parameter(begin, j));
                     begin = j + 1;
                 }
                 _ => {}
             }
             if at_end && begin < to {
-                params.push(self.parameter_name(begin, to));
+                params.push(self.parameter(begin, to));
             }
         }
         params
     }
 
-    fn parameter_name(&self, from: usize, to: usize) -> String {
+    /// The parameter in tokens `[from, to)`: its name, the role its type spells and its type.
+    fn parameter(&self, from: usize, to: usize) -> Param {
         let end = (from..to).find(|&j| self.s.word(j) == "=").unwrap_or(to);
         let named = end >= from + 2 && is_name(self.s.word(end - 1));
-        if named {
+        let type_end = if named { end - 1 } else { end };
+        // The role is the word before the first `<`: `aether::PerSample<T>` gives `PerSample`,
+        // while `std::array<PerSample<T>, 2>` gives `array`, which is no role.
+        let role = (from..type_end)
+            .find(|&j| self.s.word(j) == "<")
+            .filter(|&j| j > from)
+            .and_then(|j| match self.s.word(j - 1) {
+                "PerSample" => Some("per_sample"),
+                "Uniform" => Some("uniform"),
+                "Mutable" => Some("mutable"),
+                _ => None,
+            });
+        let type_text = if from < type_end {
+            let (a, b) = self.byte_range(from, type_end);
+            self.s.text[a..b]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            String::new()
+        };
+        let name = if named {
             self.s.word(end - 1).to_string()
         } else {
             String::new()
+        };
+        let line = self.s.line(self.s.token(from).start);
+        Param {
+            name,
+            role,
+            type_text,
+            line,
         }
     }
 

@@ -229,3 +229,12 @@ fn the_first_compiler_error_line_is_chosen_from_the_diagnostics() {
     assert_eq!(first_error(stderr), "bad.h:9:12: error: oops");
     assert_eq!(first_error(""), "the compiler failed without a message");
 }
+
+#[test]
+fn a_dependency_file_names_the_target_then_every_file_with_spaces_and_dollars_escaped() {
+    let text = raise::pipeline::depfile_text(
+        Path::new("/out/k.ir"),
+        &[PathBuf::from("/p/a.h"), PathBuf::from("/my dir/b$.h")],
+    );
+    assert_eq!(text, "/out/k.ir: /p/a.h /my\\ dir/b$$.h\n");
+}

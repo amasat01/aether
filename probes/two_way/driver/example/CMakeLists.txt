@@ -28,4 +28,5 @@ aether_raise(
   OUT "${CMAKE_BINARY_DIR}/raised"
   RAISE "${RAISE_BIN}"
   TRACE_INCLUDE "${AETHER_TRACE_INCLUDE}"
-  IR "${AETHER_IR}")
+  IR "${AETHER_IR}"
+  LINK -lm)

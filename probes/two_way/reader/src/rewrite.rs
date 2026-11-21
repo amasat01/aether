@@ -68,7 +68,7 @@ pub fn analyse(text: &str) -> Analysis {
         src: &src,
         rewritten: BTreeMap::new(),
     };
-    let output = renderer.top(&funcs);
+    let output = mark_lines(&renderer.top(&funcs));
     Analysis {
         output,
         tokens: src.tokens.len(),
@@ -518,6 +518,20 @@ struct Renderer<'s, 'a> {
 }
 
 impl Renderer<'_, '_> {
+    /// The source text `[from, to)`, with a marker after its first line break that tells where
+    /// the next line stands in the source (see `mark_lines`).
+    fn copy(&self, from: usize, to: usize) -> String {
+        let text = &self.src.text[from..to];
+        match self.src.line_break_in(from, to) {
+            Some(at) => {
+                let (head, tail) = text.split_at(at + 1 - from);
+                let line = self.src.line(at + 1);
+                format!("{head}{MARK}{line}{MARK_END}{tail}")
+            }
+            None => text.to_string(),
+        }
+    }
+
     fn count(&mut self, kind: &'static str) {
         *self.rewritten.entry(kind).or_insert(0) += 1;
     }
@@ -529,7 +543,7 @@ impl Renderer<'_, '_> {
         let mut pos = 0;
         for f in functions {
             let b = &f.body;
-            out.push_str(&text[pos..b.start]);
+            out.push_str(&self.copy(pos, b.start));
             let kids: Vec<&Stmt> = b.children();
             let level = Level::Function {
                 by_reference: f.returns_reference,
@@ -537,21 +551,20 @@ impl Renderer<'_, '_> {
             out.push_str(&self.span(b.start, b.end, &kids, level));
             pos = b.end;
         }
-        out.push_str(&text[pos..]);
+        out.push_str(&self.copy(pos, text.len()));
         out
     }
 
     /// The text of `[from, to)` with each statement of `kids` that lies inside replaced by its
     /// rendering; `level` says what the top level of the run rewrites.
     fn span(&mut self, from: usize, to: usize, kids: &[&Stmt], level: Level) -> String {
-        let text = self.src.text;
         let mut out = String::new();
         let mut pos = from;
         for (j, k) in kids.iter().enumerate() {
             if k.start < from || k.end > to {
                 continue;
             }
-            out.push_str(&text[pos..k.start]);
+            out.push_str(&self.copy(pos, k.start));
             if let Level::Function { by_reference } = level {
                 if let Some(value) = early_return(self.src, kids, j, by_reference) {
                     out.push_str(&self.render_early(&kids[j..], value, level));
@@ -566,7 +579,7 @@ impl Renderer<'_, '_> {
             });
             pos = k.end;
         }
-        out.push_str(&text[pos..to]);
+        out.push_str(&self.copy(pos, to));
         out
     }
 
@@ -624,7 +637,7 @@ impl Renderer<'_, '_> {
         let (last, rest) = v.split_last().expect("a body that ends in a jump holds it");
         let kids: Vec<&Stmt> = rest.iter().collect();
         let head = self.span(body.start, last.start, &kids, Level::Plain);
-        format!("{head}{}", &self.src.text[last.end..body.end])
+        format!("{head}{}", self.copy(last.end, body.end))
     }
 
     /// `if (C) {S; return E;} REST` as `return choose(C, {S; return E;}, {REST'});`, or, for
@@ -662,7 +675,7 @@ impl Renderer<'_, '_> {
                 let (last, rest) = v.split_last().expect("an exit block holds its break");
                 let kids: Vec<&Stmt> = rest.iter().collect();
                 let head = self.span(i.then_.start, last.start, &kids, Level::Plain);
-                format!("{head}return;{}", &self.src.text[last.end..i.then_.end])
+                format!("{head}return;{}", self.copy(last.end, i.then_.end))
             }
             _ => "return;".to_string(),
         };
@@ -739,7 +752,7 @@ impl Renderer<'_, '_> {
     fn case_body(&mut self, g: &Group) -> String {
         if let (Some(block), Some(brk)) = (g.block, g.brk) {
             let head = self.span(block.start, brk.start, &g.stmts, Level::Plain);
-            return format!("{head}{}", &self.src.text[brk.end..block.end]);
+            return format!("{head}{}", self.copy(brk.end, block.end));
         }
         if let Some(block) = g.block {
             return self.render(block);
@@ -893,4 +906,43 @@ fn declared_names<'a>(words: &[&'a str]) -> Vec<&'a str> {
         }
     }
     names
+}
+
+/// Starts the line number marker `copy` writes after a line break.
+const MARK: char = '\u{1}';
+/// Ends it.
+const MARK_END: char = '\u{2}';
+
+/// Turns the markers into `#line N` directives, written only where the line a marker stands at
+/// differs from the source line it was copied from: after a rewrite that changed the number of
+/// lines, so that a compiler's line numbers are the author's. `#line N` without a file name keeps
+/// the current one. The output starts at line 1.
+fn mark_lines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut expected = 1usize;
+    for line in text.split_inclusive('\n') {
+        let mut clean = String::with_capacity(line.len());
+        let mut target = None;
+        let mut rest = line;
+        while let Some(at) = rest.find(MARK) {
+            clean.push_str(&rest[..at]);
+            let after = &rest[at + MARK.len_utf8()..];
+            let end = after.find(MARK_END).unwrap_or(after.len());
+            if clean.is_empty() {
+                target = target.or(after[..end].parse::<usize>().ok());
+            }
+            rest = &after[(end + MARK_END.len_utf8()).min(after.len())..];
+        }
+        clean.push_str(rest);
+        if let Some(n) = target.filter(|&n| n != expected) {
+            let directive = format!("#line {n}\n");
+            out.push_str(&directive);
+            expected = n;
+        }
+        out.push_str(&clean);
+        if clean.ends_with('\n') {
+            expected += 1;
+        }
+    }
+    out
 }

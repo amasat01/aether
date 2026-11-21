@@ -32,17 +32,18 @@ for set in "" 2; do
 done
 leg "normal arm builds and runs" $status
 
-status=0
-for set in "" 2; do
-    $CXX $flags -DAETHER_TRACE -Iout/shadow -Iinclude -Isrc $ir main_trace$set.cpp $lib -o out/trace$set \
-        && ./out/trace$set > out/trace$set.log || status=1
-done
-leg "trace arm builds and raises eight kernels" $status
+$CXX $flags -DAETHER_TRACE -Iout/shadow -Iinclude -Isrc $ir main_trace_all.cpp $lib -o out/trace \
+    && ./out/trace > out/trace.log && [ "$(grep -c '^raised ' out/trace.log)" = 8 ]
+leg "trace arm builds and raises eight kernels, each recorded twice with equal result" $?
+
+$CXX $flags -DAETHER_TRACE -Iout/shadow -Iinclude -Isrc $ir rules.cpp $lib -o out/rules && ./out/rules > out/rules.log 2>&1
+[ $? = 5 ] && grep -q "^raised flagged" out/rules.log && grep -q "kernel counting records differently" out/rules.log
+leg "a condition that only converts to bool is taken; a kernel on a global counter is refused" $?
 
 status=0
 $CXX $flags "-I$aether" -Iinclude wave.cpp -o out/wave_values && ./out/wave_values > out/values3.txt || status=1
 $CXX $flags -DAETHER_TRACE "-I$aether" -Iinclude $ir wave.cpp $lib -o out/wave_trace && ./out/wave_trace > out/wave.log || status=1
-leg "the library math headers build in both arms" $status
+leg "a kernel on the library math headers, unchanged, builds in both arms" $status
 
 status=0
 $CXX $flags "-I$aether" -Iinclude bucket.cpp -o out/bucket_values && ./out/bucket_values > out/values_bucket.txt || status=1
@@ -74,14 +75,14 @@ if [ -n "${PYTHON:-}" ]; then
     "$PYTHON" e2e2.py > out/e2e.log 2>&1 && [ "$(grep -c 'difference to the normal C++ arm 0$' out/e2e.log)" = 8 ]
     leg "eight raised kernels build and run through hawk, exact against the normal arm" $?
     grep "^digest " out/e2e.log > out/digests.txt; cmp -s expected/digests.txt out/digests.txt
-    leg "canonical digests of the ten raised kernels equal the reference" $?
+    leg "canonical digests of the eleven raised kernels equal the reference" $?
     "$PYTHON" check_bucket.py > out/bucket_values.log 2>&1 && grep -q "mismatches against the normal C++ arm: 0 of" out/bucket_values.log
     leg "the raised integer kernel builds and runs through hawk, equal to the normal arm" $?
     $CXX $flags -I$example/physics/include -I$example/numerics/include -Iinclude driver_values.cpp -o out/driver_values \
         && ./out/driver_values > out/driver/values.txt && "$PYTHON" driver_check.py > out/driver_values.log 2>&1 \
         && [ "$(grep -c 'worst absolute difference 0.0$' out/driver_values.log)" = 3 ]
     leg "the three kernels the driver raised run through hawk, exact against the normal arm" $?
-    "$PYTHON" check3.py > out/wave_values.log 2>&1
-    leg "the math kernel evaluates (see out/wave_values.log for the ulp figure)" $?
+    "$PYTHON" wave_unit.py > out/wave_values.log 2>&1 && grep -q "worst difference 0.0 ulp" out/wave_values.log
+    leg "the math kernel as a built unit equals the normal arm to the last bit" $?
 fi
 if [ $red = 0 ]; then echo "ALL OK"; else echo "RED LEGS: $red"; exit 1; fi

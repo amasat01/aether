@@ -547,7 +547,7 @@ fn signatures_give_qualified_names_and_parameter_names() {
         .map(|s| {
             (
                 s.name.as_str(),
-                s.params.iter().map(String::as_str).collect(),
+                s.params.iter().map(|p| p.name.as_str()).collect(),
             )
         })
         .collect();
@@ -560,4 +560,125 @@ fn signatures_give_qualified_names_and_parameter_names() {
             ("ns::h", vec!["z"]),
         ]
     );
+}
+
+/// The line each line of `output` has once the `#line` directives are applied, by content.
+fn lines_after_directives(output: &str) -> Vec<(usize, String)> {
+    let mut at = 1;
+    let mut out = Vec::new();
+    for line in output.lines() {
+        if let Some(n) = line.strip_prefix("#line ") {
+            at = n.trim().parse().unwrap();
+        } else {
+            out.push((at, line.trim().to_string()));
+            at += 1;
+        }
+    }
+    out
+}
+
+#[test]
+fn a_line_marker_follows_a_rewrite_that_changes_the_line_count() {
+    let src =
+        "void f() {\n  if (c)\n  {\n    x = 1;\n  }\n  else\n  {\n    x = 2;\n  }\n  z = 3;\n}\n";
+    let a = analyse(src);
+    assert!(a.output.contains("#line "), "{}", a.output);
+    let lines = lines_after_directives(&a.output);
+    let line_of = |text: &str| lines.iter().find(|(_, l)| l.contains(text)).unwrap().0;
+    assert_eq!(line_of("z = 3;"), 10);
+    assert_eq!(line_of("x = 2;"), 8);
+}
+
+#[test]
+fn text_that_keeps_its_line_count_gets_no_marker() {
+    let src = "void f() {\n  x = 1;\n  if (c) {\n    y = 2;\n  }\n  z = 3;\n}\n";
+    assert!(!analyse(src).output.contains("#line"));
+    let plain = "int g;\n// c\n";
+    assert_eq!(analyse(plain).output, plain);
+}
+
+#[test]
+fn a_marker_never_lands_inside_a_literal_or_a_directive() {
+    let src = "void f() {\n  if (c)\n  {\n    x = 1;\n  }\n  else\n  {\n    x = 2;\n  }\n  s = R\"(a\nb)\";\n#define M(x) \\\n  x\n  z = 3;\n}\n";
+    let a = analyse(src);
+    assert!(a.output.contains("R\"(a\nb)\""));
+    assert!(a.output.contains("#define M(x) \\\n  x\n"));
+}
+
+/// The `(name, role, type)` of each parameter of the one function in `src`.
+fn roles(src: &str) -> Vec<(String, Option<&'static str>, String)> {
+    let sigs = reader::signatures(src);
+    sigs[0]
+        .params
+        .iter()
+        .map(|p| (p.name.clone(), p.role, p.type_text.clone()))
+        .collect()
+}
+
+#[test]
+fn a_role_is_read_from_the_type_with_or_without_the_namespace() {
+    let got = roles(
+        "void k(aether::PerSample<Real> a, Uniform<Real> b, aether::Mutable<Real> c, ::aether::Uniform<Real> d) { }",
+    );
+    let roles: Vec<_> = got.iter().map(|g| g.1).collect();
+    assert_eq!(
+        roles,
+        [
+            Some("per_sample"),
+            Some("uniform"),
+            Some("mutable"),
+            Some("uniform")
+        ]
+    );
+    assert_eq!(got[0].2, "aether::PerSample<Real>");
+}
+
+#[test]
+fn a_const_or_a_default_argument_does_not_hide_the_role() {
+    let got = roles("void k(const PerSample<Real> a, Uniform<Real> b = 1.0, Mutable<Real> c) { }");
+    assert_eq!(
+        got[0],
+        (
+            "a".into(),
+            Some("per_sample"),
+            "const PerSample<Real>".into()
+        )
+    );
+    assert_eq!(
+        got[1],
+        ("b".into(), Some("uniform"), "Uniform<Real>".into())
+    );
+}
+
+#[test]
+fn a_parameter_list_over_several_lines_reads_each_parameter_and_its_line() {
+    let src = "void k(\n    PerSample<Real> a,\n    // the limit\n    Uniform<Real> b,\n    Mutable<Real> c) { }";
+    let sigs = reader::signatures(src);
+    let lines: Vec<usize> = sigs[0].params.iter().map(|p| p.line).collect();
+    assert_eq!(lines, [2, 4, 5]);
+    assert_eq!(roles(src)[2].1, Some("mutable"));
+}
+
+#[test]
+fn a_type_that_is_no_role_gives_none_even_if_an_argument_names_one() {
+    let got = roles("void k(Real a, std::array<PerSample<Real>, 2> b, Speed c, int) { }");
+    let roles: Vec<_> = got.iter().map(|g| g.1).collect();
+    assert_eq!(roles, [None, None, None, None]);
+    assert_eq!(got[2].2, "Speed");
+    assert_eq!(got[3], (String::new(), None, "int".into()));
+}
+
+#[test]
+fn nested_template_arguments_keep_the_outer_role() {
+    let got =
+        roles("void k(PerSample<std::array<Real, 3>> a, Mutable<std::pair<int, Real>> b) { }");
+    assert_eq!(
+        got[0],
+        (
+            "a".into(),
+            Some("per_sample"),
+            "PerSample<std::array<Real, 3>>".into()
+        )
+    );
+    assert_eq!(got[1].1, Some("mutable"));
 }

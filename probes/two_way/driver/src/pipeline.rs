@@ -31,8 +31,8 @@ pub struct Summary {
 pub struct Kernel {
     /// Qualified name.
     pub name: String,
-    /// Parameter names in order.
-    pub params: Vec<String>,
+    /// Name and role of each parameter, in order.
+    pub params: Vec<(String, &'static str)>,
 }
 
 /// The first line of a compiler's diagnostics that names an error, or its first line.
@@ -58,6 +58,7 @@ pub fn run(req: &Request) -> Res<Summary> {
     flags.extend(req.includes.iter().map(|d| format!("-I{}", d.display())));
     flags.extend(arm_includes(req));
     let files = closure(req, &flags)?;
+    write_depfile(req, &files)?;
     println!(
         "closure: {} files, {} project files",
         files.all.len(),
@@ -113,6 +114,37 @@ fn arm_includes(req: &Request) -> Vec<String> {
     ]
 }
 
+/// A name as a make dependency file spells it: a space is `\\ ` and a dollar `$$`.
+#[must_use]
+pub fn depfile_name(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace(' ', "\\ ")
+        .replace('$', "$$")
+}
+
+/// The text of a make-style dependency file: `target: file file ...`.
+#[must_use]
+pub fn depfile_text(target: &Path, files: &[PathBuf]) -> String {
+    let names: Vec<String> = files.iter().map(|f| depfile_name(f)).collect();
+    format!("{}: {}\n", depfile_name(target), names.join(" "))
+}
+
+/// Writes the dependency file when the request asks for one, so that a build system reruns the
+/// raise when any project file of the closure changes.
+fn write_depfile(req: &Request, files: &Closure) -> Res<()> {
+    let Some(depfile) = &req.depfile else {
+        return Ok(());
+    };
+    let first = req
+        .kernels
+        .first()
+        .map_or("raise", |k| k.as_str())
+        .replace("::", "_");
+    let target = req.out.join(format!("{first}.ir"));
+    write_file(depfile, &depfile_text(&target, &files.project), "closure")
+}
+
 /// Step 2: writes every project file of the closure, rewritten, into the shadow tree, and the
 /// statements the reader left into `left.txt`. Returns how many were left.
 ///
@@ -124,6 +156,8 @@ pub fn rewrite_project(
     mirror: &Mirror,
     shadow: &Path,
 ) -> Res<usize> {
+    // A shadow tree of an earlier run could hold a different file under the same index.
+    let _ = fs::remove_dir_all(shadow);
     let mut left = String::new();
     let mut count = 0;
     for file in &files.project {
@@ -277,13 +311,8 @@ pub fn find_kernels(req: &Request, files: &Closure) -> Res<Vec<Kernel>> {
                 ))
             }
             [(file, sig)] => {
-                if sig.params.iter().any(String::is_empty) {
-                    return Err(RaiseError::new(
-                        "kernels",
-                        format!("{}:{}: kernel {name} has an unnamed parameter; name every parameter", file.display(), sig.line),
-                    ));
-                }
-                kernels.push(Kernel { name: name.clone(), params: sig.params.clone() });
+                let params = kernel_params(file, name, sig)?;
+                kernels.push(Kernel { name: name.clone(), params });
             }
             many => {
                 let places: Vec<String> =
@@ -296,6 +325,32 @@ pub fn find_kernels(req: &Request, files: &Closure) -> Res<Vec<Kernel>> {
         }
     }
     Ok(kernels)
+}
+
+/// The name and role of each parameter of a kernel definition.
+fn kernel_params(
+    file: &Path,
+    kernel: &str,
+    sig: &reader::Signature,
+) -> Res<Vec<(String, &'static str)>> {
+    let mut params = Vec::new();
+    for p in &sig.params {
+        let place = format!("{}:{}", file.display(), p.line);
+        if p.name.is_empty() {
+            return Err(RaiseError::new(
+                "kernels",
+                format!("{place}: kernel {kernel} has an unnamed parameter of type {}; name every parameter", p.type_text),
+            ));
+        }
+        let Some(role) = p.role else {
+            return Err(RaiseError::new(
+                "kernels",
+                format!("{place}: kernel {kernel} parameter {} has type `{}`, which spells no role; spell the role type in the declaration: aether::PerSample<T>, aether::Uniform<T> or aether::Mutable<T>", p.name, p.type_text),
+            ));
+        };
+        params.push((p.name.clone(), role));
+    }
+    Ok(params)
 }
 
 /// Step 4: writes the trace header and `raise_main.cpp`, which includes the entry (its rewritten
@@ -318,9 +373,13 @@ pub fn generate(req: &Request, mirror: &Mirror, shadow: &Path, kernels: &[Kernel
         cpp_escape(&entry.display().to_string())
     );
     for k in kernels {
-        let names: Vec<String> = k.params.iter().map(|p| format!("\"{p}\"")).collect();
+        let names: Vec<String> = k
+            .params
+            .iter()
+            .map(|(name, role)| format!("{{\"{name}\", \"{role}\"}}"))
+            .collect();
         let call = format!(
-            "    aether::trace::raise(\"{0}\", &{0}, {{{1}}}, \"{2}\");\n",
+            "    aether::trace::raise(\"{0}\", &{0}, {{{{{1}}}}}, \"{2}\");\n",
             k.name,
             names.join(", "),
             cpp_escape(&req.out.display().to_string())

@@ -29,6 +29,9 @@ pub struct Request {
     pub ir: PathBuf,
     /// Extra arguments of the link of the raise program, such as `-lpthread`.
     pub link: Vec<String>,
+    /// Where to write the make-style dependency file: the first output, then every project file
+    /// of the closure.
+    pub depfile: Option<PathBuf>,
     /// Where the IR, the plane lists and the left-over list are written.
     pub out: PathBuf,
     /// Keep the shadow tree and the generated main after a green run.
@@ -94,6 +97,7 @@ pub fn parse(args: &[String]) -> Res<Request> {
                 "--trace-include",
                 "--ir",
                 "--link",
+                "--depfile",
                 "--out",
             ];
             if !known.contains(&arg) {
@@ -179,6 +183,9 @@ fn build(values: &[(String, String)], keep: bool) -> Res<Request> {
         trace_include: exists("--trace-include", one("--trace-include")?)?,
         ir: exists("--ir", one("--ir")?)?,
         link: all("--link").into_iter().map(str::to_string).collect(),
+        depfile: all("--depfile")
+            .last()
+            .map(|d| std::path::absolute(d).unwrap_or_else(|_| PathBuf::from(d))),
         out: exists("--out", one("--out")?)?,
         keep,
     })

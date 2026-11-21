@@ -31,28 +31,17 @@ inline trace::Bool bounded(trace::Bool condition, long) { return condition; }
 #endif
 inline bool bounded(bool condition, long) { return condition; }
 
-/// One value per sample, read.
+/// One value per sample, read. A role type is the scalar itself: the body computes with plain
+/// scalars, and the role is read from the kernel's declaration.
 template <class T>
-struct PerSample {
-    T value;
-    operator T() const { return value; } // NOLINT(google-explicit-constructor)
-};
+using PerSample = T;
 
 /// One value for the whole run, read.
 template <class T>
-struct Uniform {
-    T value;
-    operator T() const { return value; } // NOLINT(google-explicit-constructor)
-};
+using Uniform = T;
 
 /// One value per sample, written.
 template <class T>
-struct Mutable {
-    T* value;
-    Mutable& operator=(const T& x) {
-        *value = x;
-        return *this;
-    }
-};
+using Mutable = T&;
 
 } // namespace aether
