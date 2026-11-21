@@ -2,6 +2,7 @@
 #include <deque>
 #include <fstream>
 #include <string>
+#include <utility>
 
 #include "model/more.h"
 
@@ -46,12 +47,17 @@ template <class T> struct Arg<aether::Mutable<T>> {
     }
 };
 
+/// The arguments of a kernel, made in the order of its parameters.
+template <class... A, std::size_t... I>
+std::tuple<A...> arguments(const std::array<const char*, sizeof...(A)>& names, std::index_sequence<I...>) {
+    return std::tuple<A...>{Arg<A>::make(names[I])...};
+}
+
 template <class... A>
 void kernel(const char* name, void (*body)(A...), std::array<const char*, sizeof...(A)> names) {
     written.clear();
     declared.clear();
-    std::size_t next = 0;
-    std::tuple<A...> args{Arg<A>::make(names[next++])...};
+    std::tuple<A...> args = arguments<A...>(names, std::index_sequence_for<A...>{});
     char entry = 0;                      // the kernel's frames lie below this local
     tr::tape().stackBase = &entry;
     std::apply(body, args);

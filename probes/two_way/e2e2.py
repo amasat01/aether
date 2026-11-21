@@ -1,4 +1,4 @@
-"""All eight probe kernels through hawk with NO hawk twin: the plane declarations are built from
+"""All probe kernels through hawk with NO hawk twin: the plane declarations are built from
 what the raise stub reports of the C++ signature (role, name, scalar type)."""
 import pathlib
 
@@ -46,3 +46,9 @@ for name, rows, params, columns in cases:
     worst = max(float(np.max(np.abs(np.asarray(got[plane], dtype=float) - np.tile(rows[:, column], 1000))))
                 for plane, column in columns.items())
     print(f"{name}: built from its signature report, run on {v.size} samples; worst absolute difference to the normal C++ arm {worst:.3g}")
+
+# The digest of the canonical form names a kernel whatever order its nodes were recorded in (a
+# compiler is free to evaluate the operands of an expression in either order).
+for report in sorted(out.glob("cpp_*.planes")):
+    name = report.stem.removeprefix("cpp_")
+    print(f"digest {name} {_ir.digest(raised(name).walk)}")

@@ -57,6 +57,7 @@ int main() {
     tr::check(rx_dump(tr::tape().ctx, &root, 1, text.data(), text.size(), &length), "dump");
     text.resize(length);
     std::ofstream("out/cpp_wave.ir") << text;
+    std::ofstream("out/cpp_wave.planes") << "per_sample v f64\nuniform k f64\nmutable y f64\n";
     std::printf("raised wave: %zu characters\n", length);
 #else
     for (double v : {-2.0, -0.3, 0.4, 1.7, 5.0}) std::printf("%.17g %.17g\n", v, wave({v}, {0.8}));

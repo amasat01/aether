@@ -44,12 +44,6 @@ $CXX $flags "-I$aether" -Iinclude wave.cpp -o out/wave_values && ./out/wave_valu
 $CXX $flags -DAETHER_TRACE "-I$aether" -Iinclude $ir wave.cpp $lib -o out/wave_trace && ./out/wave_trace > out/wave.log || status=1
 leg "the library math headers build in both arms" $status
 
-status=0
-for reference in expected/*.ir; do
-    cmp -s "$reference" "out/$(basename "$reference")" || { echo "  differs: $(basename "$reference")"; status=1; }
-done
-leg "raised IR text equals the reference of the other architecture" $status
-
 $CXX $flags -DAETHER_TRACE -Iinclude $ir leaky.cpp $lib -o out/leaky && ./out/leaky > out/leaky.log 2>&1
 [ $? = 3 ]
 leg "a plain variable assigned under a traced condition is refused" $?
@@ -57,6 +51,8 @@ leg "a plain variable assigned under a traced condition is refused" $?
 if [ -n "${PYTHON:-}" ]; then
     "$PYTHON" e2e2.py > out/e2e.log 2>&1 && [ "$(grep -c 'difference to the normal C++ arm 0$' out/e2e.log)" = 8 ]
     leg "eight raised kernels build and run through hawk, exact against the normal arm" $?
+    grep "^digest " out/e2e.log > out/digests.txt; cmp -s expected/digests.txt out/digests.txt
+    leg "canonical digests of the nine raised kernels equal the reference" $?
     "$PYTHON" check3.py > out/wave_values.log 2>&1
     leg "the math kernel evaluates (see out/wave_values.log for the ulp figure)" $?
 fi
