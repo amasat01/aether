@@ -46,6 +46,7 @@
 
 #include "aether/macros.h"
 #include "aether/math/detail/BandedFwd.h"
+#include "aether/math/detail/TraceFwd.h"
 #include "aether/math/detail/HostVectorMathRoute.h"
 
 #include <concepts>
@@ -72,6 +73,18 @@
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
             "aether::math::" #NAME ": T must be float or double");                                                  \
         return STDEXPR;                                                                                              \
+    }                                                                                                                \
+    template<class T>                                                                                                \
+        requires aether::trace::IsTraced<T>                                                                          \
+    [[nodiscard]] T NAME(T x)                                                                                        \
+    {                                                                                                                \
+        return aetherTraceUnary(#NAME, x);                                                                           \
+    }                                                                                                                \
+    template<class T>                                                                                                \
+        requires aether::IsPlane<T>                                                                                  \
+    [[nodiscard]] auto NAME(T x)                                                                                     \
+    {                                                                                                                \
+        return NAME(static_cast<typename T::Scalar>(x));                                                             \
     }
 #endif
 
@@ -102,12 +115,25 @@
 #else
 #define AETHER_MATH_BINARY(NAME, FLOATFN, DOUBLEFN, STDEXPR)                                                         \
     template<class T>                                                                                                \
-        requires(!aether::banded::IsBandedDoor<T> && !std::is_integral_v<T>)                                         \
+        requires(!aether::banded::IsBandedDoor<T> && !std::is_integral_v<T> && !aether::trace::IsTraced<T> && !aether::IsPlane<T>) \
     AETHER_MATH_HOST_ABI AETHER_DEVICEHOST() AETHER_FORCEINLINE() T NAME(T a, T b)                                                        \
     {                                                                                                                \
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,                                        \
             "aether::math::" #NAME ": T must be float or double");                                                  \
         return STDEXPR;                                                                                              \
+    }                                                                                                                \
+    template<class T>                                                                                                \
+        requires aether::trace::IsTraced<T>                                                                          \
+    [[nodiscard]] T NAME(T a, T b)                                                                                   \
+    {                                                                                                                \
+        return aetherTraceBinary(#NAME, a, b);                                                                       \
+    }                                                                                                                \
+    template<class A, class B>                                                                                       \
+        requires aether::math::detail::Mixed<A, B>                                                                   \
+    [[nodiscard]] auto NAME(A a, B b)                                                                                \
+    {                                                                                                                \
+        using S = aether::math::detail::CommonScalar<A, B>;                                                          \
+        return NAME(static_cast<S>(a), static_cast<S>(b));                                                           \
     }
 #endif
 
