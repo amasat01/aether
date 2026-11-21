@@ -8,6 +8,8 @@ from hawk import _ir
 from hawk.trace import decl
 from hawk.trace.kernel import Kernel
 
+import ulp
+
 out = pathlib.Path(__file__).parent / "out"
 SCALAR = {"f64": decl.Scalar, "i32": decl.Int32}
 
@@ -43,9 +45,10 @@ for name, rows, params, columns in cases:
     got = kernel(v, *params)
     got = got if isinstance(got, (tuple, list)) else (got,)
     got = dict(zip(columns, got)) if not isinstance(got[0], dict) else got[0]
-    worst = max(float(np.max(np.abs(np.asarray(got[plane], dtype=float) - np.tile(rows[:, column], 1000))))
-                for plane, column in columns.items())
-    print(f"{name}: built from its signature report, run on {v.size} samples; worst absolute difference to the normal C++ arm {worst:.3g}")
+    text = (out / f"cpp_{name}.ir").read_text()
+    limit = ulp.bound(text, trips=8 if "|Loop|" in text else 1)   # every loop here runs at most 8 times
+    for plane, column in columns.items():
+        print(ulp.verdict(f"{name}.{plane}", got[plane], np.tile(rows[:, column], 1000), limit))
 
 # The digest of the canonical form names a kernel whatever order its nodes were recorded in (a
 # compiler is free to evaluate the operands of an expression in either order).

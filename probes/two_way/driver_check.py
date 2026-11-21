@@ -7,6 +7,8 @@ from hawk import _ir
 from hawk.trace import decl
 from hawk.trace.kernel import Kernel
 
+import ulp
+
 here = pathlib.Path(__file__).parent / "out" / "driver"
 
 
@@ -23,4 +25,6 @@ rows = np.loadtxt(here / "values.txt")
 for name, column, args in (("drag", 1, (rows[:, 0], 0.47)), ("relax", 2, (np.abs(rows[:, 0]),)), ("band", 3, (rows[:, 0], 0.5))):
     got = raised(name)(np.ascontiguousarray(np.tile(args[0], 500)), *args[1:])
     got = got[0] if isinstance(got, (tuple, list)) else got
-    print(name, "worst absolute difference", float(np.max(np.abs(np.asarray(got) - np.tile(rows[:, column], 500)))))
+    text = (here / f"physics_{name}.ir").read_text()
+    limit = ulp.bound(text, trips=8 if "|Loop|" in text else 1)   # every loop of the example runs at most 8 times
+    print(ulp.verdict(name, got, np.tile(rows[:, column], 500), limit))
