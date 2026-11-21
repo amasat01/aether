@@ -537,3 +537,27 @@ fn an_early_return_of_a_value_in_a_function_returning_a_reference_is_left_and_re
     let by_value = analyse("T f(T o) { if (c) { return o; } return o; }");
     assert_eq!(by_value.rewritten_count("early-return"), 1);
 }
+
+#[test]
+fn signatures_give_qualified_names_and_parameter_names() {
+    let src = "namespace a::b {\ninline void k(PerSample<Real> v, Uniform<std::array<int, 3>> w = 0, Mutable<Real>) { x = 1; }\nstruct S { int m(int p) const { return p; } };\n}\nAETHER_DEVICEHOST() inline Real g(Real q) noexcept { return q; }\nvoid ns::h(int z) { }";
+    let sigs = reader::signatures(src);
+    let got: Vec<(&str, Vec<&str>)> = sigs
+        .iter()
+        .map(|s| {
+            (
+                s.name.as_str(),
+                s.params.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("a::b::k", vec!["v", "w", ""]),
+            ("a::b::S::m", vec!["p"]),
+            ("g", vec!["q"]),
+            ("ns::h", vec!["z"]),
+        ]
+    );
+}

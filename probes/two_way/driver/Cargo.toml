@@ -1,0 +1,11 @@
+[package]
+name = "raise"
+version = "0.1.0"
+edition = "2021"
+description = "Raise driver: rewrites a project's kernel sources, builds them against the trace arm and writes the IR (prototype)"
+
+[dependencies]
+reader = { path = "../reader" }
+
+[lints.rust]
+missing_docs = "warn"

@@ -435,12 +435,29 @@ pub struct Function {
     pub body: Stmt,
     /// The declared return type has a `&` or `&&`: a callable that returns by value would copy.
     pub returns_reference: bool,
+    /// The name with its enclosing namespaces and classes (`ns::name`); empty for a lambda.
+    pub name: String,
+    /// The parameter names in order; an unnamed parameter gives "".
+    pub params: Vec<String>,
 }
+
+/// Words that may precede a parenthesis without being a function name.
+const NOT_NAMES: [&str; 5] = [
+    "noexcept",
+    "alignas",
+    "requires",
+    "decltype",
+    "__attribute__",
+];
 
 /// Reads the function bodies of a source. Bodies that cannot be read are returned as errors.
 #[must_use]
 pub fn read_functions(src: &Source) -> (Vec<Function>, Vec<ParseError>) {
-    let mut parser = Parser { s: src, k: 0 };
+    let mut parser = Parser {
+        s: src,
+        k: 0,
+        scopes: Vec::new(),
+    };
     let mut funcs = Vec::new();
     let mut errors = Vec::new();
     parser.scan_scope(&mut funcs, &mut errors, false);
@@ -450,11 +467,14 @@ pub fn read_functions(src: &Source) -> (Vec<Function>, Vec<ParseError>) {
 struct Parser<'s, 'a> {
     s: &'s Source<'a>,
     k: usize,
+    /// Names of the namespaces and classes around the cursor.
+    scopes: Vec<String>,
 }
 
 #[derive(PartialEq)]
 enum Brace {
-    Scope,
+    /// A namespace or class body, with its name (empty when it has none).
+    Scope(String),
     Function,
     Opaque,
 }
@@ -553,16 +573,21 @@ impl Parser<'_, '_> {
     fn scan_brace(&mut self, head: usize, funcs: &mut Vec<Function>, errors: &mut Vec<ParseError>) {
         let open = self.k;
         match self.classify_brace(head, open) {
-            Brace::Scope => {
+            Brace::Scope(name) => {
                 self.k += 1;
+                self.scopes.push(name);
                 self.scan_scope(funcs, errors, true);
+                self.scopes.pop();
             }
             Brace::Function => match self.parse_block() {
                 Ok(body) => {
                     let returns_reference = self.head_returns_reference(head, open);
+                    let (name, params) = self.signature(head, open);
                     funcs.push(Function {
                         body,
                         returns_reference,
+                        name,
+                        params,
                     });
                 }
                 Err(e) => {
@@ -587,6 +612,96 @@ impl Parser<'_, '_> {
         (head..params).any(is_ref) || arrow.is_some_and(|a| (a..open).any(is_ref))
     }
 
+    /// The name a namespace or class declaration gives: `a::b` for `namespace a::b {`.
+    fn scope_name(&self, keyword: usize, open: usize) -> String {
+        let stop = |w: &str| matches!(w, ":" | "final" | "<" | "[" | "{");
+        let words: Vec<&str> = (keyword + 1..open)
+            .map(|j| self.s.word(j))
+            .take_while(|w| !stop(w))
+            .collect();
+        let is_namespace = self.s.word(keyword) == "namespace";
+        match (is_namespace, words.first()) {
+            (true, _) => words.concat(),
+            (false, Some(w)) if is_name(w) => (*w).to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// The qualified name and the parameter names of the function declared by `[head, open)`:
+    /// the last parenthesis at depth zero that follows a name (not a macro's, not `noexcept`).
+    fn signature(&self, head: usize, open: usize) -> (String, Vec<String>) {
+        let mut first = head;
+        while self.s.word(first) == "template" && self.s.word(first + 1) == "<" {
+            first = self.skip_angles(first + 1);
+        }
+        let mut group = None;
+        let mut j = first;
+        while j < open {
+            let w = self.s.word(j);
+            if matches!(w, "->" | ":") {
+                break;
+            }
+            if matches!(w, "(" | "[") {
+                let Some(close) = self.matching(j) else { break };
+                let named = j > first && is_name(self.s.word(j - 1));
+                if w == "(" && named && !NOT_NAMES.contains(&self.s.word(j - 1)) {
+                    group = Some((j, close));
+                }
+                j = close + 1;
+            } else {
+                j += 1;
+            }
+        }
+        let Some((paren, close)) = group else {
+            return (String::new(), Vec::new());
+        };
+        let mut at = paren - 1;
+        let mut parts = vec![self.s.word(at)];
+        while at >= first + 2 && self.s.word(at - 1) == "::" && is_name(self.s.word(at - 2)) {
+            at -= 2;
+            parts.insert(0, self.s.word(at));
+        }
+        let mut qualified: Vec<&str> = self.scopes.iter().map(String::as_str).collect();
+        qualified.retain(|n| !n.is_empty());
+        qualified.extend(parts);
+        (qualified.join("::"), self.parameter_names(paren + 1, close))
+    }
+
+    /// The name of each parameter in `[from, to)`: the last word before a default value.
+    fn parameter_names(&self, from: usize, to: usize) -> Vec<String> {
+        let mut params = Vec::new();
+        let (mut depth, mut angles, mut begin) = (0usize, 0usize, from);
+        for j in from..=to {
+            let at_end = j == to;
+            match self.s.word(j) {
+                "(" | "[" | "{" if !at_end => depth += 1,
+                ")" | "]" | "}" if !at_end => depth = depth.saturating_sub(1),
+                "<" if !at_end => angles += 1,
+                ">" if !at_end => angles = angles.saturating_sub(1),
+                ">>" if !at_end => angles = angles.saturating_sub(2),
+                "," if depth == 0 && angles == 0 && !at_end => {
+                    params.push(self.parameter_name(begin, j));
+                    begin = j + 1;
+                }
+                _ => {}
+            }
+            if at_end && begin < to {
+                params.push(self.parameter_name(begin, to));
+            }
+        }
+        params
+    }
+
+    fn parameter_name(&self, from: usize, to: usize) -> String {
+        let end = (from..to).find(|&j| self.s.word(j) == "=").unwrap_or(to);
+        let named = end >= from + 2 && is_name(self.s.word(end - 1));
+        if named {
+            self.s.word(end - 1).to_string()
+        } else {
+            String::new()
+        }
+    }
+
     /// What the declaration `[head, open)` that ends in a `{` opens.
     fn classify_brace(&self, head: usize, open: usize) -> Brace {
         let mut i = head;
@@ -599,10 +714,12 @@ impl Parser<'_, '_> {
             match self.s.word(i) {
                 "(" | "[" => depth += 1,
                 ")" | "]" => depth = depth.saturating_sub(1),
-                "namespace" | "class" | "struct" | "union" if depth == 0 => return Brace::Scope,
+                "namespace" | "class" | "struct" | "union" if depth == 0 => {
+                    return Brace::Scope(self.scope_name(i, open));
+                }
                 "enum" if depth == 0 => return Brace::Opaque,
                 "extern" if i + 2 == open && self.s.kind(i + 1) == Some(TokKind::Str) => {
-                    return Brace::Scope
+                    return Brace::Scope(String::new())
                 }
                 _ => {}
             }
