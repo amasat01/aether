@@ -230,6 +230,7 @@ gate-cpp: gate-need-cxx
 	for dbg in $(gate_debug); do
 	  $(gate_sub) builddir=$(GATE_DIR)/cpp-$$dbg cpp=ON debug=$$dbg build test
 	done
+	AETHER_FACTS_DIR=$(facts_dir) tests/compile_fail/check_bandedreal_typing_rejected.sh
 
 # The same suite under ASan and UBSan, with the non-vacuity checks
 gate-sanitize: gate-need-cxx

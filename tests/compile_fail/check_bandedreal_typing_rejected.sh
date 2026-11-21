@@ -16,6 +16,10 @@
 # can be right while some other conversion sequence still reaches the value.
 #
 # g++ only, CPP_MODE (`AETHER_CPP_MODE`), no CUDA toolchain, no GPU involved.
+# Needs the raptor wing's generated header: `AETHER_FACTS_DIR` names the
+# directory holding `raptor_facts.h`, which every arm pre-includes as the
+# library build does. Without it an arm that includes `aether.h` stops on the
+# missing-facts `#error`, and a rejection for that reason proves nothing.
 #
 # ## Arms — every one mandatory, and RC alone is NEVER the verdict
 #
@@ -59,10 +63,13 @@
 #                             rather than falling through to the scaffold's "T
 #                             must be float or double", which would say nothing
 #                             true about why.
-#   ARM MATH-UNSUPPORTED      `aether::math::tan(band)` MUST fail. Everything outside
-#                             the five certified entry points is a hard error on a
-#                             banded operand — the honest answer while the
-#                             transcendental family remains unported.
+#   ARM MATH-UNSUPPORTED      `aether::math::erf(band)` MUST fail; stderr MUST name
+#                             `aether::math::erf: T must be float or double` (the
+#                             scalar scaffold's assertion). A function with no
+#                             banded overload is a hard error on a banded
+#                             operand, by name. `erf` is in the scalar list only
+#                             (`special.h`); re-subject this arm when it gains a
+#                             banded overload.
 #   ARM DTYPE-BAND            `aether::dtype_of<Band>()` MUST fail; stderr MUST
 #                             name `BandedReal`. `Band` is a register carrier
 #                             with no memory form, so the diagnostic points at
@@ -93,7 +100,7 @@
 #                             compile. Without it every rejection above is also
 #                             satisfied by a type that does nothing at all.
 #
-# Usage: `tests/compile_fail/check_bandedreal_typing_rejected.sh [<aether repo root>]`
+# Usage: `AETHER_FACTS_DIR=<dir> tests/compile_fail/check_bandedreal_typing_rejected.sh [<aether repo root>]`
 # Exit code IS the verdict.
 
 set -uo pipefail
@@ -104,6 +111,7 @@ if [[ -z "${REPO_ROOT}" ]]; then
 fi
 
 CXX="${CXX:-g++}"
+FACTS_DIR="${AETHER_FACTS_DIR:-}"
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -130,6 +138,12 @@ for f in "${AETHER_H}" "${BAND_H}"; do
     fi
 done
 
+if [[ ! -f "${FACTS_DIR}/raptor_facts.h" ]]; then
+    echo "WARNING [fatal]: set AETHER_FACTS_DIR to the directory holding the raptor" \
+         "wing's raptor_facts.h (got '${FACTS_DIR}')" >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # arm <TAG> <fail|compile> <required-stderr-substring-or-'-'> <source file>
 # ---------------------------------------------------------------------------
@@ -141,7 +155,10 @@ arm() {
 
     sed -e "s|@AETHER_H@|${AETHER_H}|" -e "s|@BAND_H@|${BAND_H}|" "${src}" > "${gen}"
 
-    "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" -c "${gen}" \
+    # LC_ALL=C: the patterns below are the compiler's untranslated wording, and a
+    # UTF-8 locale makes gcc quote with typographic marks they do not contain.
+    LC_ALL=C "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" \
+        -I"${FACTS_DIR}" -include raptor_facts.h -c "${gen}" \
         -o "${WORK}/${tag}.o" > "${log}" 2>&1 || rc=$?
 
     if [[ "${expect}" == "fail" ]]; then
@@ -271,11 +288,11 @@ cat > "${WORK}/MATH-UNSUPPORTED.cpp" <<'EOF'
 int main()
 {
     const aether::banded::Band b = aether::banded::BandedReal::fromDouble(2.0);
-    const auto bad = aether::math::tan(b);  /* MUST NOT COMPILE — `tan` is NOT certified on the Band family; re-subject this arm when it lands. */
+    const auto bad = aether::math::erf(b);  /* MUST NOT COMPILE — `erf` has no banded overload; re-subject this arm when it gains one. */
     return static_cast<int>(bad.hi);
 }
 EOF
-arm MATH-UNSUPPORTED fail "-" "${WORK}/MATH-UNSUPPORTED.cpp"
+arm MATH-UNSUPPORTED fail "aether::math::erf: T must be float or double" "${WORK}/MATH-UNSUPPORTED.cpp"
 
 # ---- ARM DTYPE-BAND -------------------------------------------------------
 cat > "${WORK}/DTYPE-BAND.cpp" <<'EOF'
