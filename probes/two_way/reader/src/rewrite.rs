@@ -16,6 +16,40 @@ pub struct Report {
     pub line: usize,
     /// The construct, such as `while`, `switch`, `ternary` or `return-in-branch`.
     pub kind: &'static str,
+    /// The function the construct is in; empty when the body could not be read.
+    pub function: String,
+    /// First and last line of the code that is left as written, where a compiler may then
+    /// complain: the statement, or for a `return` the `if` around it.
+    pub span: (usize, usize),
+}
+
+impl Report {
+    /// What the author can do about the construct.
+    #[must_use]
+    pub fn way_out(&self) -> &'static str {
+        match self.kind {
+            "ternary" => {
+                "a `?:` whose operands cannot be delimited is left; write it as an if that assigns in each branch"
+            }
+            "ternary-as-lvalue" => {
+                "a `?:` that is assigned to, addressed or bound to a reference is left; write it as an if that assigns in each branch"
+            }
+            "return-in-branch" => {
+                "a `return` that cannot move into the branch callables (not at the top level of the function body, no value on every path, or a function that returns a reference) is left; assign to a local in the branches and return it once at the end"
+            }
+            "return-in-loop" => {
+                "a `return` inside a loop is left; assign to a local, leave through the loop's own exit and return after the loop"
+            }
+            "cut-by-preprocessor" => {
+                "a statement cut by a preprocessor conditional is left; keep each `#if` branch around whole statements"
+            }
+            "while" => "a `while` without `aether::bounded(condition, bound)` is left; state its bound",
+            "switch" | "switch-return-and-break" => {
+                "a switch the reader cannot write is left; end every case in `break`, or every case in `return` of a value, with `default` last"
+            }
+            _ => "the statement is left as written; rewrite it in a form the reader knows",
+        }
+    }
 }
 
 /// The result of reading one file.
@@ -54,6 +88,9 @@ pub fn analyse(text: &str) -> Analysis {
         statements: BTreeMap::new(),
         reports: errors.iter().map(parse_report).collect(),
         consumed: HashSet::new(),
+        function: String::new(),
+        current: (0, 0),
+        if_spans: Vec::new(),
     };
     let mut exits = HashSet::new();
     for f in &funcs {
@@ -61,6 +98,7 @@ pub fn analyse(text: &str) -> Analysis {
         census.mark_returns(f);
     }
     for f in &funcs {
+        census.function.clone_from(&f.name);
         census.visit(&f.body, &mut Vec::new(), &exits);
     }
     census.reports.sort_by_key(|r| r.line);
@@ -83,6 +121,8 @@ fn parse_report(e: &ParseError) -> Report {
     Report {
         line: e.line,
         kind: e.message,
+        function: String::new(),
+        span: (e.line, e.line),
     }
 }
 
@@ -308,6 +348,152 @@ fn case_group<'a>(value: Option<(usize, usize)>, body: &[&'a Stmt]) -> Option<Gr
     })
 }
 
+// ---- switch whose cases return ---------------------------------------------------------------
+
+/// What a `case` or `default` label says.
+enum CaseLabel {
+    /// `case value:` with the byte range of the value.
+    Value((usize, usize)),
+    /// `default:`.
+    Default,
+}
+
+/// The `case` or `default` a label statement is; `None` for any other label.
+fn label_value(src: &Source, label: &Stmt) -> Option<CaseLabel> {
+    let words = src.words_in(label.start, label.end);
+    match (&label.kind, words.first().copied()) {
+        (Kind::Label, Some("case")) => Some(CaseLabel::Value((label.start + 4, label.end - 1))),
+        (Kind::Label, Some("default")) if words.len() == 2 => Some(CaseLabel::Default),
+        _ => None,
+    }
+}
+
+/// A run of labels and the statements under them, up to the next label.
+struct LabelRun<'a> {
+    labels: Vec<&'a Stmt>,
+    body: Vec<&'a Stmt>,
+}
+
+/// The labelled runs of a switch body, or `None` when it holds anything before its first label.
+fn label_runs<'a>(src: &Source, c: &'a Ctl) -> Option<Vec<LabelRun<'a>>> {
+    let Kind::Block(items) = &c.body.kind else {
+        return None;
+    };
+    let mut runs: Vec<LabelRun> = Vec::new();
+    for item in items {
+        let is_label = label_value(src, item).is_some();
+        match (is_label, runs.last_mut()) {
+            (true, Some(run)) if run.body.is_empty() => run.labels.push(item),
+            (true, _) => runs.push(LabelRun {
+                labels: vec![item],
+                body: Vec::new(),
+            }),
+            (false, Some(run)) => run.body.push(item),
+            (false, None) => return None,
+        }
+    }
+    Some(runs)
+}
+
+/// The statements of a run's body, looking through a single braced block.
+fn run_statements<'a>(run: &LabelRun<'a>) -> Vec<&'a Stmt> {
+    match run.body.as_slice() {
+        [only] => match &only.kind {
+            Kind::Block(v) => v.iter().collect(),
+            _ => run.body.clone(),
+        },
+        _ => run.body.clone(),
+    }
+}
+
+/// One case of a switch whose cases all end in `return` of a value.
+struct ReturnCase<'a> {
+    /// Byte ranges of the case values; empty for `default`.
+    values: Vec<(usize, usize)>,
+    default: bool,
+    /// The statements of the case, its `return` last.
+    stmts: Vec<&'a Stmt>,
+    /// The block that holds the whole case, when it is braced.
+    block: Option<&'a Stmt>,
+}
+
+/// Reads a switch in which every case, including a fall-through group of labels, ends in
+/// `return` of a value and holds nothing else that escapes; `default` may be missing but not
+/// come before another case.
+fn return_cases<'a>(src: &Source, c: &'a Ctl) -> Option<Vec<ReturnCase<'a>>> {
+    if c.cut || src.has_conditional(c.body.start, c.body.end) {
+        return None;
+    }
+    let runs = label_runs(src, c)?;
+    let mut cases = Vec::new();
+    for (n, run) in runs.iter().enumerate() {
+        let stmts = run_statements(run);
+        let (last, before) = stmts.split_last()?;
+        let returns = matches!(last.kind, Kind::Return(_)) && returns_value(src, last);
+        if !returns || before.iter().any(|s| escapes(s, false, false)) {
+            return None;
+        }
+        let kinds: Vec<_> = run
+            .labels
+            .iter()
+            .filter_map(|l| label_value(src, l))
+            .collect();
+        let default = kinds.iter().any(|k| matches!(k, CaseLabel::Default));
+        if default && n + 1 != runs.len() {
+            return None;
+        }
+        let block = match run.body.as_slice() {
+            [only] if matches!(only.kind, Kind::Block(_)) => Some(*only),
+            _ => None,
+        };
+        let values = kinds
+            .into_iter()
+            .filter_map(|k| match k {
+                CaseLabel::Value(range) => Some(range),
+                CaseLabel::Default => None,
+            })
+            .collect();
+        cases.push(ReturnCase {
+            values,
+            default,
+            stmts,
+            block,
+        });
+    }
+    (!cases.is_empty()).then_some(cases)
+}
+
+/// True when a switch has cases that end in `return` of a value and cases that end in `break`: both ways
+/// out of one switch need the statements after it in each callable, which is not written.
+fn mixes_return_and_break(src: &Source, c: &Ctl) -> bool {
+    let Some(runs) = label_runs(src, c) else {
+        return false;
+    };
+    let ends: Vec<_> = runs
+        .iter()
+        .filter_map(|r| {
+            run_statements(r)
+                .last()
+                .map(|s| matches!(s.kind, Kind::Return(_)) && returns_value(src, s))
+        })
+        .collect();
+    ends.contains(&true) && ends.contains(&false)
+}
+
+/// The cases of a function-level switch that can be written as a chain of choices: its cases
+/// return values, the function does not return a reference, and either `default` ends the chain
+/// or the statements `rest` after the switch reach a returned value.
+fn return_switch<'a>(
+    src: &Source,
+    c: &'a Ctl,
+    rest: &[&Stmt],
+    by_reference: bool,
+) -> Option<Vec<ReturnCase<'a>>> {
+    let cases = return_cases(src, c).filter(|_| !by_reference)?;
+    let ends_in_default = cases.iter().any(|k| k.default);
+    (ends_in_default || tail_ok(src, rest, true)).then_some(cases)
+}
+
 // ---- the census ----------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
@@ -325,11 +511,27 @@ struct Census<'s, 'a> {
     reports: Vec<Report>,
     /// Starts of the `return`s that the early-return rewrite takes in.
     consumed: HashSet<usize>,
+    /// The function being visited.
+    function: String,
+    /// First and last line of the statement being visited.
+    current: (usize, usize),
+    /// First and last line of each `if` around the statement being visited.
+    if_spans: Vec<(usize, usize)>,
 }
 
 impl Census<'_, '_> {
     fn report(&mut self, line: usize, kind: &'static str) {
-        self.reports.push(Report { line, kind });
+        self.report_span(line, self.current, kind);
+    }
+
+    fn report_span(&mut self, line: usize, span: (usize, usize), kind: &'static str) {
+        let function = self.function.clone();
+        self.reports.push(Report {
+            line,
+            kind,
+            function,
+            span,
+        });
     }
 
     /// Notes the `return` that ends each early-return chain of a function body.
@@ -339,6 +541,12 @@ impl Census<'_, '_> {
         };
         let stmts: Vec<&Stmt> = v.iter().collect();
         for j in 0..stmts.len() {
+            if let Kind::Switch(c) = &stmts[j].kind {
+                let rest = &stmts[j + 1..];
+                if return_switch(self.src, c, rest, function.returns_reference).is_some() {
+                    self.consumed.insert(stmts[j].start);
+                }
+            }
             if early_return(self.src, &stmts, j, function.returns_reference).is_some() {
                 if let Kind::If(i) = &stmts[j].kind {
                     let last = match &i.then_.kind {
@@ -354,6 +562,7 @@ impl Census<'_, '_> {
     fn visit(&mut self, s: &Stmt, anc: &mut Vec<Ancestor>, exits: &HashSet<usize>) {
         *self.statements.entry(kind_name(s)).or_insert(0) += 1;
         let line = s.line;
+        self.current = (line, self.src.line(s.end.saturating_sub(1)));
         match &s.kind {
             Kind::Block(v) | Kind::Try(v) => {
                 if matches!(s.kind, Kind::Try(_)) {
@@ -386,8 +595,16 @@ impl Census<'_, '_> {
                 self.visit_ctl(c, line, Ancestor::Breakable, anc, exits);
             }
             Kind::Switch(c) => {
-                if switch_plan(self.src, c).is_none() {
-                    self.report(line, "switch");
+                if !self.consumed.contains(&s.start) && switch_plan(self.src, c).is_none() {
+                    let mixed = mixes_return_and_break(self.src, c);
+                    self.report(
+                        line,
+                        if mixed {
+                            "switch-return-and-break"
+                        } else {
+                            "switch"
+                        },
+                    );
                 }
                 self.visit_ctl(c, line, Ancestor::Breakable, anc, exits);
             }
@@ -397,7 +614,8 @@ impl Census<'_, '_> {
             Kind::Return(e) => {
                 if self.consumed.contains(&s.start) {
                 } else if anc.contains(&Ancestor::If) {
-                    self.report(line, "return-in-branch");
+                    let span = self.if_spans.first().copied().unwrap_or(self.current);
+                    self.report_span(line, span, "return-in-branch");
                 } else if anc.iter().any(|a| matches!(a, Ancestor::For(_))) {
                     self.report(line, "return-in-loop");
                 }
@@ -414,7 +632,15 @@ impl Census<'_, '_> {
         for t in &e.ternaries {
             *self.statements.entry("ternary").or_insert(0) += 1;
             if !(rewritable && self.src.ternary_extent(t).is_some()) {
-                self.report(t.line, "ternary");
+                let lvalue = rewritable && self.src.ternary_is_lvalue(t);
+                self.report(
+                    t.line,
+                    if lvalue {
+                        "ternary-as-lvalue"
+                    } else {
+                        "ternary"
+                    },
+                );
             }
         }
         for l in &e.lambdas {
@@ -443,11 +669,13 @@ impl Census<'_, '_> {
         }
         self.visit_expr(&i.head, exits, false);
         anc.push(Ancestor::If);
+        self.if_spans.push(self.current);
         self.visit(&i.then_, anc, exits);
         if let Some(e) = &i.else_ {
             self.visit(e, anc, exits);
         }
         anc.pop();
+        self.if_spans.pop();
     }
 
     fn visit_ctl(
@@ -571,6 +799,22 @@ impl Renderer<'_, '_> {
                     pos = kids[kids.len() - 1].end;
                     break;
                 }
+                if let Kind::Switch(c) = &k.kind {
+                    if let Some(cases) = return_switch(self.src, c, &kids[j + 1..], by_reference) {
+                        let (text, consumed_rest) =
+                            self.render_return_switch(c, &cases, &kids[j + 1..], level);
+                        out.push_str(&text);
+                        pos = if consumed_rest {
+                            kids[kids.len() - 1].end
+                        } else {
+                            k.end
+                        };
+                        if consumed_rest {
+                            break;
+                        }
+                        continue;
+                    }
+                }
             }
             out.push_str(&if level == Level::Loop && exit_break(k).is_some() {
                 self.render_exit(k)
@@ -583,7 +827,23 @@ impl Renderer<'_, '_> {
         out
     }
 
+    /// The rendering of one statement. Inside an open parenthesis or initialiser no directive can
+    /// restore the line numbers, so a rewrite that lost lines gets them back as blank lines.
     fn render(&mut self, s: &Stmt) -> String {
+        let text = self.render_kind(s);
+        self.keep_line_count(s.start, s.end, text)
+    }
+
+    fn keep_line_count(&self, start: usize, end: usize, mut text: String) -> String {
+        if self.src.open_at(start) > 0 {
+            let wanted = self.src.text[start..end].matches('\n').count();
+            let lost = wanted.saturating_sub(text.matches('\n').count());
+            text.push_str(&"\n".repeat(lost));
+        }
+        text
+    }
+
+    fn render_kind(&mut self, s: &Stmt) -> String {
         match &s.kind {
             Kind::If(i) if if_convertible(i) => self.render_if(i),
             Kind::For(f) if loop_convertible(f) => self.render_for(f),
@@ -786,6 +1046,77 @@ impl Renderer<'_, '_> {
         format!("aether::trace::detail::branch({key} == {value}, [&] {then_}, [&] {else_});")
     }
 
+    /// A switch whose cases return values as `return choose(K == a, {case a}, {return choose(...)})`.
+    /// A fall-through group of labels repeats its body for each value. The last callable holds
+    /// `default`, or else the statements after the switch (which then move into it); the flag
+    /// says whether those were taken in.
+    fn render_return_switch(
+        &mut self,
+        c: &Ctl,
+        cases: &[ReturnCase],
+        rest: &[&Stmt],
+        level: Level,
+    ) -> (String, bool) {
+        self.count("switch");
+        let text = self.src.text;
+        let key = self.operand(text[c.cond.0..c.cond.1].trim(), c.cond);
+        let mut tests: Vec<(String, String)> = Vec::new();
+        let mut last = None;
+        for case in cases {
+            if case.default {
+                last = Some(self.return_case_statements(case));
+                continue;
+            }
+            let body = self.return_case_body(case);
+            for &value in &case.values {
+                let operand = self.operand(text[value.0..value.1].trim(), value);
+                tests.push((format!("{key} == {operand}"), body.clone()));
+            }
+        }
+        let (mut statements, consumed_rest) = if let Some(statements) = last {
+            (statements, false)
+        } else {
+            let (first, end) = (rest[0].start, rest[rest.len() - 1].end);
+            (self.span(first, end, rest, level), true)
+        };
+        for (test, body) in tests.iter().rev() {
+            statements = format!(
+                "return aether::trace::detail::choose({test}, [&] {body}, [&] {{ {statements} }});"
+            );
+        }
+        (statements, consumed_rest)
+    }
+
+    /// The statements of one case without the braces around them.
+    fn return_case_statements(&mut self, case: &ReturnCase) -> String {
+        if let Some(block) = case.block {
+            let text = self.render(block);
+            return text[1..text.len() - 1].trim().to_string();
+        }
+        match (case.stmts.first(), case.stmts.last()) {
+            (Some(first), Some(last)) => {
+                self.span(first.start, last.end, &case.stmts, Level::Plain)
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// The braced text of one case: its block as written, or its statements put in braces.
+    fn return_case_body(&mut self, case: &ReturnCase) -> String {
+        if let Some(block) = case.block {
+            return self.render(block);
+        }
+        match (case.stmts.first(), case.stmts.last()) {
+            (Some(first), Some(last)) => {
+                format!(
+                    "{{ {} }}",
+                    self.span(first.start, last.end, &case.stmts, Level::Plain)
+                )
+            }
+            _ => "{}".to_string(),
+        }
+    }
+
     /// The text of `[from, to)` with each `C ? A : B` whose operands are certain written as a
     /// choice; operands are rewritten in turn.
     fn render_ternaries(
@@ -819,6 +1150,7 @@ impl Renderer<'_, '_> {
                 a.trim(),
                 b.trim()
             );
+            let choice = self.keep_line_count(span.0, span.1, choice);
             out.push_str(&choice);
             self.count("ternary");
             pos = span.1;

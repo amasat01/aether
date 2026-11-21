@@ -57,10 +57,10 @@ example=driver/example
 mkdir -p out/driver
 link=""; for word in ${LDLIBS:-}; do link="$link --link $word"; done
 driver/target/release/raise --entry $example/physics/kernels.cpp --kernel physics::drag --kernel physics::relax \
-    --kernel physics::band --root $example/physics --root $example/numerics -I $example/physics/include \
+    --kernel physics::band --kernel physics::gear --root $example/physics --root $example/numerics -I $example/physics/include \
     -I $example/numerics/include --cxx "$CXX" --trace-include include --ir "$RAPTOR_IR" --out out/driver $link \
-    > out/driver.log 2>&1 && [ "$(ls out/driver/*.ir | wc -l | tr -d ' ')" = 3 ] && [ ! -s out/driver/left.txt ]
-leg "raise driver raises the three kernels of a project with two roots, nothing left" $?
+    > out/driver.log 2>&1 && [ "$(ls out/driver/*.ir | wc -l | tr -d ' ')" = 4 ] && [ ! -s out/driver/left.txt ]
+leg "raise driver raises the four kernels of a project with two roots, nothing left" $?
 
 driver/target/release/raise --entry $example/negative/bad.h --kernel bad::unbounded --root $example/negative \
     --cxx "$CXX" --trace-include include --ir "$RAPTOR_IR" --out out/driver $link > out/driver_negative.log 2>&1
@@ -83,8 +83,8 @@ if [ -n "${PYTHON:-}" ]; then
     leg "the raised integer kernel builds and runs through hawk, equal to the normal arm" $?
     $CXX $flags -I$example/physics/include -I$example/numerics/include -Iinclude driver_values.cpp -o out/driver_values \
         && ./out/driver_values > out/driver/values.txt && "$PYTHON" driver_check.py > out/driver_values.log 2>&1 \
-        && [ "$(grep -c 'within the bound$' out/driver_values.log)" = 3 ]
-    leg "the three kernels the driver raised run through hawk, within their ulp bound of the normal arm" $?
+        && [ "$(grep -c 'within the bound$' out/driver_values.log)" = 4 ]
+    leg "the four kernels the driver raised run through hawk, within their ulp bound of the normal arm" $?
     "$PYTHON" wave_unit.py > out/wave_values.log 2>&1 && grep -q "within the bound$" out/wave_values.log
     leg "the math kernel as a built unit is within its ulp bound of the normal arm" $?
 fi

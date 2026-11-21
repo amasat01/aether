@@ -682,3 +682,145 @@ fn nested_template_arguments_keep_the_outer_role() {
     );
     assert_eq!(got[1].1, Some("mutable"));
 }
+
+#[test]
+fn a_switch_whose_cases_return_values_becomes_a_chain_of_choices() {
+    let a = analyse("Real f(int k, Real v) {\n switch (k) {\n case 0: { return v * 2.0; }\n case 1: return v + 1.0;\n default: { return v; }\n }\n}");
+    assert!(flat(&a.output).contains(
+        "return aether::trace::detail::choose(k == 0, [&] { return v * 2.0; }, [&] { return aether::trace::detail::choose(k == 1, [&] { return v + 1.0; }, [&] { return v; }); });"
+    ), "{}", a.output);
+    assert_eq!(a.rewritten_count("switch"), 1);
+    assert_eq!(a.reports, []);
+}
+
+#[test]
+fn a_fall_through_group_of_labels_repeats_its_body_for_each_value() {
+    let a = analyse(
+        "Real f(int k, Real v) { switch (k) { case 1: case 2: return v; default: return 0.0; } }",
+    );
+    let out = flat(&a.output);
+    assert!(out.contains("choose(k == 1, [&] { return v; }, [&] { return aether::trace::detail::choose(k == 2, [&] { return v; }, [&] { return 0.0; }); })"), "{out}");
+}
+
+#[test]
+fn a_switch_without_default_takes_the_statements_after_it_into_the_last_callable() {
+    let a = analyse(
+        "Real f(int k, Real v) { switch (k) { case 0: return v; case 1: return -v; } return 0.0; }",
+    );
+    let out = flat(&a.output);
+    assert!(out.contains("choose(k == 0, [&] { return v; }, [&] { return aether::trace::detail::choose(k == 1, [&] { return -v; }, [&] { return 0.0; }); }); }"), "{out}");
+    assert_eq!(a.reports, []);
+}
+
+#[test]
+fn a_switch_without_default_and_without_a_final_return_is_left_and_reported() {
+    let a = analyse("Real f(int k, Real v) { switch (k) { case 0: return v; } x = 1; }");
+    assert_eq!(a.rewritten_count("switch"), 0);
+    assert_eq!(kinds(&a), ["switch"]);
+}
+
+#[test]
+fn a_switch_mixing_break_and_return_cases_is_left_and_reported_by_name() {
+    let a = analyse("Real f(int k, Real v) { switch (k) { case 0: return v; case 1: { x = 1; break; } default: return 0.0; } return 1.0; }");
+    assert_eq!(a.rewritten_count("switch"), 0);
+    assert_eq!(kinds(&a), ["switch-return-and-break"]);
+}
+
+#[test]
+fn a_switch_returning_a_value_in_a_function_returning_a_reference_is_left() {
+    let a = analyse("T& f(int k, T& v) { switch (k) { case 0: return v; default: return v; } }");
+    assert_eq!(a.rewritten_count("switch"), 0);
+    assert_eq!(kinds(&a), ["switch"]);
+}
+
+#[test]
+fn no_line_directive_lands_inside_a_multi_line_macro_call() {
+    let src = "void f() {\n  CHECK_ALL([&] {\n    if (c)\n    {\n      x = 1;\n    }\n    else\n    {\n      x = 2;\n    }\n    return x;\n  }(),\n  msg);\n  z = 3;\n}\n";
+    let a = analyse(src);
+    assert_eq!(a.rewritten_count("if"), 1);
+    let start = a.output.find("CHECK_ALL(").unwrap();
+    let end = a.output[start..].find("msg);").unwrap() + start;
+    assert!(!a.output[start..end].contains("#line"), "{}", a.output);
+    let lines = lines_after_directives(&a.output);
+    let line_of = |text: &str| lines.iter().find(|(_, l)| l.contains(text)).unwrap().0;
+    assert_eq!(line_of("return x;"), 11);
+    assert_eq!(line_of("msg);"), 13);
+    assert_eq!(line_of("z = 3;"), 14);
+}
+
+#[test]
+fn no_line_directive_lands_inside_a_multi_line_ternary_in_a_call() {
+    let src = "void f() {\n  ASSERT_LIKE(a ?\n      b :\n      c,\n      msg);\n  z = 3;\n}\n";
+    let a = analyse(src);
+    assert_eq!(a.rewritten_count("ternary"), 1);
+    let start = a.output.find("ASSERT_LIKE(").unwrap();
+    let end = a.output[start..].find("msg);").unwrap() + start;
+    assert!(!a.output[start..end].contains("#line"), "{}", a.output);
+    let lines = lines_after_directives(&a.output);
+    let line_of = |text: &str| lines.iter().find(|(_, l)| l.contains(text)).unwrap().0;
+    assert_eq!(line_of("msg);"), 5);
+    assert_eq!(line_of("z = 3;"), 6);
+}
+
+#[test]
+fn no_line_directive_lands_inside_a_multi_line_brace_initialiser() {
+    let src = "void f() {\n  if (c)\n  {\n    x = 1;\n  }\n  else\n  {\n    x = 2;\n  }\n  Pair p{1,\n         2};\n  z = 3;\n}\n";
+    let a = analyse(src);
+    let start = a.output.find("Pair p{").unwrap();
+    let end = a.output[start..].find("2};").unwrap() + start;
+    assert!(!a.output[start..end].contains("#line"), "{}", a.output);
+    let lines = lines_after_directives(&a.output);
+    let line_of = |text: &str| lines.iter().find(|(_, l)| l.contains(text)).unwrap().0;
+    assert_eq!(line_of("2};"), 11);
+}
+
+#[test]
+fn a_ternary_used_as_an_assignable_value_is_left_and_reported_by_name() {
+    for stmt in [
+        "(c ? a : b) = 1.0;",
+        "(c ? a : b) += 1;",
+        "(c ? a : b).m = 1;",
+        "(c ? a : b)[2] = 1;",
+        "p = &(c ? a : b);",
+        "++(c ? a : b);",
+        "auto& r = c ? a : b;",
+        "auto&& r = c ? a : b;",
+    ] {
+        let a = run(stmt);
+        assert_eq!(a.rewritten_count("ternary"), 0, "{stmt}");
+        assert_eq!(kinds(&a), ["ternary-as-lvalue"], "{stmt}");
+        assert!(a.output.contains(stmt), "{stmt}");
+    }
+}
+
+#[test]
+fn a_ternary_used_as_a_plain_value_is_not_an_lvalue_use() {
+    for stmt in [
+        "x = (c ? a : b) + 1;",
+        "f((c ? a : b), d);",
+        "auto r = c ? a : b;",
+        "y = c ? a : b = 2;",
+    ] {
+        assert_eq!(run(stmt).rewritten_count("ternary"), 1, "{stmt}");
+    }
+}
+
+#[test]
+fn a_report_carries_its_function_its_span_and_the_way_out() {
+    let a = analyse("namespace m {\nvoid k(int v) {\n  while (v > 0) {\n    v -= 1;\n  }\n}\n}\n");
+    let r = &a.reports[0];
+    assert_eq!(
+        (r.kind, r.function.as_str(), r.line, r.span),
+        ("while", "m::k", 3, (3, 5))
+    );
+    assert!(r.way_out().contains("aether::bounded"));
+}
+
+#[test]
+fn a_return_in_a_branch_spans_the_if_around_it() {
+    let a =
+        analyse("T& f(int c, T& a, T& b) {\n  if (c > 1) {\n    return a;\n  }\n  return b;\n}\n");
+    let r = &a.reports[0];
+    assert_eq!((r.kind, r.line, r.span), ("return-in-branch", 3, (2, 4)));
+    assert!(r.way_out().contains("returns a reference"));
+}

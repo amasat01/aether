@@ -9,9 +9,15 @@
 # system; the custom target <target>_raise runs `raise @<response file>` and produces
 # <OUT>/<kernel>.ir and <OUT>/<kernel>.planes, with `::` in a kernel name written as `_`.
 # The driver also writes <OUT>/<target>.raise.d, the files its closure holds under a root, and the
-# command names it as DEPFILE, so the raise reruns when any of them changes (the Makefile and
-# Ninja generators honour DEPFILE; others rebuild only when the response file or entry changes).
+# command names it as DEPFILE, so the raise reruns when any of them changes. CMake 3.21 or newer
+# is needed: it is the first version in which every generator that runs a custom command honours
+# DEPFILE (the Makefile, Ninja and Xcode generators were run; the Visual Studio generators are
+# covered by the same CMake feature and were not run).
 function(aether_raise)
+  if(CMAKE_VERSION VERSION_LESS 3.21)
+    message(FATAL_ERROR "aether_raise needs CMake 3.21 or newer (DEPFILE on every generator); "
+                        "this is CMake ${CMAKE_VERSION}")
+  endif()
   cmake_parse_arguments(AR "" "TARGET;ENTRY;OUT;RAISE;TRACE_INCLUDE;IR;STD"
                         "KERNELS;ROOTS;LINK" ${ARGN})
   foreach(required TARGET ENTRY OUT RAISE TRACE_INCLUDE IR KERNELS ROOTS)

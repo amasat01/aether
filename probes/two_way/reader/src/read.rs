@@ -15,6 +15,9 @@ pub struct Source<'a> {
     /// Byte starts of the conditional directives (`#if`, `#else`, `#endif`, ...).
     conditionals: Vec<usize>,
     line_starts: Vec<usize>,
+    /// For each significant token: how many parentheses, brackets and brace initialisers are
+    /// open after it. A statement block does not count.
+    open_after: Vec<usize>,
 }
 
 impl<'a> Source<'a> {
@@ -38,12 +41,14 @@ impl<'a> Source<'a> {
         let line_starts = std::iter::once(0)
             .chain(text.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
+        let open_after = open_depths(text, &tokens, &sig);
         Source {
             text,
             tokens,
             sig,
             conditionals,
             line_starts,
+            open_after,
         }
     }
 
@@ -98,6 +103,9 @@ impl<'a> Source<'a> {
         let colon = self.matching_colon(t)?;
         let start = self.operand_start(t);
         let end = self.operand_end(t, colon);
+        if self.is_lvalue_use(start, end) {
+            return None;
+        }
         let (from, to) = self.bytes_of(start, end);
         let certain = start < t.tok && t.tok + 1 < colon && colon + 1 < end;
         // Text between the operands is dropped, so a directive there cannot be kept.
@@ -106,6 +114,36 @@ impl<'a> Source<'a> {
             then_: (t.tok + 1, colon),
             else_: (colon + 1, end),
         })
+    }
+
+    /// True when the extent of `t` is certain but its value is used as an lvalue (see
+    /// `is_lvalue_use`), so a choice that returns a copy would change what the code means.
+    #[must_use]
+    pub fn ternary_is_lvalue(&self, t: &Ternary) -> bool {
+        let Some(colon) = self.matching_colon(t) else {
+            return false;
+        };
+        self.is_lvalue_use(self.operand_start(t), self.operand_end(t, colon))
+    }
+
+    /// A `?:` over the tokens `[start, end)` that is assigned to or incremented, has a member or
+    /// element taken, has its address taken, or initialises a reference: `(c ? a : b) = x`,
+    /// `(c ? a : b).m`, `&(c ? a : b)`, `auto& r = c ? a : b`.
+    fn is_lvalue_use(&self, start: usize, end: usize) -> bool {
+        let wrapped = start > 0 && self.word(start - 1) == "(" && self.word(end) == ")";
+        if wrapped {
+            let after = self.word(end + 1);
+            let before = if start >= 2 { self.word(start - 2) } else { "" };
+            if ASSIGN_OPS.contains(&after) || matches!(after, "." | "->" | "[" | "++" | "--") {
+                return true;
+            }
+            return matches!(before, "&" | "++" | "--");
+        }
+        let binds_reference = start >= 3
+            && self.word(start - 1) == "="
+            && is_name(self.word(start - 2))
+            && matches!(self.word(start - 3), "&" | "&&");
+        binds_reference
     }
 
     /// The `:` that pairs with the `?` of `t`.
@@ -164,8 +202,16 @@ impl<'a> Source<'a> {
         t.hi
     }
 
+    /// How many parentheses, brackets and brace initialisers are open at byte offset `at`.
+    #[must_use]
+    pub fn open_at(&self, at: usize) -> usize {
+        let seen = self.sig.partition_point(|&i| self.tokens[i].start < at);
+        seen.checked_sub(1).map_or(0, |k| self.open_after[k])
+    }
+
     /// Byte offset of the first line break in `[from, to)` that lies in whitespace, so not inside
-    /// a literal, a comment or a directive.
+    /// a literal, a comment or a directive, and outside every open parenthesis, bracket and
+    /// brace initialiser: a directive may stand there.
     #[must_use]
     pub fn line_break_in(&self, from: usize, to: usize) -> Option<usize> {
         let first = self.tokens.partition_point(|t| t.end <= from);
@@ -175,7 +221,8 @@ impl<'a> Source<'a> {
             .filter(|t| t.kind == TokKind::Space)
             .find_map(|t| {
                 let (a, b) = (t.start.max(from), t.end.min(to));
-                self.text[a..b].find('\n').map(|p| a + p)
+                let breaks = self.text[a..b].match_indices('\n').map(|(p, _)| a + p);
+                breaks.into_iter().find(|&at| self.open_at(at) == 0)
             })
     }
 
@@ -185,6 +232,41 @@ impl<'a> Source<'a> {
         let first = self.conditionals.partition_point(|&b| b < from);
         self.conditionals.get(first).is_some_and(|&b| b < to)
     }
+}
+
+/// Words after which a `{` opens a statement block or a type, not an initialiser.
+const BLOCK_PRECEDERS: [&str; 12] = [
+    ")", "]", ";", "{", "}", ":", "else", "do", "try", "mutable", "noexcept", "const",
+];
+
+/// How many parentheses, brackets and brace initialisers are open after each significant token.
+/// A `{` is an initialiser unless a block or a type body can follow the word before it.
+fn open_depths(text: &str, tokens: &[Token], sig: &[usize]) -> Vec<usize> {
+    let word = |k: usize| &text[tokens[sig[k]].start..tokens[sig[k]].end];
+    let mut stack: Vec<bool> = Vec::new(); // true: counts as open (not a statement block)
+    let mut depths = Vec::with_capacity(sig.len());
+    for k in 0..sig.len() {
+        match word(k) {
+            "(" | "[" => stack.push(true),
+            "{" => {
+                let prev = if k > 0 { word(k - 1) } else { ";" };
+                let before = if k > 1 { word(k - 2) } else { ";" };
+                let in_initialiser = stack.last().copied().unwrap_or(false);
+                let type_body =
+                    matches!(before, "struct" | "class" | "union" | "namespace" | "enum");
+                let block = BLOCK_PRECEDERS.contains(&prev) || type_body;
+                // A brace directly inside an initialiser is a nested initialiser.
+                let nested = in_initialiser && matches!(prev, "{" | ",");
+                stack.push(!block || nested);
+            }
+            ")" | "]" | "}" => {
+                stack.pop();
+            }
+            _ => {}
+        }
+        depths.push(stack.iter().filter(|&&open| open).count());
+    }
+    depths
 }
 
 fn is_conditional_directive(line: &str) -> bool {

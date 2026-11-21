@@ -2,7 +2,7 @@
 #   cmake -S example -B build -DRAISE_BIN=<raise> -DAETHER_TRACE_INCLUDE=<dir> -DAETHER_IR=<dir>
 #         -DCMAKE_CXX_COMPILER=<clang++> [-DMODEL_STIFF=ON]
 #   cmake --build build --target example_model_raise
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.21)
 project(raise_example CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -23,7 +23,7 @@ include("${here}/../cmake/AetherRaise.cmake")
 aether_raise(
   TARGET example_model
   ENTRY "${here}/physics/kernels.cpp"
-  KERNELS physics::drag physics::relax physics::band
+  KERNELS physics::drag physics::relax physics::band physics::gear
   ROOTS "${here}/physics" "${here}/numerics"
   OUT "${CMAKE_BINARY_DIR}/raised"
   RAISE "${RAISE_BIN}"

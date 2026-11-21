@@ -127,6 +127,16 @@ inline Real operator/(const Real& a, const Real& b) { return binary("div", a, b)
 inline Real operator-(const Real& a) { return Real(makeOp("neg", {a.node()})); }
 inline Bool operator>(const Real& a, const Real& b) { return {makeOp("gt", {a.node(), b.node()})}; }
 inline Bool operator<(const Real& a, const Real& b) { return {makeOp("lt", {a.node(), b.node()})}; }
+inline Bool operator>=(const Real& a, const Real& b) { return {makeOp("ge", {a.node(), b.node()})}; }
+inline Bool operator<=(const Real& a, const Real& b) { return {makeOp("le", {a.node(), b.node()})}; }
+inline Bool operator==(const Real& a, const Real& b) { return {makeOp("eq", {a.node(), b.node()})}; }
+inline Bool operator!=(const Real& a, const Real& b) { return {makeOp("ne", {a.node(), b.node()})}; }
+inline Bool operator>(const Int& a, const Int& b) { return {makeOp("gt", {a.node(), b.node()})}; }
+inline Bool operator<(const Int& a, const Int& b) { return {makeOp("lt", {a.node(), b.node()})}; }
+inline Bool operator>=(const Int& a, const Int& b) { return {makeOp("ge", {a.node(), b.node()})}; }
+inline Bool operator<=(const Int& a, const Int& b) { return {makeOp("le", {a.node(), b.node()})}; }
+inline Bool operator==(const Int& a, const Int& b) { return {makeOp("eq", {a.node(), b.node()})}; }
+inline Bool operator!=(const Int& a, const Int& b) { return {makeOp("ne", {a.node(), b.node()})}; }
 
 namespace detail {
 

@@ -26,6 +26,15 @@ pub struct Summary {
     pub kernels: usize,
 }
 
+/// A statement the reader left as written, with the file it is in.
+#[derive(Debug)]
+pub struct Left {
+    /// The author's file.
+    pub file: PathBuf,
+    /// What was left, where, in which function, and the way out.
+    pub report: reader::Report,
+}
+
 /// A kernel with the parameter names read from its definition.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Kernel {
@@ -72,7 +81,7 @@ pub fn run(req: &Request) -> Res<Summary> {
     build_flags.extend(mirror.include_flags(&shadow));
     build_flags.push(format!("-I{}", req.out.join("include").display()));
     build_flags.extend(arm_includes(req));
-    syntax_gate(req, &build_flags, &main)?;
+    syntax_gate(req, &build_flags, &main, &left)?;
     build_and_run(req, &build_flags, &main)?;
     for k in &kernels {
         for ext in ["ir", "planes"] {
@@ -94,7 +103,7 @@ pub fn run(req: &Request) -> Res<Summary> {
     Ok(Summary {
         closure: files.all.len(),
         project: files.project.len(),
-        left,
+        left: left.len(),
         kernels: kernels.len(),
     })
 }
@@ -155,11 +164,10 @@ pub fn rewrite_project(
     files: &Closure,
     mirror: &Mirror,
     shadow: &Path,
-) -> Res<usize> {
+) -> Res<Vec<Left>> {
     // A shadow tree of an earlier run could hold a different file under the same index.
     let _ = fs::remove_dir_all(shadow);
-    let mut left = String::new();
-    let mut count = 0;
+    let mut left = Vec::new();
     for file in &files.project {
         let text = fs::read_to_string(file).map_err(|e| {
             RaiseError::new(
@@ -185,14 +193,38 @@ pub fn rewrite_project(
             let target = Mirror::shadow_path(shadow, placement);
             write_file(&target, &body, "rewrite")?;
         }
-        for r in &analysis.reports {
-            let line = format!("{}:{}: {}\n", file.display(), r.line, r.kind);
-            left.push_str(&line);
-            count += 1;
-        }
+        left.extend(analysis.reports.into_iter().map(|report| Left {
+            file: file.clone(),
+            report,
+        }));
     }
-    write_file(&req.out.join("left.txt"), &left, "rewrite")?;
-    Ok(count)
+    let lines: Vec<String> = left.iter().map(describe).collect();
+    let listing = lines
+        .iter()
+        .fold(String::new(), |all, line| all + line + "\n");
+    write_file(&req.out.join("left.txt"), &listing, "rewrite")?;
+    Ok(left)
+}
+
+/// One line about a left statement: where, what, in which function, and the way out.
+fn describe(left: &Left) -> String {
+    let r = &left.report;
+    let place = format!("{}:{}", left.file.display(), r.line);
+    let function = if r.function.is_empty() {
+        String::new()
+    } else {
+        format!(" in {}", r.function)
+    };
+    format!("{place}: {}{function}: {}", r.kind, r.way_out())
+}
+
+/// The file and line of a compiler diagnostic `path:line:column: error: ...`.
+fn error_location(line: &str) -> Option<(&str, usize)> {
+    let head = &line[..line.find(": error:")?];
+    let mut parts = head.rsplitn(3, ':');
+    let _column = parts.next()?;
+    let number = parts.next()?.parse().ok()?;
+    Some((parts.next()?, number))
 }
 
 fn write_file(path: &Path, text: &str, step: &'static str) -> Res<()> {
@@ -411,20 +443,32 @@ fn compiler(req: &Request, flags: &[String], more: &[&str]) -> Res<std::process:
 /// Step 5: the generated main must compile against the shadow tree.
 ///
 /// # Errors
-/// The compiler's first error line, with the note on where the shadow copies are.
-pub fn syntax_gate(req: &Request, flags: &[String], main: &Path) -> Res<()> {
+/// The compiler's first error line. When it lies in code the reader left as written, the error
+/// names that construct, its function and the way out; otherwise it points at `left.txt`.
+pub fn syntax_gate(req: &Request, flags: &[String], main: &Path, left: &[Left]) -> Res<()> {
     let output = compiler(req, flags, &["-fsyntax-only", &main.display().to_string()])?;
     if output.status.success() {
         return Ok(());
     }
     let first = first_error(&String::from_utf8_lossy(&output.stderr));
-    Err(RaiseError::new(
-        "syntax gate",
-        format!(
-            "{first}; the file named is the author's source as rewritten (statements the reader left are in {}/left.txt); rewrite that construct in a form the reader knows",
+    let culprit = error_location(&first).and_then(|(file, line)| {
+        left.iter().find(|l| {
+            l.file.display().to_string() == file
+                && (l.report.span.0..=l.report.span.1).contains(&line)
+        })
+    });
+    let advice = match culprit {
+        Some(l) => format!(
+            "while raising {}, the reader left a construct as written: {}",
+            req.kernels.join(", "),
+            describe(l)
+        ),
+        None => format!(
+            "the file named is the author's source as rewritten (statements the reader left are in {}/left.txt); rewrite that construct in a form the reader knows",
             req.out.display()
         ),
-    ))
+    };
+    Err(RaiseError::new("syntax gate", format!("{first}; {advice}")))
 }
 
 /// Step 6: builds the main against the IR library and runs it.
