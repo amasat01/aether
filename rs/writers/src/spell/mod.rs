@@ -2,6 +2,7 @@
 //! operations, stores. A construct
 //! it does not spell yet is a refusal "not in this build: <construct>".
 mod band;
+pub mod vocabulary;
 use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
 pub use band::{band_literal, literal_op};
@@ -230,43 +231,6 @@ pub fn select(
     Ok(format!("aether::select({c}, {a}, {b})"))
 }
 
-/// The names of the unary math functions the emitted code calls through the library.
-const MATH_UNARY: [OpKind; 33] = {
-    use OpKind::*;
-    [
-        Abs, Sqrt, Rsqrt, Exp, Log, Sin, Cos, Tan, Tanh, Asin, Acos, Atan, Floor, Exp2, Expm1,
-        Log2, Log10, Log1p, Cbrt, Sinh, Cosh, Asinh, Acosh, Atanh, Ceil, Trunc, Round, Rint, Erf,
-        Erfc, Isnan, Isinf, Isfinite,
-    ]
-};
-/// The binary math functions, as (operation, library function).
-const MATH_BINARY: [(OpKind, &str); 9] = [
-    (OpKind::Pow, "pow"),
-    (OpKind::Min, "fmin"),
-    (OpKind::Max, "fmax"),
-    (OpKind::Atan2, "atan2"),
-    (OpKind::Hypot, "hypot"),
-    (OpKind::Copysign, "copysign"),
-    (OpKind::Fmod, "fmod"),
-    (OpKind::Remainder, "remainder"),
-    (OpKind::Fdim, "fdim"),
-];
-/// The infix operators, as (operation, C++ operator).
-const INFIX: [(OpKind, &str); 12] = [
-    (OpKind::Add, "+"),
-    (OpKind::Sub, "-"),
-    (OpKind::Mul, "*"),
-    (OpKind::Div, "/"),
-    (OpKind::Lt, "<"),
-    (OpKind::Le, "<="),
-    (OpKind::Gt, ">"),
-    (OpKind::Ge, ">="),
-    (OpKind::Eq, "=="),
-    (OpKind::Ne, "!="),
-    (OpKind::Land, "&&"),
-    (OpKind::Lor, "||"),
-];
-
 /// The operations a banded exp, sin or cos may leave raw for: the readers that take a raw band.
 pub fn raw_reader(kind: OpKind) -> bool {
     matches!(
@@ -299,10 +263,7 @@ pub fn banded_raw_twin(kind: OpKind, arg: &str) -> Option<String> {
 
 /// Whether a banded operation's result is a normalised `Band` (a facade door or a division): the math functions and `div`.
 pub fn banded_door(kind: OpKind) -> bool {
-    kind == OpKind::Div
-        || MATH_UNARY.contains(&kind)
-        || MATH_BINARY.iter().any(|m| m.0 == kind)
-        || matches!(kind, OpKind::Fma | OpKind::Clip)
+    kind == OpKind::Div || vocabulary::is_call(kind) || matches!(kind, OpKind::Fma | OpKind::Clip)
 }
 
 /// The fused multiply-add of a product `a * b` and a normalised addend `c`.
@@ -326,91 +287,11 @@ pub fn scalar_op(
     dtype: &str,
     used: &mut Vec<Helper>,
 ) -> Result<String, Refusal> {
-    let int_call = [
-        (OpKind::Floordiv, "int_floordiv"),
-        (OpKind::Mod, "int_mod"),
-        (OpKind::Band, "int_and"),
-        (OpKind::Bor, "int_or"),
-        (OpKind::Bxor, "int_xor"),
-        (OpKind::Shl, "int_shl"),
-        (OpKind::Shr, "int_shr"),
-        (OpKind::Invert, "int_invert"),
-    ];
-    let int_wrap = [
-        (OpKind::Add, "int_add"),
-        (OpKind::Sub, "int_sub"),
-        (OpKind::Mul, "int_mul"),
-        (OpKind::Neg, "int_neg"),
-        (OpKind::Abs, "int_abs"),
-        (OpKind::Min, "int_min"),
-        (OpKind::Max, "int_max"),
-    ];
-    if let Some((_, f)) = int_call.iter().find(|m| m.0 == kind) {
-        used.push(Helper::Integers);
-        return Ok(format!("hawk_abi::{f}({})", args.join(", ")));
+    if let Some(row) = vocabulary::row(kind, args.len(), vocabulary::ValueClass::of(dtype)) {
+        used.extend(row.helper);
+        return row.apply(args);
     }
-    if int_plane(dtype) {
-        if let Some((_, f)) = int_wrap.iter().find(|m| m.0 == kind) {
-            used.push(Helper::Integers);
-            return Ok(format!("hawk_abi::{f}({})", args.join(", ")));
-        }
-    }
-    if matches!(kind, OpKind::Min | OpKind::Max) && (dtype == "i32" || dtype == "i64") {
-        used.push(Helper::Integers);
-        return Ok(format!("hawk_abi::int_{kind}<Int>({})", args.join(", ")));
-    }
-    // HAWK's (seed, counter) draw: aether's stateless detail::uniform01 / standardNormal under the
-    // seed XOR-ed with a per-kind salt
-    if args.len() == 2 && matches!(kind, OpKind::RandomUniform | OpKind::RandomNormal) {
-        let (f, salt) = if kind == OpKind::RandomUniform {
-            ("uniform01", "0x243F6A8885A308D3ULL")
-        } else {
-            ("standardNormal", "0x13198A2E03707344ULL")
-        };
-        used.push(Helper::Random);
-        return Ok(format!("aether::random::detail::{f}<Real>(static_cast<std::uint64_t>({}) ^ {salt}, static_cast<aether::offset_t>(hawk_i), static_cast<std::uint64_t>({}))", args[0], args[1]));
-    }
-    if kind == OpKind::Spacing && args.len() == 1 {
-        used.push(Helper::Spacing);
-        return Ok(format!("hawk_abi::spacing({})", args[0]));
-    }
-    if matches!(
-        kind,
-        OpKind::Dot
-            | OpKind::Norm
-            | OpKind::Sum
-            | OpKind::Component
-            | OpKind::Sign
-            | OpKind::RandomUniform
-            | OpKind::RandomNormal
-    ) {
-        return Err(nib(format!("scalar op {kind}")));
-    }
-    if MATH_UNARY.contains(&kind) && args.len() == 1 {
-        return Ok(format!("aether::math::{kind}({})", args[0]));
-    }
-    if let Some((_, f)) = MATH_BINARY.iter().find(|m| m.0 == kind) {
-        if args.len() == 2 {
-            return Ok(format!("aether::math::{f}({}, {})", args[0], args[1]));
-        }
-    }
-    if let Some((_, s)) = INFIX.iter().find(|m| m.0 == kind) {
-        if args.len() == 2 {
-            return Ok(format!("({} {s} {})", args[0], args[1]));
-        }
-    }
-    match (kind, args.len()) {
-        (OpKind::Spacing, 1) => {
-            used.push(Helper::Spacing);
-            Ok(format!("hawk_abi::spacing({})", args[0]))
-        }
-        (OpKind::Neg, 1) => Ok(format!("(-{})", args[0])),
-        (OpKind::Lnot, 1) => Ok(format!("(!{})", args[0])),
-        (OpKind::Fma, 3) | (OpKind::Clip, 3) => {
-            Ok(format!("aether::math::{kind}({})", args.join(", ")))
-        }
-        _ => Err(nib(format!("op {kind}"))),
-    }
+    Err(nib(format!("op {kind}")))
 }
 
 /// The C++ element type of a plane of `dtype`, as a fixed text.
