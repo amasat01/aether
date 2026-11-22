@@ -5,7 +5,7 @@ use crate::body::Class;
 use crate::body::{CompensatedPlan, CompensatedTarget, Frame, Name, NameKind};
 use crate::ir::door;
 use crate::refuse::{fault, nib, Refusal};
-use crate::spell::{binding_name, element_at, ZEROED_PLANE};
+use crate::spell::{binding_name, component_at, element_at, ZEROED_PLANE};
 
 /// The text of a value stored into a plane element: a banded unit's plane element is a `Real`
 /// built from the band.
@@ -76,8 +76,9 @@ pub(crate) fn indexed_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
         let h = f.node(p).h;
         return element_update(f, h, "exchangeAt");
     }
-    if !f.node(f.opp(p)[0]).ty.shape.is_empty() {
-        return Err(nib("an indexed wide write of a rank > 0 value"));
+    let shape = f.node(f.opp(p)[0]).ty.shape.clone();
+    if !shape.is_empty() {
+        return component_store(f, p, &shape);
     }
     let value = f.text(f.opp(p)[0]).clone();
     let indices: Vec<String> = f.opp(p)[1..].iter().map(|&q| f.text(q).clone()).collect();
@@ -101,6 +102,41 @@ pub(crate) fn indexed_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
         Some(test) => format!("if ({test}) {store}"),
         None => store,
     });
+    Ok(())
+}
+
+/// An indexed store of a value of rank above zero: each component into its own component of the element the index list names,
+/// under the write's edge rule.
+fn component_store(f: &mut Frame, p: usize, shape: &[usize]) -> Result<(), Refusal> {
+    let value = f.text(f.opp(p)[0]).clone();
+    let indices: Vec<String> = f.opp(p)[1..].iter().map(|&q| f.text(q).clone()).collect();
+    let h = f.node(p).h;
+    let target = binding_name(
+        &text_field(f.ctx(), h, "role")?,
+        0,
+        &text_field(f.ctx(), h, "name")?,
+    )?;
+    let edge = text_field(f.ctx(), h, "edge")?;
+    for component in flat_indices(shape) {
+        let (element, test) = component_at(
+            &target,
+            &component,
+            &indices,
+            &edge,
+            door::axes_declared(f.ctx(), h)? > 0,
+        )?;
+        if element.contains("aether::edge::") {
+            f.need(Need::Edge);
+        }
+        let store = format!(
+            "{element} = {};",
+            plane_value(f, &component_of(value.clone(), &component))
+        );
+        f.emit(match test {
+            Some(test) => format!("if ({test}) {store}"),
+            None => store,
+        });
+    }
     Ok(())
 }
 
@@ -233,23 +269,27 @@ pub(crate) fn element_helper(f: &Frame, h: u32) -> Result<Option<&'static str>, 
     )
 }
 
-/// An atomic update of one element by the library helper `helper`: the element is the plane's cell at the index list (the
-/// lane's own cell when there is none), under the update's edge rule, and a `zero` edge drops an update outside the plane. A
-/// compare-exchange passes its expected value before the new one, as the helper takes them.
-fn element_update(f: &mut Frame, h: u32, helper: &str) -> Result<(), Refusal> {
+/// Whether the update `h` returns the value its element held, so that it is a value other nodes read as well as a sink.
+pub(crate) fn returns_old(f: &Frame, h: u32) -> Result<bool, Refusal> {
+    Ok(door::field_flag(f.ctx(), h, "returns_old")?.unwrap_or(false))
+}
+
+/// The call of the library helper `helper` on the element the update `h` addresses, and the range test of its edge rule. The
+/// element is the plane's cell at the index list (the lane's own cell when there is none); a compare-exchange passes its expected
+/// value before the new one, as the helper takes them.
+fn element_call(
+    f: &mut Frame,
+    h: u32,
+    helper: &str,
+    component: &[usize],
+) -> Result<(String, Option<String>), Refusal> {
     if text_field(f.ctx(), h, "order")? == "lane" {
         return Err(nib("an atomic update in lane order"));
     }
     let operands = door::operands(f.ctx(), h)?;
-    if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {
-        return Err(nib("an atomic update of a rank > 0 value"));
-    }
-    if door::field_flag(f.ctx(), h, "returns_old")?.unwrap_or(false) {
-        return Err(nib("an update that returns the old value"));
-    }
     let compare = text_field(f.ctx(), h, "op")? == "compare_exchange";
     let held = if compare { 2 } else { 1 };
-    let mut values = vec![f.arg(operands[0])?];
+    let mut values = vec![component_of(f.arg(operands[0])?, component)];
     if compare {
         values.insert(0, f.arg(operands[1])?);
     }
@@ -263,23 +303,85 @@ fn element_update(f: &mut Frame, h: u32, helper: &str) -> Result<(), Refusal> {
         &text_field(f.ctx(), h, "name")?,
     )?;
     // the view's call form, never its `[]`: that answers a proxy, and the helper takes the element itself
-    let (element, test) = if indices.is_empty() {
+    let edge = text_field(f.ctx(), h, "edge")?;
+    let (element, test) = if !component.is_empty() {
+        component_at(
+            &target,
+            component,
+            &indices,
+            &edge,
+            door::axes_declared(f.ctx(), h)? > 0,
+        )?
+    } else if indices.is_empty() {
         (format!("{target}(i.global())"), None)
     } else {
-        element_at(&target, &indices, &text_field(f.ctx(), h, "edge")?, true)?
+        element_at(&target, &indices, &edge, true)?
     };
     if element.contains("aether::edge::") {
         f.need(Need::Edge);
     }
     f.need(Need::ElementAtomic);
-    let update = format!(
-        "aether::accum::atomic::{helper}({element}, {});",
-        values.join(", ")
+    Ok((
+        format!(
+            "aether::accum::atomic::{helper}({element}, {})",
+            values.join(", ")
+        ),
+        test,
+    ))
+}
+
+/// The text of component `component` of the value `text` (the value itself when it has no components).
+fn component_of(text: String, component: &[usize]) -> String {
+    if component.is_empty() {
+        return text;
+    }
+    let ks: Vec<String> = component.iter().map(usize::to_string).collect();
+    format!("{text}.eval<{}>(i)", ks.join(", "))
+}
+
+/// An atomic update of the element the update `h` addresses by the library helper `helper`, as statements: one per component
+/// of a value of rank above zero, each acting on its own component of the element. A `zero` edge drops an update outside the
+/// plane. The update's old value is read by nobody here (see `old_value`).
+fn element_update(f: &mut Frame, h: u32, helper: &str) -> Result<(), Refusal> {
+    let operands = door::operands(f.ctx(), h)?;
+    let shape = crate::body::ty_of(f.ctx(), operands[0])?.shape;
+    for component in flat_indices(&shape) {
+        let (call, test) = element_call(f, h, helper, &component)?;
+        f.emit(match test {
+            Some(test) => format!("if ({test}) {call};"),
+            None => format!("{call};"),
+        });
+    }
+    Ok(())
+}
+
+/// The update `p` that returns the old value its element held, as a value: the helper is called once, here, in program order,
+/// and its result is bound to a local that every reader of the value reads. A lane that reaches the update runs it (a store by
+/// key may not sit inside a branch, so no lane runs it conditionally); an edge rule that drops an update has no old value to
+/// give, so it is refused.
+pub(crate) fn old_value(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+    let h = f.node(p).h;
+    let helper = element_helper(f, h)?.ok_or_else(|| {
+        nib("an update that returns the old value, of an operation with no helper")
+    })?;
+    if !crate::body::ty_of(f.ctx(), h)?.shape.is_empty() {
+        return Err(nib(
+            "an update that returns the old value of a rank > 0 value",
+        ));
+    }
+    let (call, test) = element_call(f, h, helper, &[])?;
+    if test.is_some() {
+        return Err(nib(
+            "an update that returns the old value under an edge rule that drops it",
+        ));
+    }
+    let name = format!("hawk_old_{p}");
+    f.declare_as(
+        Name::new(name.clone(), NameKind::Local),
+        "auto".into(),
+        Some(&call),
     );
-    f.emit(match test {
-        Some(test) => format!("if ({test}) {update}"),
-        None => update,
-    });
+    f.set_text(p, name);
     Ok(())
 }
 

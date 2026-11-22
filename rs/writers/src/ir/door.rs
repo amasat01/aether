@@ -218,6 +218,8 @@ extern "C" {
     pub fn rx_in_loop_body(ctx: *mut RxCtx, walk: u32, node: u32, out: *mut c_int) -> c_int;
     /// Whether the node is of a class (or a subclass).
     pub fn rx_is_a(ctx: *mut RxCtx, node: u32, name: *const c_char, out: *mut c_int) -> c_int;
+    /// Whether the runtime zeroes the written plane a sink node commits to.
+    pub fn rx_zeroes_plane(ctx: *mut RxCtx, node: u32, out: *mut c_int) -> c_int;
     /// The digest of a walk.
     pub fn rx_digest(ctx: *mut RxCtx, walk: u32, out65: *mut c_char) -> c_int;
     /// Makes a node of an operation that carries the literal of another node (NULL: none).
@@ -479,15 +481,12 @@ pub fn compensates(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
         && text_field(ctx, node, "summation")? == "compensated")
 }
 
-/// Whether the runtime zeroes the plane a sink writes before the run: an add, an or and a sample sum do (their fold starts from
-/// zero); a store, the other folds and the exchanges do not, the value the caller gave the plane being part of their result. The
-/// spelling of the plane's name follows this fact, which the IR's walk states for the unit description by the same rule.
+/// Whether the runtime zeroes the plane a sink writes before the run: the IR owns the rule and answers it here, so the
+/// spelling of the plane's name and the unit description's zeroed fact cannot differ.
 fn zeroes_plane(ctx: *mut RxCtx, node: u32) -> Result<bool, Refusal> {
-    // an ordered accumulate refines the update without an operation of its own, so it is asked first
-    if is_a(ctx, node, "sample_sum")? || is_a(ctx, node, "ordered_accum_write")? {
-        return Ok(true);
-    }
-    Ok(is_a(ctx, node, "update")? && matches!(text_field(ctx, node, "op")?.as_str(), "add" | "or"))
+    let mut out: c_int = 0;
+    check(ctx, unsafe { rx_zeroes_plane(ctx, node, &mut out) })?;
+    Ok(out != 0)
 }
 
 /// Whether the node is of the named node kind or a kind derived from it.

@@ -494,6 +494,12 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
         if class == Class::Loop {
             continue;
         } // a lowered loop is a root of the walk: emitted with its scope, not a commit
+          // an update that returns the old value ran at its position, where its readers need it
+        if matches!(class, Class::AccumUpdate | Class::StoreUpdate)
+            && stores::sinks::returns_old(f, h)?
+        {
+            continue;
+        }
         if matches!(
             class,
             Class::TeamStore | Class::TeamCopy | Class::ScatterLog | Class::LogStore

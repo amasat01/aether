@@ -156,6 +156,24 @@ pub fn element_at(
     Ok((format!("{binding}({})", args.join(", ")), test))
 }
 
+/// The element of one component of a value of rank above zero that a plane with axes holds at the indices, one per axis of the
+/// plane, under the edge rule: the view's call form with the component's indices ahead of the axes. A `zero` edge also returns
+/// the joined range test. A plane without axes is refused: its handle does not state the elements of its components.
+pub fn component_at(
+    binding: &str,
+    component: &[usize],
+    indices: &[String],
+    edge: &str,
+    axes: bool,
+) -> Result<(String, Option<String>), Refusal> {
+    if !axes {
+        return Err(nib("a value of rank > 0 stored into a plane without axes"));
+    }
+    let (args, test) = axis_args(binding, component.len(), indices, edge)?;
+    let parts: Vec<String> = component.iter().map(usize::to_string).chain(args).collect();
+    Ok((format!("{binding}({})", parts.join(", ")), test))
+}
+
 /// The index text of every axis of a plane with axes under an edge rule, and the joined range test of a `zero` edge. The view
 /// stores the components of a value of rank `value_rank` ahead of the axes, so axis `n` is the view's dimension `value_rank + n`.
 fn axis_args(

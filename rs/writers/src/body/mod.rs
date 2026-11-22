@@ -458,6 +458,11 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         | Class::ScatterLog
         | Class::LogStore => team::stmt(f, p)?,
         Class::BoxStore | Class::WarpStore => Out::Bound,
+        // an update that returns the old value is a value read by later nodes: it runs here, once
+        Class::AccumUpdate | Class::StoreUpdate if stores::sinks::returns_old(f, f.node(p).h)? => {
+            stores::sinks::old_value(f, p)?;
+            Out::Bound
+        }
         Class::WarpLane => Out::Value(crate::spell::WARP_LANE.to_string(), None),
         // an extension primitive stands for its forward expression
         Class::Primitive => {

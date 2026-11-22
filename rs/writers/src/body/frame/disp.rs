@@ -24,17 +24,19 @@ impl Frame<'_> {
             let h = self.node(p).h;
             let class = self.node(p).class.clone();
             let literal = matches!(class, Class::Const | Class::RoleConst);
+            let committed_at_end = matches!(
+                class,
+                Class::Assign
+                    | Class::WarpStore
+                    | Class::SampleSum
+                    | Class::AccumUpdate
+                    | Class::StoreUpdate
+                    | Class::Finish
+                    | Class::TapeWrite
+            ) && !(matches!(class, Class::AccumUpdate | Class::StoreUpdate)
+                && super::super::stores::sinks::returns_old(self, h).unwrap_or(false));
             let disp = Disp::of(
-                matches!(
-                    class,
-                    Class::Assign
-                        | Class::WarpStore
-                        | Class::SampleSum
-                        | Class::AccumUpdate
-                        | Class::StoreUpdate
-                        | Class::Finish
-                        | Class::TapeWrite
-                ),
+                committed_at_end,
                 placed::is_absorbed(self, p) && !literal,
                 self.stores.skip.contains(&h),
                 per_part.get(p) == Some(&true),

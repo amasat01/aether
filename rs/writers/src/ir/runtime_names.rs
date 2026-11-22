@@ -24,6 +24,9 @@ use crate::spell::{KEPT_PLANE, ZEROED_PLANE};
 /// The roles whose slot is always the scalar handle, whatever its plane.
 const HANDLE_ONLY: [&str; 5] = ["lookup", "terminated", "wide_in", KEPT_PLANE, ZEROED_PLANE];
 
+/// The handle-only roles whose plane may hold values of any rank, the view's call form taking the components ahead of the axes.
+const RANK_FREE: [&str; 3] = ["lookup", KEPT_PLANE, ZEROED_PLANE];
+
 /// How a slot of the role crosses the launch boundary: the runtime's `GRefMirror` for a plane
 /// read by reference, its `ScalarHandle`, or `value` for a by-value argument. A role that is a
 /// handle only but carries a plane of a rank, or an unknown role, is refused.
@@ -35,8 +38,8 @@ pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, Refusal> {
             "ScalarHandle"
         });
     }
-    // a lookup plane holds values of any rank and is addressed through its axes: its handle is rank-free
-    if HANDLE_ONLY.contains(&role) && role != "lookup" && rank > 0 {
+    // a lookup plane and a written plane hold values of any rank and are addressed through their axes: their handle is rank-free
+    if HANDLE_ONLY.contains(&role) && !RANK_FREE.contains(&role) && rank > 0 {
         return Err(bad(format!(
             "role {role:?} carries a rank-{rank} plane, but the map pins it to the scalar handle"
         )));
@@ -59,7 +62,7 @@ mod tests {
     /// mirror, which that role has no packing for) and takes a rank-0 slot; a role read by reference takes any rank.
     #[test]
     fn a_ranked_plane_in_a_handle_only_role_is_refused_and_its_neighbours_are_not() {
-        for role in ["terminated", "wide_in", KEPT_PLANE, ZEROED_PLANE] {
+        for role in ["terminated", "wide_in"] {
             let why = mirror_of(role, 1).unwrap_err();
             assert_eq!(
                 why.reason,
@@ -67,7 +70,9 @@ mod tests {
             );
             assert_eq!(mirror_of(role, 0).unwrap(), "ScalarHandle", "{role}");
         }
-        assert_eq!(mirror_of("lookup", 3).unwrap(), "ScalarHandle");
+        for role in ["lookup", KEPT_PLANE, ZEROED_PLANE] {
+            assert_eq!(mirror_of(role, 3).unwrap(), "ScalarHandle", "{role}");
+        }
         assert_eq!(mirror_of("plane_in", 1).unwrap(), "GRefMirror");
         assert_eq!(mirror_of("plane_in", 3).unwrap(), "GRefMirror");
         assert_eq!(mirror_of("plane_in", 0).unwrap(), "ScalarHandle");
