@@ -94,17 +94,8 @@ extern "C" {
     /// How element k of a rank-1 node is read: "proxy", "input", "parts", "splat", "elementwise" or
     /// "none".
     pub fn rw_wide_element_kind(ctx: *mut RxCtx, node: u32, kind: *mut c_int) -> c_int;
-    /// Whether a vector is reads of one plane at base + start + k * step (`*found` is 0 or 1).
-    pub fn rw_wide_gather(
-        ctx: *mut RxCtx,
-        node: u32,
-        found: *mut c_int,
-        plane: *mut u32,
-        base: *mut u32,
-        start: *mut i64,
-        step: *mut i64,
-        clamped: *mut c_int,
-    ) -> c_int;
+    /// Whether a vector is reads of one plane at lead.., base + start + k * step (`found` is 0 or 1).
+    pub fn rw_wide_gather(ctx: *mut RxCtx, node: u32, out: *mut GatherAnswer) -> c_int;
     /// The placements of the given nodes (loop bodies included) as lines `plane resident layout
     /// width`, by plane name.
     pub fn rw_wide_record(
@@ -412,15 +403,39 @@ pub fn fold_rolled(
     })
 }
 
-/// A vector that is the reads of one plane at `base + start + k * step`.
+/// The gather the wings answer (`found` 0: none), as `raptor_wings_front.h` states it.
+#[repr(C)]
+#[derive(Default)]
+pub struct GatherAnswer {
+    /// Whether the vector is a run of reads.
+    found: c_int,
+    /// The plane the run is over.
+    plane: u32,
+    /// The base of the running index, `u32::MAX` when it has none.
+    base: u32,
+    /// The first running index.
+    start: i64,
+    /// The distance between running indexes.
+    step: i64,
+    /// Whether the run is clamped.
+    clamped: c_int,
+    /// How many lead nodes `lead` holds.
+    nlead: usize,
+    /// The index nodes ahead of the running index.
+    lead: [u32; 8],
+}
+
+/// A vector that is the reads of one plane at `lead.., base + start + k * step`: the running index is the last one.
 pub struct Gather {
     /// The plane the run is over.
     pub plane: u32,
-    /// The base index the run starts from, when it has one.
+    /// The index nodes ahead of the running index, shared by every read of the run (none for a plane read at one index).
+    pub lead: Vec<u32>,
+    /// The base of the running index, when it has one.
     pub base: Option<u32>,
-    /// The first index of the run.
+    /// The first running index.
     pub start: i64,
-    /// The distance between indexes of the run.
+    /// The distance between running indexes.
     pub step: i64,
     /// Whether the run is clamped to the plane.
     pub clamped: bool,
@@ -428,29 +443,18 @@ pub struct Gather {
 /// The run of reads a vector is, when it is one.
 pub fn gather(ctx: impl Into<CtxPtr>, node: u32) -> Result<Option<Gather>, Refusal> {
     let ctx = ctx.into().raw();
-    let (mut found, mut clamped, mut plane, mut base, mut start, mut step) =
-        (0 as c_int, 0 as c_int, 0u32, 0u32, 0i64, 0i64);
-    let st = unsafe {
-        rw_wide_gather(
-            ctx,
-            node,
-            &mut found,
-            &mut plane,
-            &mut base,
-            &mut start,
-            &mut step,
-            &mut clamped,
-        )
-    };
+    let mut answer = GatherAnswer::default();
+    let st = unsafe { rw_wide_gather(ctx, node, &mut answer) };
     if st != RX_OK {
         return Err(refusal(ctx, "gather", st));
     }
-    Ok((found != 0).then(|| Gather {
-        plane,
-        base: (base != u32::MAX).then_some(base),
-        start,
-        step,
-        clamped: clamped != 0,
+    Ok((answer.found != 0).then(|| Gather {
+        plane: answer.plane,
+        lead: answer.lead[..answer.nlead].to_vec(),
+        base: (answer.base != u32::MAX).then_some(answer.base),
+        start: answer.start,
+        step: answer.step,
+        clamped: answer.clamped != 0,
     }))
 }
 /// The nodes and everything inside their loop bodies, in order.

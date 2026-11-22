@@ -98,6 +98,7 @@ pub(super) fn written(f: &Frame) -> Result<HashSet<u32>, Refusal> {
                     reads.push(part)
                 }
             }
+            keep.extend(run.lead.iter().copied());
             if let Some(base) = run.base {
                 keep.insert(base);
             }
@@ -110,7 +111,7 @@ pub(super) fn written(f: &Frame) -> Result<HashSet<u32>, Refusal> {
     }
     seen.extend(reads.iter().copied());
     for &part in &reads {
-        let mut constants = vec![door::operands(ctx, part)?[1]];
+        let mut constants = door::operands(ctx, part)?[1..].to_vec();
         while let Some(node) = constants.pop() {
             // a value with a canonical position is looked up by its handle, which keys no reader:
             // nothing stops it
@@ -407,6 +408,11 @@ fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<St
         None => at,
         Some(base) => format!("({} + {at})", f.arg(base)?),
     };
+    let mut indices = vec![];
+    for &lead in &run.lead {
+        indices.push(f.arg(lead)?);
+    }
+    indices.push(index);
     let plane_rank = crate::body::ty_of(f.ctx(), run.plane)?.shape.len();
     let plane = binding_name(
         &text_field(f.ctx(), run.plane, "role")?,
@@ -416,17 +422,20 @@ fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<St
     // a plane with axes is read through its view's call form, a plane without them through the sample index
     if door::axes_declared(f.ctx(), run.plane)? > 0 {
         let edge = if run.clamped { "clamp" } else { "unchecked" };
-        let (element, _) = element_at(&plane, &[index], edge, true)?;
+        let (element, _) = element_at(&plane, &indices, edge, true)?;
         if run.clamped {
             f.need(Need::Edge);
         }
         return Ok(element);
     }
+    let [index] = &indices[..] else {
+        return Err(nib("a run over a plane without axes at several indices"));
+    };
     let index = if run.clamped {
         f.need(Need::Integers);
         format!("hawk_abi::int_clamp_index<Int>({index}, static_cast<Int>({plane}.samples()))")
     } else {
-        index
+        index.clone()
     };
     Ok(format!(
         "{plane}[aether::SampleIndex::make(static_cast<std::size_t>({index}))].eval()"
