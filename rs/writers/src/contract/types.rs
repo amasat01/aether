@@ -69,12 +69,10 @@ pub enum Role {
     PlaneIn,
     /// A table indexed by a run-time value.
     Lookup,
-    /// An output with several values per sample.
-    WideOut,
+    /// A plane the unit writes: a store target, or an accumulate target the runtime zeroes before the run.
+    PlaneOut,
     /// A value shared by all samples, passed by value.
     Uniform,
-    /// An output accumulated over samples.
-    AccumOut,
     /// A mask that marks a sample as finished.
     Terminated,
     /// An input with several values per sample.
@@ -113,6 +111,8 @@ pub struct Slot {
     pub index: i64,
     /// The axes of a plane the slot declares, in storage order; none for a plane declared without axes.
     pub axes: Option<Vec<Axis>>,
+    /// Whether the runtime zeroes the plane before the run (a `plane_out` slot an accumulate writes); false for every other slot.
+    pub zeroed: bool,
 }
 
 /// One axis of a plane: its label and its extent, none when the extent is known only at run time.
@@ -563,9 +563,8 @@ impl Role {
             Role::Mutable => "mutable",
             Role::PlaneIn => "plane_in",
             Role::Lookup => "lookup",
-            Role::WideOut => "wide_out",
+            Role::PlaneOut => "plane_out",
             Role::Uniform => "uniform",
-            Role::AccumOut => "accum_out",
             Role::Terminated => "terminated",
             Role::WideIn => "wide_in",
             Role::Nsamples => "nsamples",

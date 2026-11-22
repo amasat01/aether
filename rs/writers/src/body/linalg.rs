@@ -116,7 +116,7 @@ fn direct_target(f: &Frame, p: usize) -> Result<Option<String>, Refusal> {
     let mut companions = vec![];
     for &s in f.sinks() {
         let sink = &f.node(f.at(s)?);
-        if sink.class == Class::AccumWrite {
+        if sink.class == Class::AccumUpdate {
             companions.push(format!("{}_c", text_field(f.ctx(), sink.h, "name")?))
         }
     }

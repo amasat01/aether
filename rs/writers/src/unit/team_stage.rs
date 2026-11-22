@@ -10,7 +10,7 @@ use crate::contract::types::{MapBits, Scalar, Target, TeamStage, Unit};
 use crate::contract::Contract;
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{nib, unknown, Refusal};
-use crate::spell::binding_name;
+use crate::spell::{binding_name, KEPT_PLANE};
 use crate::unit::team_banded as band;
 
 /// The namespace of the collective calls.
@@ -62,7 +62,7 @@ impl Step {
 
 /// The binding of a scratch plane.
 fn scratch(name: &str) -> String {
-    binding_name("wide_out", 0, name).unwrap_or_default()
+    binding_name(KEPT_PLANE, 0, name).unwrap_or_default()
 }
 
 /// The binding of the plane a stage reads in place when it is one of its inputs, else its scratch.

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::ffi::c_int;
 
 /// The sink classes whose value operand the rewrite may replace.
-const VALUE_SINKS: [&str; 4] = ["Finish", "SampleSum", "AccumWrite", "Assign"];
+const VALUE_SINKS: [&str; 4] = ["Finish", "SampleSum", "Update", "Assign"];
 
 /// Whether an operation acts on each element alone: the binary and unary math and the ternary
 /// forms.
@@ -164,7 +164,7 @@ impl Pusher {
                     .iter()
                     .any(|feather| feather == "elementwise_sink");
             let operands = door::operands(self.ctx, sink)?.len();
-            if !known || !(operands == 1 || class == Class::AccumWrite) {
+            if !known || !(operands == 1 || class == Class::AccumUpdate) {
                 return Ok(false);
             }
         }

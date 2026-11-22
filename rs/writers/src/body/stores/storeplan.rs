@@ -483,7 +483,8 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
 pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
     for sink in door::field_refs(f.ctx(), lp, "body_sinks")?.unwrap_or_default() {
         // a keyed accumulate: the value and one index per axis of its plane
-        if door::class_is(f.ctx(), sink, "AccumWrite")? && door::operands(f.ctx(), sink)?.len() > 1
+        if Class::of(f.ctx(), sink)? == Class::AccumUpdate
+            && door::operands(f.ctx(), sink)?.len() > 1
         {
             super::sinks::accum_of(f, sink)?;
             continue;

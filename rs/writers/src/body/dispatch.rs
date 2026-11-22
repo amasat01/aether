@@ -490,7 +490,7 @@ fn render_nodes(f: &mut Frame, order: &[usize], tally: &[usize]) -> Result<(), R
         let class = f.node(p).class.clone();
         if matches!(
             class,
-            Class::Assign | Class::SampleSum | Class::AccumWrite | Class::WideWrite
+            Class::Assign | Class::SampleSum | Class::AccumUpdate | Class::StoreUpdate
         ) {
             return Err(nib(format!("a {class} inside a switch case")));
         }

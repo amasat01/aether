@@ -106,6 +106,7 @@ aether/math/trig.h
 aether/random/detail/Backend.h
 aether/random/detail/Philox.h
 aether/typedefs.h
+aether/view/Edge.h
 aether/view/Item.h
 aether/view/Reshape.h
 aether/view/RuntimeView.h

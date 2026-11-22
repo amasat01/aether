@@ -258,7 +258,7 @@ fn companion_planes(
     let mut companions: Vec<String> = vec![];
     for &q in sinks {
         let n = &nodes[at(ctx, walk, q)?];
-        if n.class == Class::AccumWrite && door::compensates(&field_text(ctx, n.h, "contract")?)? {
+        if n.class == Class::AccumUpdate && door::compensates(ctx, n.h)? {
             companions.push(format!("{}_c", field_text(ctx, n.h, "name")?))
         }
     }
@@ -512,12 +512,12 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
             }
             continue;
         }
-        if class == Class::WideWrite {
+        if class == Class::StoreUpdate {
             if f.unit.team.is_some() {
                 return Err(nib("a wide write of a team stage"));
             }
             if nops >= 2 {
-                stores::sinks::wide_write(f, p)?;
+                stores::sinks::indexed_store(f, p)?;
                 continue;
             }
         }
@@ -542,11 +542,15 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
         if plans.companions.contains(&f.field_text(h, "name")?) {
             continue;
         }
-        if class == Class::AccumWrite && nops >= 2 {
+        if class == Class::AccumUpdate && nops >= 2 {
             stores::sinks::accum(f, s, p)?;
             continue;
         }
-        if !matches!(class, Class::Assign | Class::AccumWrite | Class::WideWrite) || nops != 1 {
+        if !matches!(
+            class,
+            Class::Assign | Class::AccumUpdate | Class::StoreUpdate
+        ) || nops != 1
+        {
             return Err(nib(format!("sink {class} with {nops} operands")));
         }
         if !plans.early.iter().any(|e| e.1 == s) && !plans.commits.held.contains(&s) {

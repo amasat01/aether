@@ -37,8 +37,8 @@ pub enum Class {
     TapeRead,
     /// A write of a tape row by a loop.
     TapeWrite,
-    /// A write of a lane-wide value into a plane.
-    WideWrite,
+    /// An update of the operation `store`: a lane-wide value written into a plane.
+    StoreUpdate,
     /// A choice among branches by a clamped selector.
     Dispatch,
     /// A dispatch that evaluates every branch and chooses by a chain.
@@ -67,8 +67,8 @@ pub enum Class {
     Assign,
     /// A sum over the samples of a batch.
     SampleSum,
-    /// An accumulating write into a plane.
-    AccumWrite,
+    /// An update that accumulates into a plane: an add or a bit-or.
+    AccumUpdate,
     /// The end of a sample: counts a finished sample.
     Finish,
     /// Any other class: only its name is kept.
@@ -95,7 +95,6 @@ impl Class {
             "LoopCarry" => Class::LoopCarry,
             "TapeRead" => Class::TapeRead,
             "TapeWrite" => Class::TapeWrite,
-            "WideWrite" => Class::WideWrite,
             "Dispatch" => Class::Dispatch,
             "PredicatedDispatch" => Class::PredicatedDispatch,
             "AutoDispatch" => Class::AutoDispatch,
@@ -110,7 +109,6 @@ impl Class {
             "Primitive" => Class::Primitive,
             "Assign" => Class::Assign,
             "SampleSum" => Class::SampleSum,
-            "AccumWrite" => Class::AccumWrite,
             "Finish" => Class::Finish,
             other => Class::Other(other.to_string()),
         }
@@ -118,7 +116,17 @@ impl Class {
 
     /// The class of a node, by the name the door answers for it.
     pub fn of(ctx: *mut crate::ir::door::RxCtx, node: u32) -> Result<Class, Refusal> {
-        Ok(Class::from_name(&crate::ir::door::class_name(ctx, node)?))
+        let name = crate::ir::door::class_name(ctx, node)?;
+        if name == "Update" {
+            // one IR class, two emitters: a store writes the element, every other operation accumulates into it
+            let op = crate::ir::door::text_field(ctx, node, "op")?;
+            return Ok(if op == "store" {
+                Class::StoreUpdate
+            } else {
+                Class::AccumUpdate
+            });
+        }
+        Ok(Class::from_name(&name))
     }
 
     /// The door's name of the class.
@@ -140,7 +148,7 @@ impl Class {
             Class::LoopCarry => "LoopCarry",
             Class::TapeRead => "TapeRead",
             Class::TapeWrite => "TapeWrite",
-            Class::WideWrite => "WideWrite",
+            Class::StoreUpdate => "store update",
             Class::Dispatch => "Dispatch",
             Class::PredicatedDispatch => "PredicatedDispatch",
             Class::AutoDispatch => "AutoDispatch",
@@ -155,7 +163,7 @@ impl Class {
             Class::Primitive => "Primitive",
             Class::Assign => "Assign",
             Class::SampleSum => "SampleSum",
-            Class::AccumWrite => "AccumWrite",
+            Class::AccumUpdate => "accumulating update",
             Class::Finish => "Finish",
             Class::Other(name) => name,
         }

@@ -164,7 +164,7 @@ members!(Target, [Host, Device]);
 members!(Scalar, [Float64, Float32, Banded]);
 members!(Dtype, [F64, F32, I32, I64, Int32, Uint32, Bool]);
 #[rustfmt::skip]
-members!(Role, [Mutable, PlaneIn, Lookup, WideOut, Uniform, AccumOut, Terminated,
+members!(Role, [Mutable, PlaneIn, Lookup, PlaneOut, Uniform, Terminated,
     WideIn, Nsamples, Out, Extent]);
 members!(Access, [SampleLocal, CrossSampleRead, CrossSampleWrite]);
 members!(MapBits, [B32, B64]);
@@ -177,7 +177,11 @@ members!(StepOp, [Lu, LuSolve, LuSolveT, LuInverse, LuDet, Chol, CholFrom, ChoSo
     ScatterZero, ScatterChunks, ScatterCells]);
 
 // The records: each field once, in wire order, under its own name.
-record!(Slot, "slot", [role, name, dtype, shape, index, axes]);
+record!(
+    Slot,
+    "slot",
+    [role, name, dtype, shape, index, axes, zeroed]
+);
 record!(Axis, "axis", [label, extent]);
 record!(Walk, "walk", [access, finish, slots]);
 record!(Kind, "kind", [guard, lanes, sink]);
@@ -598,6 +602,7 @@ mod tests {
                 shape: vec![3],
                 index: 0,
                 axes: None,
+                zeroed: false,
             }],
         };
         let stage = TeamStage {

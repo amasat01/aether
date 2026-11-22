@@ -109,6 +109,7 @@
 #include "aether/index/SampleIndex.h"
 #include "aether/layout/Extents.h"
 #include "aether/layout/Layout.h"
+#include "aether/view/Edge.h"
 #include "aether/view/Item.h"
 #include "aether/view/Reshape.h"
 #include "aether/view/RuntimeView.h"

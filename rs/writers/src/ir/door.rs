@@ -472,15 +472,21 @@ pub fn canonical_over(
     Ok(walk)
 }
 
-/// The contract name whose accumulate commits through a companion plane when the walk is keyed
-/// automatically.
-const KEYED_AUTO_CONTRACT: &str = "keyed_auto";
+/// Whether the update commits through a companion plane: an add under the compensated summation.
+pub fn compensates(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
+    let ctx = ctx.into().raw();
+    Ok(text_field(ctx, node, "op")? == "add"
+        && text_field(ctx, node, "summation")? == "compensated")
+}
 
-/// Whether an accumulate under the contract commits through a companion plane: the contracts
-/// `compensated` and
-/// the automatic keyed one.
-pub fn compensates(contract: &str) -> Result<bool, Refusal> {
-    Ok(contract == "compensated" || contract == KEYED_AUTO_CONTRACT)
+/// Whether the runtime zeroes the plane a sink writes before the run: every write that accumulates, and a sample sum, does; a
+/// store does not. The spelling of the plane's name follows this fact.
+fn zeroes_plane(ctx: *mut RxCtx, node: u32) -> Result<bool, Refusal> {
+    // an ordered accumulate refines the update without an operation of its own, so it is asked first
+    if is_a(ctx, node, "sample_sum")? || is_a(ctx, node, "ordered_accum_write")? {
+        return Ok(true);
+    }
+    Ok(is_a(ctx, node, "update")? && text_field(ctx, node, "op")? != "store")
 }
 
 /// Whether the node is of the named node kind or a kind derived from it.
@@ -523,13 +529,25 @@ fn present(ctx: *mut RxCtx, status: c_int) -> Result<bool, Refusal> {
 }
 
 /// A field that holds text, without quotes; `None` when the field holds nothing; an error when it
-/// holds another kind.
+/// holds another kind. The role of a written plane is answered as its spelling role, which tells a plane the runtime zeroes
+/// from one it does not.
 pub fn field_text(
     ctx: impl Into<CtxPtr>,
     node: u32,
     name: &str,
 ) -> Result<Option<String>, Refusal> {
     let ctx = ctx.into().raw();
+    let held = raw_field_text(ctx, node, name)?;
+    if name == "role" && held.as_deref() == Some("plane_out") {
+        return Ok(Some(
+            crate::spell::written_role(zeroes_plane(ctx, node)?).into(),
+        ));
+    }
+    Ok(held)
+}
+
+/// The text a field holds, as the IR states it.
+fn raw_field_text(ctx: *mut RxCtx, node: u32, name: &str) -> Result<Option<String>, Refusal> {
     let name = cs(name)?;
     let mut len = 0usize;
     let mut status =

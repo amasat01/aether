@@ -11,7 +11,7 @@ use crate::ir::analysis as an;
 use crate::ir::door::RxCtx;
 use crate::lanes::device as persist;
 use crate::refuse::{nib, Refusal};
-use crate::spell::binding_name;
+use crate::spell::{binding_name, ZEROED_PLANE};
 use crate::unit::entry::{HostSource, Render};
 use crate::unit::sums;
 use crate::unit::two_path;
@@ -156,8 +156,8 @@ fn fold_entries(
             prologue::index_prologue(&Geometry::default()),
         ]);
         let (into, from) = (
-            binding_name("accum_out", 0, &target)?,
-            binding_name("accum_out", 0, &companion)?,
+            binding_name(ZEROED_PLANE, 0, &target)?,
+            binding_name(ZEROED_PLANE, 0, &companion)?,
         );
         lines.push(format!(
             "        hawk_abi::fold_companion({into}, {from}, i);"

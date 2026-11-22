@@ -4,10 +4,11 @@
 //! unpacking of the entry's
 //! arguments. The host and device arms differ only in the arguments they pass here.
 use crate::body::frame::needs::{Need, Needs as BodyNeeds};
+use crate::contract::types::Role;
 use crate::contract::types::{Active, Axis, Exports, Scalar, Target, ThreadBox, Walk as TypedWalk};
 use crate::ir::door::RxCtx;
 use crate::refuse::{fault, not_written, Refusal};
-use crate::spell::binding_name;
+use crate::spell::{binding_name, written_role, KEPT_PLANE, ZEROED_PLANE};
 use text::*;
 
 pub mod boxed;
@@ -95,7 +96,7 @@ pub fn unpack_lines(
 }
 
 /// The slot roles an entry may write through.
-pub const WRITABLE: [&str; 4] = ["mutable", "out", "wide_out", "accum_out"];
+pub const WRITABLE: [&str; 4] = ["mutable", "out", KEPT_PLANE, ZEROED_PLANE];
 
 /// The element types an index plane may hold.
 pub const INT_PLANE: [&str; 2] = ["int32", "uint32"];
@@ -664,7 +665,10 @@ pub fn walk_from(walk: &TypedWalk) -> Walk {
             .slots
             .iter()
             .map(|slot| Slot {
-                role: slot.role.name().to_string(),
+                role: match slot.role {
+                    Role::PlaneOut => written_role(slot.zeroed).to_string(),
+                    other => other.name().to_string(),
+                },
                 name: slot.name.clone(),
                 dtype: slot.dtype.name().to_string(),
                 shape: slot.shape.clone(),

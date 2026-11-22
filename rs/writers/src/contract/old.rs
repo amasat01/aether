@@ -515,6 +515,13 @@ fn walk_of(walk: &Json) -> Result<Walk, Refusal> {
     let spec = walk
         .get("arg_spec")
         .ok_or_else(|| bad("contract: walk without arg_spec"))?;
+    // a recording migrated to the one written-plane role lists the planes that had the accumulate role beside its arg_spec
+    let zeroed: Vec<&str> = walk
+        .get("zeroed_outputs")
+        .map_or(&[][..], |names| names.arr())
+        .iter()
+        .map(|name| text(Some(name)))
+        .collect();
     let mut slots = vec![];
     for key in spec.arr() {
         let (role, name) = pair_key(key);
@@ -534,6 +541,8 @@ fn walk_of(walk: &Json) -> Result<Walk, Refusal> {
                 .collect(),
             index,
             axes: None,
+            // a recording names the two written roles apart: the accumulate targets are the planes the runtime zeroes
+            zeroed: role == "accum_out" || zeroed.contains(&name),
         });
     }
     let access = walk.get("access").and_then(|a| a.get("cls"));
@@ -552,9 +561,8 @@ fn role_of(name: &str) -> Result<Role, Refusal> {
         "mutable" => Role::Mutable,
         "plane_in" => Role::PlaneIn,
         "lookup" => Role::Lookup,
-        "wide_out" => Role::WideOut,
+        "plane_out" | "wide_out" | "accum_out" => Role::PlaneOut,
         "uniform" => Role::Uniform,
-        "accum_out" => Role::AccumOut,
         "terminated" => Role::Terminated,
         "wide_in" => Role::WideIn,
         "nsamples" => Role::Nsamples,

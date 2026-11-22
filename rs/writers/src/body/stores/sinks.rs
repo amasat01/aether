@@ -5,7 +5,7 @@ use crate::body::Class;
 use crate::body::{CompensatedPlan, CompensatedTarget, Frame, Name, NameKind};
 use crate::ir::door;
 use crate::refuse::{fault, nib, Refusal};
-use crate::spell::{binding_name, element_at};
+use crate::spell::{binding_name, element_at, ZEROED_PLANE};
 
 /// The text of a value stored into a plane element: a banded unit's plane element is a `Real`
 /// built from the band.
@@ -68,9 +68,9 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// An indexed wide write: the value into the plane element the index list names, under the write's edge rule (a scalar value
+/// An indexed store: the value into the plane element the index list names, under the write's edge rule (a scalar value
 /// only). A `zero` edge drops a write outside the plane.
-pub(crate) fn wide_write(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+pub(crate) fn indexed_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     if !f.node(f.opp(p)[0]).ty.shape.is_empty() {
         return Err(nib("an indexed wide write of a rank > 0 value"));
     }
@@ -198,17 +198,23 @@ pub(crate) fn accum(f: &mut Frame, sink: u32, _p: usize) -> Result<(), Refusal> 
     accum_of(f, sink)
 }
 
+/// The name the accumulate spells its form by: `or` for a bit-or, `compensated` or `plain` for an add by its summation, `auto`
+/// otherwise. An add in lane order is lowered by the wings before the writer, so it is refused here.
+fn accumulate_contract(f: &mut Frame, h: u32) -> Result<String, Refusal> {
+    if text_field(f.ctx(), h, "order")? == "lane" {
+        return Err(nib("accumulate under contract ordered"));
+    }
+    if text_field(f.ctx(), h, "op")? == "or" {
+        return Ok("or".into());
+    }
+    text_field(f.ctx(), h, "summation")
+}
+
 /// A scattered accumulate by the sink's handle (a loop body's sink has no slot of its own).
 pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let h = sink;
     let operands = crate::ir::door::operands(f.ctx(), h)?;
-    let contract = text_field(f.ctx(), h, "contract")?;
-    if !matches!(
-        contract.as_str(),
-        "auto" | "plain" | "or" | "compensated" | "keyed_auto"
-    ) {
-        return Err(nib(format!("accumulate under contract {contract}")));
-    }
+    let contract = accumulate_contract(f, h)?;
     if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {
         return Err(nib("a scattered accumulate of a rank > 0 value"));
     }
@@ -218,9 +224,9 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         &text_field(f.ctx(), h, "name")?,
     )?;
     let value = f.arg(operands[0])?;
-    let mut comp = if crate::ir::door::compensates(&contract)? {
+    let mut comp = if crate::ir::door::compensates(f.ctx(), h)? {
         Some(binding_name(
-            "accum_out",
+            ZEROED_PLANE,
             0,
             &format!("{}_c", text_field(f.ctx(), h, "name")?),
         )?)
@@ -237,18 +243,24 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }) = f.compensated.clone()
     {
         if name == text_field(f.ctx(), h, "name")? {
-            comp = Some(binding_name("accum_out", 0, &plane)?)
+            comp = Some(binding_name(ZEROED_PLANE, 0, &plane)?)
         }
     }
-    // One index with no edge rule is the flat keyed form (runs, compensation) whatever the plane declares: a view with one
-    // axis takes the key as its element.
-    if operands.len() > 2 || text_field(f.ctx(), h, "edge")? != "unchecked" {
+    // One index under no edge rule or under `clamp` is the flat keyed form (runs, compensation) whatever the plane declares: a
+    // view with one axis takes the key as its element, and a clamped key keeps its runs, being a monotone function of it. The
+    // other edge rules drop or wrap a key, which a run cannot follow.
+    let edge = text_field(f.ctx(), h, "edge")?;
+    if operands.len() > 2 || !matches!(edge.as_str(), "unchecked" | "clamp") {
         return accum_at(f, h, &operands, &contract, &target, comp.as_deref(), &value);
     }
-    let index = format!(
-        "aether::SampleIndex::make(static_cast<std::size_t>({}))",
-        f.arg(operands[1])?
-    );
+    let key = f.arg(operands[1])?;
+    let position = if edge == "clamp" {
+        f.need(Need::Edge);
+        format!("aether::edge::clamp({key}, {target}.extent(0))")
+    } else {
+        key
+    };
+    let index = format!("aether::SampleIndex::make(static_cast<std::size_t>({position}))");
     if contract == "or" {
         f.need(Need::AccumOr);
         f.emit(format!("hawk_abi::accum_or({target}, {index}, {value});"));

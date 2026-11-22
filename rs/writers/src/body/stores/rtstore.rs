@@ -65,7 +65,7 @@ pub(crate) fn plane_is_stored(f: &Frame, name: &str) -> Result<bool, Refusal> {
         {
             continue;
         }
-        if !matches!(sink.class, Class::Assign | Class::WideWrite) || sink.ops.len() != 1 {
+        if !matches!(sink.class, Class::Assign | Class::StoreUpdate) || sink.ops.len() != 1 {
             return Err(nib("a mutable plane read in place but stored otherwise"));
         }
         stored = true;

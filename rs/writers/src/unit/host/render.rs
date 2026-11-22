@@ -14,7 +14,7 @@ use crate::lanes::host_interchange as interchange;
 use crate::lanes::host_split as split;
 use crate::lanes::host_text::{HOST_MASK_HELPERS, INDEPENDENT_ITERATIONS};
 use crate::refuse::{bad, fault, nib, Refusal};
-use crate::spell::binding_name;
+use crate::spell::{binding_name, ZEROED_PLANE};
 use crate::unit::entry::{HostSource, Render};
 use crate::unit::sums::*;
 use crate::unit::two_path;
@@ -555,7 +555,7 @@ fn companion_folds(
     for (comp, target) in companions {
         lines.extend([signature(&fold_name(name, target)), "{".into(), unpack(ctx, walk, w)?,
             "    const std::int64_t hawk_end = base + count;\n    for (std::int64_t hawk_i = base; hawk_i < hawk_end; ++hawk_i) {\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));\n        (void)hawk_i;\n        (void)nSamples;".into(),
-            format!("        hawk_abi::fold_companion({}, {}, i);", binding_name("accum_out", 0, target)?, binding_name("accum_out", 0, comp)?), "    }".into(), "}".into(), String::new()]);
+            format!("        hawk_abi::fold_companion({}, {}, i);", binding_name(ZEROED_PLANE, 0, target)?, binding_name(ZEROED_PLANE, 0, comp)?), "    }".into(), "}".into(), String::new()]);
     }
     Ok(lines)
 }

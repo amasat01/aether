@@ -30,8 +30,8 @@ impl Frame<'_> {
                     Class::Assign
                         | Class::WarpStore
                         | Class::SampleSum
-                        | Class::AccumWrite
-                        | Class::WideWrite
+                        | Class::AccumUpdate
+                        | Class::StoreUpdate
                         | Class::Finish
                         | Class::TapeWrite
                 ),

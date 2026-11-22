@@ -6,14 +6,30 @@ use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
 pub use band::{band_literal, literal_op};
 
+/// The spelling role of a written plane the runtime leaves as it is: the IR role `plane_out` for a plane a store writes.
+pub const KEPT_PLANE: &str = "plane_out";
+
+/// The spelling role of a written plane the runtime zeroes before the run: an accumulate target, which names its prefix
+/// apart from the planes a store writes.
+pub const ZEROED_PLANE: &str = "plane_out+zeroed";
+
+/// The spelling role of a written plane by whether the runtime zeroes it.
+pub fn written_role(zeroed: bool) -> &'static str {
+    if zeroed {
+        ZEROED_PLANE
+    } else {
+        KEPT_PLANE
+    }
+}
+
 /// The prefix of the names a role's slots are bound under, none for a role that has no binding. A plane read per sample is
 /// named by the rank of its value: scalar, vector, matrix, or a general plane.
 pub fn ident_prefix(role: &str, rank: usize) -> Option<&'static str> {
     Some(match role {
         "mutable" => "mut",
         "out" => "out",
-        "wide_out" => "wout",
-        "accum_out" => "aout",
+        KEPT_PLANE => "wout",
+        ZEROED_PLANE => "aout",
         "plane_in" => match rank {
             0 => "psc",
             1 => "vin",

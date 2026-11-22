@@ -19,8 +19,10 @@ pub fn mix_plane(dispatch_name: &str) -> String {
     format!("{dispatch_name}_mix")
 }
 
+use crate::spell::{KEPT_PLANE, ZEROED_PLANE};
+
 /// The roles whose slot is always the scalar handle, whatever its plane.
-const HANDLE_ONLY: [&str; 5] = ["lookup", "terminated", "wide_in", "wide_out", "accum_out"];
+const HANDLE_ONLY: [&str; 5] = ["lookup", "terminated", "wide_in", KEPT_PLANE, ZEROED_PLANE];
 
 /// How a slot of the role crosses the launch boundary: the runtime's `GRefMirror` for a plane
 /// read by reference, its `ScalarHandle`, or `value` for a by-value argument. A role that is a
@@ -51,12 +53,13 @@ pub fn mirror_of(role: &str, rank: usize) -> Result<&'static str, Refusal> {
 mod tests {
     //! The launch-boundary shape of a slot by its role and rank.
     use super::mirror_of;
+    use crate::spell::{KEPT_PLANE, ZEROED_PLANE};
 
     /// Oracle: the table above, read by hand: a role pinned to the scalar handle refuses a plane of a rank (a plane needs the larger
     /// mirror, which that role has no packing for) and takes a rank-0 slot; a role read by reference takes any rank.
     #[test]
     fn a_ranked_plane_in_a_handle_only_role_is_refused_and_its_neighbours_are_not() {
-        for role in ["terminated", "wide_in", "wide_out", "accum_out"] {
+        for role in ["terminated", "wide_in", KEPT_PLANE, ZEROED_PLANE] {
             let why = mirror_of(role, 1).unwrap_err();
             assert_eq!(
                 why.reason,
