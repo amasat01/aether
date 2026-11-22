@@ -422,6 +422,8 @@ pub struct Needs {
     pub fold_axes: bool,
     /// Whether the body opens run commits.
     pub runs: bool,
+    /// Whether the body updates an element through the library's named atomic helpers.
+    pub element_atomic: bool,
     /// Whether the unit finishes lanes.
     pub finish: bool,
     /// Whether lane indices are kept in 32 bits.
@@ -455,6 +457,7 @@ fn include_block(m: &Mode, arms: &Arms, n: &Needs) -> String {
         (n.random, RANDOM_INCLUDE),
         (n.edges, EDGE_INCLUDE),
         (n.runs, RUN_INCLUDE),
+        (n.element_atomic, ELEMENT_ATOMIC_INCLUDE),
         (
             n.compensated || n.compensated_at || n.store_compensated || n.fold || n.sample_sum,
             TWO_SUM_INCLUDE,
@@ -615,6 +618,7 @@ pub fn needs_of_body(
         fold,
         fold_axes: false,
         runs: body.has(Need::AccumRun),
+        element_atomic: body.has(Need::ElementAtomic),
         finish,
         narrow_int,
         sample_sum,
@@ -827,6 +831,7 @@ mod tests {
             fold: false,
             fold_axes: false,
             runs: false,
+            element_atomic: false,
             finish: false,
             narrow_int: false,
             sample_sum: false,

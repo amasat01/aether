@@ -12,6 +12,7 @@ This section covers what changes from 0.7.3. `aether-dsc` moves with the C++ ver
 
 ### Added
 
+- **Atomic element updates, `aether/accum/ElementAtomic.h`.** `aether::accum::atomic::minAt`, `maxAt`, `andAt`, `xorAt`, `fetchAddAt`, `exchangeAt` and `compareExchangeAt` update one element and return the value it held; on the host through `std::atomic_ref`, on the device through the atomic intrinsics, with a compare-exchange loop for floating min and max. A NaN absorbs in `minAt` and `maxAt`, so the fold does not depend on the order. The header is part of the runtime-compiled payload. New tests `AtomicElementTest.*`.
 - **More banded functions:** `tan`, `exp2`, `expm1`, `log2`, `log10`, `log1p`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh` and `atanh`, each with a stated per-op ULP bound and a golden corpus behind it.
 - **Banded expression chains.** `a * b + c` on banded values keeps the result unrestored between ops and normalises only where a consumer reads the parts in order (a division, a root, a comparison, a store). Where an op would need a normalised value and has none, the overload is deleted and the error names the fix.
 - Banded headers compile under NVRTC, and `aether-dsc` ships them in its payload.

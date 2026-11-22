@@ -45,6 +45,9 @@ pub enum Need {
     AccumCompensated,
     /// `aether::accum::run::`: a run of commits against one target.
     AccumRun,
+    /// `aether::accum::atomic::`: an atomic update of one element by a named library helper (min, max, and, xor, exchange,
+    /// compare-exchange, fetch-add).
+    ElementAtomic,
     /// `aether::accum::run::add...Compensated...`: a run of commits that carries a correction
     /// plane.
     CompensatedRun,
@@ -119,7 +122,7 @@ impl Needs {
     /// The needs a finished text shows by its substrings: the only search of text left. It serves
     /// a body the caller gave, which has no records, and the shadow check of the recorded needs.
     pub fn scan(text: &str) -> Needs {
-        let tests: [(Need, &str); 19] = [
+        let tests: [(Need, &str); 20] = [
             (Need::StoreCompensated, "hawk_abi::store_compensated("),
             (Need::Tiled, "hawk_abi::tiled<"),
             (Need::WarpSum, "hawk_abi::warp_sum<"),
@@ -141,6 +144,7 @@ impl Needs {
             ),
             (Need::AccumCompensated, "hawk_abi::accum_add_compensated("),
             (Need::AccumRun, "aether::accum::run::"),
+            (Need::ElementAtomic, "aether::accum::atomic::"),
             (Need::Random, "aether::random::"),
         ];
         let mut needs = Needs::default();

@@ -479,14 +479,15 @@ pub fn compensates(ctx: impl Into<CtxPtr>, node: u32) -> Result<bool, Refusal> {
         && text_field(ctx, node, "summation")? == "compensated")
 }
 
-/// Whether the runtime zeroes the plane a sink writes before the run: every write that accumulates, and a sample sum, does; a
-/// store does not. The spelling of the plane's name follows this fact.
+/// Whether the runtime zeroes the plane a sink writes before the run: an add, an or and a sample sum do (their fold starts from
+/// zero); a store, the other folds and the exchanges do not, the value the caller gave the plane being part of their result. The
+/// spelling of the plane's name follows this fact, which the IR's walk states for the unit description by the same rule.
 fn zeroes_plane(ctx: *mut RxCtx, node: u32) -> Result<bool, Refusal> {
     // an ordered accumulate refines the update without an operation of its own, so it is asked first
     if is_a(ctx, node, "sample_sum")? || is_a(ctx, node, "ordered_accum_write")? {
         return Ok(true);
     }
-    Ok(is_a(ctx, node, "update")? && text_field(ctx, node, "op")? != "store")
+    Ok(is_a(ctx, node, "update")? && matches!(text_field(ctx, node, "op")?.as_str(), "add" | "or"))
 }
 
 /// Whether the node is of the named node kind or a kind derived from it.

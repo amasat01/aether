@@ -29,6 +29,9 @@ pub const RANDOM_INCLUDE_MARKER: &str = r####"#include <aether/math/math.h>
 /// The include of the run commits.
 pub const RUN_INCLUDE: &str = r####"#include <aether/accum/run.h>
 "####;
+/// The include of the atomic element updates.
+pub const ELEMENT_ATOMIC_INCLUDE: &str = r####"#include <aether/accum/ElementAtomic.h>
+"####;
 /// The include of the compensated sums.
 pub const TWO_SUM_INCLUDE: &str = r####"#include <aether/accum/TwoSum.h>
 "####;

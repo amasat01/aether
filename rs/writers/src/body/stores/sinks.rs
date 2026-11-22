@@ -69,8 +69,13 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
 }
 
 /// An indexed store: the value into the plane element the index list names, under the write's edge rule (a scalar value
-/// only). A `zero` edge drops a write outside the plane.
+/// only). A `zero` edge drops a write outside the plane. A store under the conflict rule `any` is an atomic exchange.
 pub(crate) fn indexed_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+    // lanes that may share a key: the store is one atomic exchange, so some lane's value wins and none is torn
+    if text_field(f.ctx(), f.node(p).h, "conflict")? == "any" {
+        let h = f.node(p).h;
+        return element_update(f, h, "exchangeAt");
+    }
     if !f.node(f.opp(p)[0]).ty.shape.is_empty() {
         return Err(nib("an indexed wide write of a rank > 0 value"));
     }
@@ -210,9 +215,80 @@ fn accumulate_contract(f: &mut Frame, h: u32) -> Result<String, Refusal> {
     text_field(f.ctx(), h, "summation")
 }
 
+/// The library helper that commits one atomic update of the sink `h` at an element, `None` for the updates the other forms of
+/// this file spell (the store, the or, the add that returns nothing).
+pub(crate) fn element_helper(f: &Frame, h: u32) -> Result<Option<&'static str>, Refusal> {
+    let returns_old = door::field_flag(f.ctx(), h, "returns_old")?.unwrap_or(false);
+    Ok(
+        match (text_field(f.ctx(), h, "op")?.as_str(), returns_old) {
+            ("min", _) => Some("minAt"),
+            ("max", _) => Some("maxAt"),
+            ("and", _) => Some("andAt"),
+            ("xor", _) => Some("xorAt"),
+            ("exchange", _) => Some("exchangeAt"),
+            ("compare_exchange", _) => Some("compareExchangeAt"),
+            ("add", true) => Some("fetchAddAt"),
+            _ => None,
+        },
+    )
+}
+
+/// An atomic update of one element by the library helper `helper`: the element is the plane's cell at the index list (the
+/// lane's own cell when there is none), under the update's edge rule, and a `zero` edge drops an update outside the plane. A
+/// compare-exchange passes its expected value before the new one, as the helper takes them.
+fn element_update(f: &mut Frame, h: u32, helper: &str) -> Result<(), Refusal> {
+    if text_field(f.ctx(), h, "order")? == "lane" {
+        return Err(nib("an atomic update in lane order"));
+    }
+    let operands = door::operands(f.ctx(), h)?;
+    if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {
+        return Err(nib("an atomic update of a rank > 0 value"));
+    }
+    if door::field_flag(f.ctx(), h, "returns_old")?.unwrap_or(false) {
+        return Err(nib("an update that returns the old value"));
+    }
+    let compare = text_field(f.ctx(), h, "op")? == "compare_exchange";
+    let held = if compare { 2 } else { 1 };
+    let mut values = vec![f.arg(operands[0])?];
+    if compare {
+        values.insert(0, f.arg(operands[1])?);
+    }
+    let mut indices = vec![];
+    for &operand in &operands[held..] {
+        indices.push(f.arg(operand)?);
+    }
+    let target = binding_name(
+        &text_field(f.ctx(), h, "role")?,
+        0,
+        &text_field(f.ctx(), h, "name")?,
+    )?;
+    // the view's call form, never its `[]`: that answers a proxy, and the helper takes the element itself
+    let (element, test) = if indices.is_empty() {
+        (format!("{target}(i.global())"), None)
+    } else {
+        element_at(&target, &indices, &text_field(f.ctx(), h, "edge")?, true)?
+    };
+    if element.contains("aether::edge::") {
+        f.need(Need::Edge);
+    }
+    f.need(Need::ElementAtomic);
+    let update = format!(
+        "aether::accum::atomic::{helper}({element}, {});",
+        values.join(", ")
+    );
+    f.emit(match test {
+        Some(test) => format!("if ({test}) {update}"),
+        None => update,
+    });
+    Ok(())
+}
+
 /// A scattered accumulate by the sink's handle (a loop body's sink has no slot of its own).
 pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let h = sink;
+    if let Some(helper) = element_helper(f, h)? {
+        return element_update(f, h, helper);
+    }
     let operands = crate::ir::door::operands(f.ctx(), h)?;
     let contract = accumulate_contract(f, h)?;
     if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {

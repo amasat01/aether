@@ -179,6 +179,7 @@
 
 #include "aether/accum/AccumPlane.h"
 #include "aether/accum/AppendCounter.h"
+#include "aether/accum/ElementAtomic.h"
 #include "aether/accum/atomic.h"
 #include "aether/accum/run.h"
 #include "aether/array/Array.h"

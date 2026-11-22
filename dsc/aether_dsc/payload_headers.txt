@@ -19,6 +19,7 @@
 # `aether/aether.h` (the umbrella) is deliberately not listed: it
 # transitively includes every one of the ~28 excluded headers, so it is
 # not yet part of the payload either.
+aether/accum/ElementAtomic.h
 aether/accum/TwoSum.h
 aether/accum/run.h
 aether/banded/Accum.h

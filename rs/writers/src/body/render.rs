@@ -542,7 +542,9 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
         if plans.companions.contains(&f.field_text(h, "name")?) {
             continue;
         }
-        if class == Class::AccumUpdate && nops >= 2 {
+        if class == Class::AccumUpdate
+            && (nops >= 2 || stores::sinks::element_helper(f, h)?.is_some())
+        {
             stores::sinks::accum(f, s, p)?;
             continue;
         }

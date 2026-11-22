@@ -5,7 +5,11 @@
 // host path (AETHER_CPP_MODE). Mirrors test_Atomic.cu (house convention —
 // see test_ArrayCapacity.cpp/.cu).
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <numeric>
 #include <vector>
 
 #include <omp.h>
@@ -135,6 +139,139 @@ TEST_F(AtomicMaxIntTest, ConcurrentMaxIsCorrect)
     }
 
     EXPECT_EQ(target, 999999);
+}
+
+/* ------------------------------------------------------------------ */
+/* element updates: minAt, maxAt, andAt, xorAt, fetchAddAt, exchangeAt, */
+/* compareExchangeAt. Reference: the sequential fold with std::min,     */
+/* std::max and the bit operators; the folds do not depend on the order */
+/* the threads arrive in, so the result is exact.                       */
+/* ------------------------------------------------------------------ */
+
+class AtomicElementTest : public ::testing::Test {
+protected:
+    static constexpr std::size_t N = 4096;
+
+    /** Pseudo-random candidates spread over both signs. */
+    template<class E>
+    static std::vector<E> candidates()
+    {
+        std::vector<E> out(N);
+        std::uint64_t state = 88172645463325252ull;
+        for (auto& x : out) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            x = static_cast<E>(static_cast<std::int64_t>(state % 20001) - 10000);
+        }
+        return out;
+    }
+
+    template<class E>
+    static void checkMinMax()
+    {
+        const auto cand = candidates<E>();
+        E lo = static_cast<E>(5), hi = static_cast<E>(-5);
+#pragma omp parallel for
+        for (std::size_t k = 0; k < N; ++k) {
+            aether::accum::atomic::minAt(lo, cand[k]);
+            aether::accum::atomic::maxAt(hi, cand[k]);
+        }
+        EXPECT_EQ(lo, std::min(static_cast<E>(5), *std::min_element(cand.begin(), cand.end())));
+        EXPECT_EQ(hi, std::max(static_cast<E>(-5), *std::max_element(cand.begin(), cand.end())));
+    }
+
+    template<class E>
+    static void checkBits()
+    {
+        const auto cand = candidates<E>();
+        E all = static_cast<E>(~E(0)), flip = E(0);
+        E wantAll = all, wantFlip = flip;
+        for (const E x : cand) {
+            wantAll  = static_cast<E>(wantAll & x);
+            wantFlip = static_cast<E>(wantFlip ^ x);
+        }
+#pragma omp parallel for
+        for (std::size_t k = 0; k < N; ++k) {
+            aether::accum::atomic::andAt(all, cand[k]);
+            aether::accum::atomic::xorAt(flip, cand[k]);
+        }
+        EXPECT_EQ(all, wantAll);
+        EXPECT_EQ(flip, wantFlip);
+    }
+};
+
+TEST_F(AtomicElementTest, MinAndMaxEqualTheSequentialFoldOnEveryType)
+{
+    checkMinMax<float>();
+    checkMinMax<double>();
+    checkMinMax<std::int32_t>();
+    checkMinMax<std::uint32_t>();
+    checkMinMax<std::int64_t>();
+}
+
+TEST_F(AtomicElementTest, AndAndXorEqualTheSequentialFoldOnEveryInteger)
+{
+    checkBits<std::int32_t>();
+    checkBits<std::uint32_t>();
+    checkBits<std::int64_t>();
+}
+
+TEST_F(AtomicElementTest, ANaNAbsorbsInMinAndMaxWhateverTheOrder)
+{
+    for (std::size_t at : {std::size_t{0}, N / 2, N - 1}) {
+        double lo = 1.0, hi = 1.0;
+#pragma omp parallel for
+        for (std::size_t k = 0; k < N; ++k) {
+            const double v = (k == at) ? std::numeric_limits<double>::quiet_NaN() : static_cast<double>(k);
+            aether::accum::atomic::minAt(lo, v);
+            aether::accum::atomic::maxAt(hi, v);
+        }
+        EXPECT_TRUE(std::isnan(lo));
+        EXPECT_TRUE(std::isnan(hi));
+    }
+}
+
+TEST_F(AtomicElementTest, FetchAddReturnsEachPartialSumOnce)
+{
+    std::int64_t cell = 0;
+    std::vector<std::int64_t> seen(N);
+#pragma omp parallel for
+    for (std::size_t k = 0; k < N; ++k)
+        seen[k] = aether::accum::atomic::fetchAddAt(cell, 1);
+    EXPECT_EQ(cell, static_cast<std::int64_t>(N));
+    std::sort(seen.begin(), seen.end());
+    for (std::size_t k = 0; k < N; ++k)
+        EXPECT_EQ(seen[k], static_cast<std::int64_t>(k));
+}
+
+TEST_F(AtomicElementTest, ExchangeChainReturnsEveryValueOnceAndTheCellKeepsOne)
+{
+    // N threads exchange their own value into one cell that starts at -1: the old values returned, together with the
+    // final cell, are exactly the initial value and the N values, each once.
+    double cell = -1.0;
+    std::vector<double> old(N);
+#pragma omp parallel for
+    for (std::size_t k = 0; k < N; ++k)
+        old[k] = aether::accum::atomic::exchangeAt(cell, static_cast<double>(k));
+    old.push_back(cell);
+    std::sort(old.begin(), old.end());
+    EXPECT_EQ(old[0], -1.0);
+    for (std::size_t k = 0; k < N; ++k)
+        EXPECT_EQ(old[k + 1], static_cast<double>(k));
+}
+
+TEST_F(AtomicElementTest, CompareExchangeOnAFreshCellHasExactlyOneWinner)
+{
+    std::uint32_t cell = 0;
+    std::vector<std::uint32_t> seen(N);
+#pragma omp parallel for
+    for (std::size_t k = 0; k < N; ++k)
+        seen[k] = aether::accum::atomic::compareExchangeAt(cell, 0u, static_cast<std::uint32_t>(k + 1));
+    const auto winners = static_cast<std::size_t>(std::count(seen.begin(), seen.end(), 0u));
+    EXPECT_EQ(winners, std::size_t{1});
+    EXPECT_GE(cell, 1u);
+    EXPECT_LE(cell, static_cast<std::uint32_t>(N));
 }
 
 } // namespace
