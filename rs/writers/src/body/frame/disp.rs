@@ -2,6 +2,7 @@
 //! tells whether a rendered value is named, in each of the three scopes.
 use crate::body::frame::table::Disp;
 use crate::body::{placed, Class, Frame, OpKind};
+use crate::ir::door;
 use crate::refuse::Refusal;
 
 /// Where a value is being named.
@@ -64,8 +65,11 @@ impl Frame<'_> {
             self.node(p).kind == Some(OpKind::Component) && self.is_lazy(self.opp(p)[0]);
         Ok(match scope {
             ScopeKind::Top => {
+                // a plane read only through `At` needs no local of its own: a matrix plane is read row by row, a plane
+                // with axes through its view's call form
                 let crossed = role == Some("plane_in")
-                    && self.node(p).rank() == 2
+                    && (self.node(p).rank() == 2
+                        || door::axes_declared(self.ctx(), self.node(p).h)? > 0)
                     && !self.users(p).is_empty()
                     && self
                         .users(p)
