@@ -396,9 +396,7 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }
     let operands = crate::ir::door::operands(f.ctx(), h)?;
     let contract = accumulate_contract(f, h)?;
-    if !crate::body::ty_of(f.ctx(), operands[0])?.shape.is_empty() {
-        return Err(nib("a scattered accumulate of a rank > 0 value"));
-    }
+    let shape = crate::body::ty_of(f.ctx(), operands[0])?.shape;
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
         0,
@@ -429,10 +427,24 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }
     // One index under no edge rule or under `clamp` is the flat keyed form (runs, compensation) whatever the plane declares: a
     // view with one axis takes the key as its element, and a clamped key keeps its runs, being a monotone function of it. The
-    // other edge rules drop or wrap a key, which a run cannot follow.
+    // other edge rules drop or wrap a key, which a run cannot follow, and a value of rank above zero is added component by
+    // component at the elements of a plane with axes.
     let edge = text_field(f.ctx(), h, "edge")?;
-    if operands.len() > 2 || !matches!(edge.as_str(), "unchecked" | "clamp") {
-        return accum_at(f, h, &operands, &contract, &target, comp.as_deref(), &value);
+    // A plane that states no axes has no stated extent along the key, so its elements of a vector or matrix cannot be placed.
+    if !shape.is_empty() && crate::ir::door::axes_declared(f.ctx(), h)? == 0 {
+        return Err(nib(
+            "a scattered accumulate of a rank > 0 value into a plane that states no axes",
+        ));
+    }
+    if operands.len() > 2 || !shape.is_empty() || !matches!(edge.as_str(), "unchecked" | "clamp") {
+        let at = Addend {
+            contract: &contract,
+            target: &target,
+            comp: comp.as_deref(),
+            value: &value,
+            shape: &shape,
+        };
+        return accum_at(f, h, &operands, &at);
     }
     let key = f.arg(operands[1])?;
     let position = if edge == "clamp" {
@@ -495,46 +507,64 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// What a scattered accumulate into a plane with axes adds and where: the contract, the target and its companion plane, the
+/// text of the value and the value's shape.
+struct Addend<'a> {
+    /// The summation or bit contract the add spells its form by.
+    contract: &'a str,
+    /// The binding of the plane written.
+    target: &'a str,
+    /// The binding of the plane that holds the compensation terms, for a compensated add.
+    comp: Option<&'a str>,
+    /// The text of the value added.
+    value: &'a str,
+    /// The shape of the value (empty for a scalar).
+    shape: &'a [usize],
+}
+
 /// A scattered accumulate into a plane with axes: the term added at the element the index list names under the write's edge rule
-/// (a `zero` edge drops a term outside the plane). A compensated accumulate adds the term's rounding error at the same element of
-/// the companion plane `comp`, which has the axes of its target. A bit-or contract commits an or at the element.
-fn accum_at(
-    f: &mut Frame,
-    h: u32,
-    operands: &[u32],
-    contract: &str,
-    target: &str,
-    comp: Option<&str>,
-    value: &str,
-) -> Result<(), Refusal> {
+/// (a `zero` edge drops a term outside the plane). A value of rank above zero is added component by component, each at its own
+/// element (the components ahead of the axes). A compensated accumulate adds the term's rounding error at the same element of
+/// the companion plane, which has the axes and the value shape of its target. A bit-or contract commits an or at the element.
+fn accum_at(f: &mut Frame, h: u32, operands: &[u32], at: &Addend) -> Result<(), Refusal> {
     let mut indices = vec![];
     for &operand in &operands[1..] {
         indices.push(f.arg(operand)?);
     }
     let edge = text_field(f.ctx(), h, "edge")?;
-    let (element, test) = element_at(target, &indices, &edge, true)?;
-    let add = match comp {
-        _ if contract == "or" => {
-            f.need(Need::AccumOrAt);
-            format!("hawk_abi::accum_or_at({element}, {value});")
+    for component in flat_indices(at.shape) {
+        let place = |binding: &str| {
+            if component.is_empty() {
+                element_at(binding, &indices, &edge, true)
+            } else {
+                component_at(binding, &component, &indices, &edge, true)
+            }
+        };
+        let (element, test) = place(at.target)?;
+        let value = component_of(at.value.to_string(), &component);
+        let add = match at.comp {
+            _ if at.contract == "or" => {
+                f.need(Need::AccumOrAt);
+                format!("hawk_abi::accum_or_at({element}, {value});")
+            }
+            Some(comp) => {
+                f.need(Need::AccumCompensatedAt);
+                let (correction, _) = place(comp)?;
+                format!("hawk_abi::accum_add_compensated_at({element}, {correction}, {value});")
+            }
+            None => {
+                f.need(Need::AccumAt);
+                format!("hawk_abi::accum_add_at({element}, {value});")
+            }
+        };
+        if element.contains("aether::edge::") {
+            f.need(Need::Edge);
         }
-        Some(comp) => {
-            f.need(Need::AccumCompensatedAt);
-            let (correction, _) = element_at(comp, &indices, &edge, true)?;
-            format!("hawk_abi::accum_add_compensated_at({element}, {correction}, {value});")
-        }
-        None => {
-            f.need(Need::AccumAt);
-            format!("hawk_abi::accum_add_at({element}, {value});")
-        }
-    };
-    if element.contains("aether::edge::") {
-        f.need(Need::Edge);
+        f.emit(match test {
+            Some(test) => format!("if ({test}) {add}"),
+            None => add,
+        });
     }
-    f.emit(match test {
-        Some(test) => format!("if ({test}) {add}"),
-        None => add,
-    });
     Ok(())
 }
 
