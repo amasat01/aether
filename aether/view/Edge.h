@@ -33,8 +33,9 @@ template<class Index>
 AETHER_DEVICEHOST() constexpr std::size_t wrap(Index index, std::size_t extent)
 {
     const auto n = static_cast<std::int64_t>(extent);
-    const auto value = static_cast<std::int64_t>(index) % n;
-    return static_cast<std::size_t>(value < 0 ? value + n : value);
+    // Two remainders and no branch: a device compiler was measured to fold the form "remainder, then add the extent
+    // when negative" wrongly for a constant extent of 3, giving an index of -1.
+    return static_cast<std::size_t>(((static_cast<std::int64_t>(index) % n) + n) % n);
 }
 
 /** @brief Whether the index lies within `[0, extent)`. */

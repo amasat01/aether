@@ -4,6 +4,7 @@
 // Edge rules (host build): the oracle is the rule stated in words, applied index by index to a small extent.
 
 #include <cstddef>
+#include <cstdint>
 
 #include <gtest/gtest.h>
 
@@ -28,6 +29,17 @@ TEST_F(EdgeTest, WrapCountsAnOutOfRangeIndexAroundTheExtent)
     const std::size_t out[] = { 3, 0, 3, 0, 3, 0, 1 };
     for (std::size_t k = 0; k < 7; ++k)
         EXPECT_EQ(aether::edge::wrap(in[k], 4), out[k]);
+}
+
+TEST_F(EdgeTest, WrapEqualsTheMathematicalRemainderForEveryExtentUpToSeven)
+{
+    for (std::int64_t extent = 1; extent <= 7; ++extent)
+        for (std::int64_t index = -3 * extent - 2; index <= 3 * extent + 2; ++index) {
+            std::int64_t expected = index;    // the reference: step by the extent into [0, extent)
+            while (expected < 0) expected += extent;
+            while (expected >= extent) expected -= extent;
+            EXPECT_EQ(aether::edge::wrap(index, static_cast<std::size_t>(extent)), static_cast<std::size_t>(expected));
+        }
 }
 
 TEST_F(EdgeTest, InsideIsTrueExactlyForIndicesBelowTheExtent)
