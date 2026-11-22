@@ -165,7 +165,10 @@ fn param_type(slot: &Slot) -> Result<String, Refusal> {
 
 /// The identifier the entry takes a slot's mirror under.
 pub fn param_name(slot: &Slot) -> Result<String, Refusal> {
-    Ok(format!("p_{}", binding_name(&slot.role, &slot.name)?))
+    Ok(format!(
+        "p_{}",
+        binding_name(&slot.role, slot.shape.len(), &slot.name)?
+    ))
 }
 
 /// The `__global__` entry: the slots by value, then the partition triple.

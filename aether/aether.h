@@ -216,6 +216,7 @@
 #include "aether/typedefs.h"
 #include "aether/version.h"
 #include "aether/view/Copy.h"
+#include "aether/view/Edge.h"
 #include "aether/view/MakeReshape.h"
 #include "aether/view/MakeRuntimeView.h"
 #include "aether/view/MakeTableView.h"

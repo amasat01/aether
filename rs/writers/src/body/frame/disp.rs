@@ -62,7 +62,8 @@ impl Frame<'_> {
             self.node(p).kind == Some(OpKind::Component) && self.is_lazy(self.opp(p)[0]);
         Ok(match scope {
             ScopeKind::Top => {
-                let crossed = role == Some("mat_in")
+                let crossed = role == Some("plane_in")
+                    && self.node(p).rank() == 2
                     && !self.users(p).is_empty()
                     && self
                         .users(p)

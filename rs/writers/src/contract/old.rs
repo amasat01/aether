@@ -533,6 +533,7 @@ fn walk_of(walk: &Json) -> Result<Walk, Refusal> {
                 .filter_map(Json::int)
                 .collect(),
             index,
+            axes: None,
         });
     }
     let access = walk.get("access").and_then(|a| a.get("cls"));
@@ -549,12 +550,10 @@ fn walk_of(walk: &Json) -> Result<Walk, Refusal> {
 fn role_of(name: &str) -> Result<Role, Refusal> {
     Ok(match name {
         "mutable" => Role::Mutable,
-        "per_sample" => Role::PerSample,
-        "vec_in" => Role::VecIn,
+        "plane_in" => Role::PlaneIn,
         "lookup" => Role::Lookup,
         "wide_out" => Role::WideOut,
         "uniform" => Role::Uniform,
-        "mat_in" => Role::MatIn,
         "accum_out" => Role::AccumOut,
         "terminated" => Role::Terminated,
         "wide_in" => Role::WideIn,
@@ -797,9 +796,9 @@ fn given_body(top: &Json) -> Option<GivenBody> {
 mod tests {
     use super::*;
 
-    const WALK: &str = r#"{"arg_spec":[["per_sample","x"]],
-        "slot_types":{"$map":[[["per_sample","x"],{"dtype":"f64","shape":[]}]]},
-        "slot_of":{"$map":[[["per_sample","x"],0]]},
+    const WALK: &str = r#"{"arg_spec":[["plane_in","x"]],
+        "slot_types":{"$map":[[["plane_in","x"],{"dtype":"f64","shape":[]}]]},
+        "slot_of":{"$map":[[["plane_in","x"],0]]},
         "access":{"cls":"sample_local"},"finish":null}"#;
     const SPEC: &str = r#"{"host":{"of":{"form":{"of":{"lazy_leaf_width":8,"rolled_fold_min":4}}}},
         "machine":{"isa":"arm64","facts":{"host_profile":"native","exact_host_profiles":[],

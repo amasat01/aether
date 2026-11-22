@@ -30,10 +30,15 @@ fn read(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (plane_p, index_p) = (f.opp(p)[0], f.opp(p)[1]);
     let plane = binding_name(
         &text_field(f.ctx(), f.node(plane_p).h, "role")?,
+        f.node(plane_p).rank(),
         &text_field(f.ctx(), f.node(plane_p).h, "name")?,
     )?;
     if f.node(p).rank() == 0 {
         return Err(nib("a team read of a scalar"));
+    }
+    // the slice index is the lane's own: no rule folds it, so a rule other than `unchecked` would be dropped silently
+    if text_field(f.ctx(), f.node(p).h, "edge")? != "unchecked" {
+        return Err(nib("a team read under an edge rule"));
     }
     let size = f.node(p).numel();
     let out = linalg::fresh_item(f, p)?;
@@ -99,6 +104,7 @@ fn write(
 ) -> Result<(), Refusal> {
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
+        0,
         &text_field(f.ctx(), h, "name")?,
     )?;
     let size: usize = shape.iter().product();

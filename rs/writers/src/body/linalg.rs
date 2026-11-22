@@ -132,7 +132,7 @@ fn direct_target(f: &Frame, p: usize) -> Result<Option<String>, Refusal> {
         }
         return Ok(Some(format!(
             "{}[i]",
-            binding_name(&text_field(f.ctx(), sink.h, "role")?, &name)?
+            binding_name(&text_field(f.ctx(), sink.h, "role")?, sink.rank(), &name)?
         )));
     }
     Ok(None)
@@ -216,7 +216,10 @@ pub(super) fn operand(f: &mut Frame, source: usize, arg: &str) -> Result<String,
             f.record_read(source);
             Ok(arg.to_string())
         } else {
-            Ok(format!("{}[i]", binding_name(&role, &name)?))
+            Ok(format!(
+                "{}[i]",
+                binding_name(&role, f.node(source).rank(), &name)?
+            ))
         };
     }
     if class == Class::At {

@@ -146,12 +146,19 @@ fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), Refusal> {
     Ok((Some(key), offset))
 }
 
-/// Whether a node is a store at a runtime index.
+/// Whether an element access names its element by one index, its value having rank one. The runs below plan
+/// stores into a vector; a store at several indices is one copy written at them (see `store`).
+pub(crate) fn one_index(ctx: *mut RxCtx, h: u32) -> Result<bool, Refusal> {
+    let value = door::operands(ctx, h)?[0];
+    Ok(door::ttype_of(ctx, value)?.shape.len() == 1)
+}
+
+/// Whether a node is a store at a runtime index into a vector, the form the runs plan.
 fn is_store(f: &Frame, h: u32) -> Result<bool, Refusal> {
     Ok(matches!(
         OpKind::of_op(f.ctx(), h)?,
         Some(OpKind::SetComponentAt | OpKind::AddAt)
-    ))
+    ) && one_index(f.ctx(), h)?)
 }
 
 impl Plan {
@@ -223,7 +230,7 @@ impl Plan {
     /// by link.
     fn is_committed(&self, f: &Frame, node: u32) -> Result<bool, Refusal> {
         let (mut chain, mut base) = (false, node);
-        while OpKind::of_op(f.ctx(), base)? == Some(OpKind::AddAt) {
+        while OpKind::of_op(f.ctx(), base)? == Some(OpKind::AddAt) && one_index(f.ctx(), base)? {
             chain = true;
             base = through(f.ctx(), door::operands(f.ctx(), base)?[0])?;
         }
@@ -261,6 +268,7 @@ impl Plan {
                 }
                 let target = crate::spell::binding_name(
                     &text_field(f.ctx(), sink, "role")?,
+                    0,
                     &text_field(f.ctx(), sink, "name")?,
                 )?;
                 if !self.accumulated.iter().any(|a| a.0 == target) {
@@ -448,7 +456,7 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
         return Ok(None);
     }
     let (mut node, mut links) = (door::operands(ctx, sink)?[0], vec![]);
-    while OpKind::of_op(ctx, node)? == Some(OpKind::AddAt) {
+    while OpKind::of_op(ctx, node)? == Some(OpKind::AddAt) && one_index(ctx, node)? {
         let operands = door::operands(ctx, node)?;
         links.push((operands[1], operands[2]));
         node = operands[0];
@@ -474,7 +482,8 @@ pub(crate) fn accumulate_links(f: &Frame, sink: u32) -> Result<Option<Vec<(u32, 
 /// body sink is refused by name.
 pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
     for sink in door::field_refs(f.ctx(), lp, "body_sinks")?.unwrap_or_default() {
-        if door::class_is(f.ctx(), sink, "AccumWrite")? && door::operands(f.ctx(), sink)?.len() == 2
+        // a keyed accumulate: the value and one index per axis of its plane
+        if door::class_is(f.ctx(), sink, "AccumWrite")? && door::operands(f.ctx(), sink)?.len() > 1
         {
             super::sinks::accum_of(f, sink)?;
             continue;
@@ -494,6 +503,7 @@ pub(crate) fn body_sinks(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
         };
         let target = crate::spell::binding_name(
             &text_field(f.ctx(), sink, "role")?,
+            0,
             &text_field(f.ctx(), sink, "name")?,
         )?;
         for (key, element) in links {
@@ -610,10 +620,13 @@ pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         } else {
             "="
         };
+        let (entry, indices) = args[1..]
+            .split_last()
+            .ok_or_else(|| nib("a store without an entry"))?;
         f.emit(format!(
             "{name}({}) {op} {};",
-            args[1],
-            placed::cast(&args[2], &ty.dtype)?
+            indices.join(", "),
+            placed::cast(entry, &ty.dtype)?
         ));
         return Ok(Out::Value(name, None));
     };

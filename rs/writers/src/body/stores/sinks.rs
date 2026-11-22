@@ -5,7 +5,7 @@ use crate::body::Class;
 use crate::body::{CompensatedPlan, CompensatedTarget, Frame, Name, NameKind};
 use crate::ir::door;
 use crate::refuse::{fault, nib, Refusal};
-use crate::spell::binding_name;
+use crate::spell::{binding_name, element_at};
 
 /// The text of a value stored into a plane element: a banded unit's plane element is a `Real`
 /// built from the band.
@@ -24,6 +24,7 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let h = f.node(p).h;
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
+        0,
         &text_field(f.ctx(), h, "name")?,
     )?;
     if let Some(CompensatedPlan {
@@ -35,7 +36,7 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }) = f.compensated.clone()
     {
         if name == text_field(f.ctx(), h, "name")? {
-            let comp = binding_name("mutable", &plane)?;
+            let comp = binding_name("mutable", 0, &plane)?;
             f.need(Need::StoreCompensated);
             f.emit(format!(
                 "hawk_abi::store_compensated({target}, {comp}, i, {});",
@@ -67,20 +68,34 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// An indexed wide write: the value into the plane element the index names (a scalar value only).
+/// An indexed wide write: the value into the plane element the index list names, under the write's edge rule (a scalar value
+/// only). A `zero` edge drops a write outside the plane.
 pub(crate) fn wide_write(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     if !f.node(f.opp(p)[0]).ty.shape.is_empty() {
         return Err(nib("an indexed wide write of a rank > 0 value"));
     }
-    let (value, index) = (f.text(f.opp(p)[0]).clone(), f.text(f.opp(p)[1]).clone());
+    let value = f.text(f.opp(p)[0]).clone();
+    let indices: Vec<String> = f.opp(p)[1..].iter().map(|&q| f.text(q).clone()).collect();
+    let h = f.node(p).h;
     let target = binding_name(
-        &text_field(f.ctx(), f.node(p).h, "role")?,
-        &text_field(f.ctx(), f.node(p).h, "name")?,
+        &text_field(f.ctx(), h, "role")?,
+        0,
+        &text_field(f.ctx(), h, "name")?,
     )?;
-    f.emit(format!(
-        "{target}[aether::SampleIndex::make(static_cast<std::size_t>({index}))] = {};",
-        plane_value(f, &value)
-    ));
+    let (element, test) = element_at(
+        &target,
+        &indices,
+        &text_field(f.ctx(), h, "edge")?,
+        door::axes_declared(f.ctx(), h)? > 0,
+    )?;
+    if element.contains("aether::edge::") {
+        f.need(Need::Edge);
+    }
+    let store = format!("{element} = {};", plane_value(f, &value));
+    f.emit(match test {
+        Some(test) => format!("if ({test}) {store}"),
+        None => store,
+    });
     Ok(())
 }
 
@@ -89,6 +104,7 @@ pub(crate) fn box_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let (value, lane) = (f.text(f.opp(p)[0]).clone(), f.text(f.opp(p)[1]).clone());
     let target = binding_name(
         &text_field(f.ctx(), f.node(p).h, "role")?,
+        0,
         &text_field(f.ctx(), f.node(p).h, "name")?,
     )?;
     f.emit(format!("if ({lane} >= hawk_box_own) {target}[aether::SampleIndex::make(static_cast<std::size_t>({lane}))] = {value};"));
@@ -103,6 +119,7 @@ pub(crate) fn warp_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     let h = f.node(p).h;
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
+        0,
         &text_field(f.ctx(), h, "name")?,
     )?;
     let (width, held) = (f.node(p).ty.shape.clone(), f.node(value).ty.shape.clone());
@@ -197,23 +214,14 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
+        0,
         &text_field(f.ctx(), h, "name")?,
     )?;
-    let (value, index) = (
-        f.arg(operands[0])?,
-        format!(
-            "aether::SampleIndex::make(static_cast<std::size_t>({}))",
-            f.arg(operands[1])?
-        ),
-    );
-    if contract == "or" {
-        f.need(Need::AccumOr);
-        f.emit(format!("hawk_abi::accum_or({target}, {index}, {value});"));
-        return Ok(());
-    }
+    let value = f.arg(operands[0])?;
     let mut comp = if crate::ir::door::compensates(&contract)? {
         Some(binding_name(
             "accum_out",
+            0,
             &format!("{}_c", text_field(f.ctx(), h, "name")?),
         )?)
     } else {
@@ -229,8 +237,22 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     }) = f.compensated.clone()
     {
         if name == text_field(f.ctx(), h, "name")? {
-            comp = Some(binding_name("accum_out", &plane)?)
+            comp = Some(binding_name("accum_out", 0, &plane)?)
         }
+    }
+    // One index with no edge rule is the flat keyed form (runs, compensation) whatever the plane declares: a view with one
+    // axis takes the key as its element.
+    if operands.len() > 2 || text_field(f.ctx(), h, "edge")? != "unchecked" {
+        return accum_at(f, h, &operands, &contract, &target, comp.as_deref(), &value);
+    }
+    let index = format!(
+        "aether::SampleIndex::make(static_cast<std::size_t>({}))",
+        f.arg(operands[1])?
+    );
+    if contract == "or" {
+        f.need(Need::AccumOr);
+        f.emit(format!("hawk_abi::accum_or({target}, {index}, {value});"));
+        return Ok(());
     }
     let c = if comp.is_some() { "Compensated" } else { "" };
     let run = if f.unit.kind.lanes {
@@ -280,6 +302,49 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A scattered accumulate into a plane with axes: the term added at the element the index list names under the write's edge rule
+/// (a `zero` edge drops a term outside the plane). A compensated accumulate adds the term's rounding error at the same element of
+/// the companion plane `comp`, which has the axes of its target. A bit-or contract commits an or at the element.
+fn accum_at(
+    f: &mut Frame,
+    h: u32,
+    operands: &[u32],
+    contract: &str,
+    target: &str,
+    comp: Option<&str>,
+    value: &str,
+) -> Result<(), Refusal> {
+    let mut indices = vec![];
+    for &operand in &operands[1..] {
+        indices.push(f.arg(operand)?);
+    }
+    let edge = text_field(f.ctx(), h, "edge")?;
+    let (element, test) = element_at(target, &indices, &edge, true)?;
+    let add = match comp {
+        _ if contract == "or" => {
+            f.need(Need::AccumOrAt);
+            format!("hawk_abi::accum_or_at({element}, {value});")
+        }
+        Some(comp) => {
+            f.need(Need::AccumCompensatedAt);
+            let (correction, _) = element_at(comp, &indices, &edge, true)?;
+            format!("hawk_abi::accum_add_compensated_at({element}, {correction}, {value});")
+        }
+        None => {
+            f.need(Need::AccumAt);
+            format!("hawk_abi::accum_add_at({element}, {value});")
+        }
+    };
+    if element.contains("aether::edge::") {
+        f.need(Need::Edge);
+    }
+    f.emit(match test {
+        Some(test) => format!("if ({test}) {add}"),
+        None => add,
+    });
+    Ok(())
+}
+
 /// The finish epilogue, the last text of the guarded scope: an unfinished sample whose condition
 /// holds sets its mask and adds one
 /// to the reserved counter (FINISHED_PLANE = "finished_count", raptor wings cells.py).
@@ -287,9 +352,9 @@ pub(crate) fn finish(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let p = f.at(sink)?;
     let name = text_field(f.ctx(), f.node(p).h, "name")?;
     let (mask, cond, counter) = (
-        binding_name("terminated", &name)?,
+        binding_name("terminated", 0, &name)?,
         f.text(f.opp(p)[0]).clone(),
-        binding_name("lookup", "finished_count")?,
+        binding_name("lookup", 0, "finished_count")?,
     );
     f.emit(format!("if (!{mask}[i].eval() && {cond}) {{ {mask}_w[i] = true; hawk_abi::finish_count({counter}); }}"));
     f.mark_last(crate::body::frame::buffer::Mark::FinishCount);
@@ -327,6 +392,7 @@ pub(crate) fn tape_write(f: &mut Frame, p: usize) -> Result<(), Refusal> {
 pub(super) fn tape_write_of(f: &mut Frame, h: u32) -> Result<(), Refusal> {
     let target = binding_name(
         &text_field(f.ctx(), h, "role")?,
+        0,
         &text_field(f.ctx(), h, "name")?,
     )?;
     let width = door::field_int(f.ctx(), h, "width")?

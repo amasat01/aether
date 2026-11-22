@@ -148,12 +148,12 @@ pub fn store_lambda(
         lines.push(format!("        case {k}: {{"));
         lines.push(format!(
             "            {}.data()[hawk_row] = {out};",
-            binding_name(&sink.role, &sink.name)?
+            binding_name(&sink.role, 0, &sink.name)?
         ));
         if sink.op == "sum" {
             lines.push(format!(
                 "            {}.data()[hawk_row] = {comp};",
-                binding_name(&sink.role, &format!("{}_comp", sink.name))?
+                binding_name(&sink.role, 0, &format!("{}_comp", sink.name))?
             ));
         }
         lines.push("        } break;".to_string());
@@ -181,8 +181,8 @@ mod tests {
         let sinks = [sink("sum", "a"), sink("max", "b")];
         let text = store_lambda(&sinks, 1, 0, false).unwrap();
         let (first, second) = (
-            binding_name("out", "a").unwrap(),
-            binding_name("out", "b").unwrap(),
+            binding_name("out", 0, "a").unwrap(),
+            binding_name("out", 0, "b").unwrap(),
         );
         let want = format!(
             "    auto hawk_ss_store = [&](int hawk_col, auto hawk_s, auto hawk_c) {{

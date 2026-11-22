@@ -150,6 +150,15 @@ extern "C" {
     /// The kind of value a field holds (an `RX_KIND_*` code).
     pub fn rx_field_kind(ctx: *mut RxCtx, node: u32, name: *const c_char, out: *mut c_int)
         -> c_int;
+    /// A field that holds a tuple of pairs; `n` is the count, the pairs themselves are not read here (`buf` is null, `cap` 0).
+    pub fn rx_field_pairs(
+        ctx: *mut RxCtx,
+        node: u32,
+        name: *const c_char,
+        buf: *mut std::ffi::c_void,
+        cap: usize,
+        n: *mut usize,
+    ) -> c_int;
     /// A field that holds a list of integers.
     pub fn rx_field_ints(
         ctx: *mut RxCtx,
@@ -543,6 +552,27 @@ pub fn field_text(
     check(ctx, status)?;
     buf.truncate(len);
     String::from_utf8(buf).map(Some).map_err(fault)
+}
+
+/// The number of axes a plane leaf declares: 0 for a plane without axes (which has one runtime axis).
+pub fn axes_declared(ctx: impl Into<CtxPtr>, leaf: u32) -> Result<usize, Refusal> {
+    let ctx = ctx.into().raw();
+    let name = cs("axes")?;
+    let mut count = 0usize;
+    let status = unsafe {
+        rx_field_pairs(
+            ctx,
+            leaf,
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            &mut count,
+        )
+    };
+    if status != RX_TRUNC {
+        present(ctx, status)?;
+    }
+    Ok(count)
 }
 
 /// A field that holds an integer; `None` when the field holds nothing.

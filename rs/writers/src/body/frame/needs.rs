@@ -31,6 +31,16 @@ pub enum Need {
     Team,
     /// `hawk_abi::accum_or(`: the scattered or.
     AccumOr,
+    /// `hawk_abi::accum_or_at(`: the scattered or at an element of a plane with axes.
+    AccumOrAt,
+    /// `hawk_abi::view_item<`: a value of rank above zero read out of a plane with axes.
+    ViewItem,
+    /// `aether::edge::`: the edge-rule helpers of an indexed access.
+    Edge,
+    /// `hawk_abi::accum_add_at(`: the scattered add at an element of a plane with axes.
+    AccumAt,
+    /// `hawk_abi::accum_add_compensated_at(`: the compensated scattered add at an element of a plane with axes.
+    AccumCompensatedAt,
     /// `hawk_abi::accum_add_compensated(`: the compensated scattered add.
     AccumCompensated,
     /// `aether::accum::run::`: a run of commits against one target.
@@ -109,7 +119,7 @@ impl Needs {
     /// The needs a finished text shows by its substrings: the only search of text left. It serves
     /// a body the caller gave, which has no records, and the shadow check of the recorded needs.
     pub fn scan(text: &str) -> Needs {
-        let tests: [(Need, &str); 14] = [
+        let tests: [(Need, &str); 19] = [
             (Need::StoreCompensated, "hawk_abi::store_compensated("),
             (Need::Tiled, "hawk_abi::tiled<"),
             (Need::WarpSum, "hawk_abi::warp_sum<"),
@@ -121,6 +131,14 @@ impl Needs {
             (Need::Geometry, "aether::geometry::"),
             (Need::Team, "aether::linalg::team::"),
             (Need::AccumOr, "hawk_abi::accum_or("),
+            (Need::AccumOrAt, "hawk_abi::accum_or_at("),
+            (Need::ViewItem, "hawk_abi::view_item<"),
+            (Need::Edge, "aether::edge::"),
+            (Need::AccumAt, "hawk_abi::accum_add_at("),
+            (
+                Need::AccumCompensatedAt,
+                "hawk_abi::accum_add_compensated_at(",
+            ),
             (Need::AccumCompensated, "hawk_abi::accum_add_compensated("),
             (Need::AccumRun, "aether::accum::run::"),
             (Need::Random, "aether::random::"),

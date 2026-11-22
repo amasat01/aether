@@ -52,6 +52,7 @@ pub fn frame(
         stages.push((
             binding_name(
                 &door::field_text(ctx, sink, "role")?.unwrap_or_default(),
+                0,
                 &door::field_text(ctx, sink, "name")?.unwrap_or_default(),
             )?,
             width,

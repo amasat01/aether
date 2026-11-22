@@ -14,7 +14,7 @@ use crate::ir::analysis::{
 use crate::ir::door;
 use crate::kind::OpKind;
 use crate::refuse::{fault, nib, Refusal};
-use crate::spell::{binding_name, carry_type, scalar_op};
+use crate::spell::{binding_name, carry_type, element_at, scalar_op};
 use std::collections::{HashMap, HashSet};
 
 /// The key two equal values share: their canonical position, or the handle of a node inside a loop
@@ -145,7 +145,7 @@ pub(super) fn plane_leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         text_field(f.ctx(), h, "role")?,
         text_field(f.ctx(), h, "name")?,
     );
-    let plane = binding_name(&role, &name)?;
+    let plane = binding_name(&role, f.node(p).rank(), &name)?;
     if !is_tiled(f.ctx(), h)? {
         // a mutable's own plane is its own proxy: the sample's view of it, with no row to declare
         // (width 0)
@@ -339,6 +339,7 @@ fn element_text(
             "{}[i].at({k})",
             binding_name(
                 &text_field(f.ctx(), node, "role")?,
+                ty.shape.len(),
                 &text_field(f.ctx(), node, "name")?
             )?
         )));
@@ -368,6 +369,7 @@ fn element_text(
             "{}[i].at({k})",
             binding_name(
                 &text_field(f.ctx(), node, "role")?,
+                ty.shape.len(),
                 &text_field(f.ctx(), node, "name")?
             )?
         )),
@@ -405,10 +407,21 @@ fn gathered(f: &Frame, run: &Gather, k: &str, fixed: Option<usize>) -> Result<St
         None => at,
         Some(base) => format!("({} + {at})", f.arg(base)?),
     };
+    let plane_rank = crate::body::ty_of(f.ctx(), run.plane)?.shape.len();
     let plane = binding_name(
         &text_field(f.ctx(), run.plane, "role")?,
+        plane_rank,
         &text_field(f.ctx(), run.plane, "name")?,
     )?;
+    // a plane with axes is read through its view's call form, a plane without them through the sample index
+    if door::axes_declared(f.ctx(), run.plane)? > 0 {
+        let edge = if run.clamped { "clamp" } else { "unchecked" };
+        let (element, _) = element_at(&plane, &[index], edge, true)?;
+        if run.clamped {
+            f.need(Need::Edge);
+        }
+        return Ok(element);
+    }
     let index = if run.clamped {
         f.need(Need::Integers);
         format!("hawk_abi::int_clamp_index<Int>({index}, static_cast<Int>({plane}.samples()))")

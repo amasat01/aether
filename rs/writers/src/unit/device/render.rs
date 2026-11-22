@@ -89,7 +89,7 @@ struct Path<'a> {
 fn two_path_lines(single: &Path, fused: &Path) -> Result<Vec<String>, Refusal> {
     let word = format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
-        binding_name("lookup", "fused_steps")?
+        binding_name("lookup", 0, "fused_steps")?
     );
     let path = |label: &str, p: &Path| {
         vec![
@@ -156,8 +156,8 @@ fn fold_entries(
             prologue::index_prologue(&Geometry::default()),
         ]);
         let (into, from) = (
-            binding_name("accum_out", &target)?,
-            binding_name("accum_out", &companion)?,
+            binding_name("accum_out", 0, &target)?,
+            binding_name("accum_out", 0, &companion)?,
         );
         lines.push(format!(
             "        hawk_abi::fold_companion({into}, {from}, i);"
@@ -204,7 +204,13 @@ fn sample_sum_sinks(
 /// The prelude flags of the unit's text: the body's recorded needs plus what the unit itself adds
 /// (fold companions, finish,
 /// narrow lane index, sample sums, a compensated kind's run helper).
-fn needs_of_unit(input: &Render, w: &Walk, has_companions: bool, has_sums: bool) -> unit::Needs {
+fn needs_of_unit(
+    input: &Render,
+    w: &Walk,
+    has_companions: bool,
+    folds_axes: bool,
+    has_sums: bool,
+) -> unit::Needs {
     let unit = input.unit;
     let scanned = &input.needs;
     let narrow_int = unit
@@ -221,6 +227,7 @@ fn needs_of_unit(input: &Render, w: &Walk, has_companions: bool, has_sums: bool)
         has_sums,
         row,
     );
+    needs.fold_axes = folds_axes;
     // a compensated kind's scattered target commits through a run of the kind's correction plane:
     // the helper is needed there too
     let compensated_kind = matches!(unit.kind.sink, SinkPolicy::Compensated { .. });
@@ -326,7 +333,13 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
     refuse_unwritten(unit)?;
     let sum_sinks = sample_sum_sinks(ctx, unit, &w, &mode)?;
     let companions = an::companions(ctx, walk)?;
-    let needs = needs_of_unit(input, &w, !companions.is_empty(), !sum_sinks.is_empty());
+    let needs = needs_of_unit(
+        input,
+        &w,
+        !companions.is_empty(),
+        unit::folds_axes(&w, &companions),
+        !sum_sinks.is_empty(),
+    );
     let geometry = geometry_of(unit);
     let runs = &input.needs.runs;
     let step = two_path::step_of(unit).is_some();

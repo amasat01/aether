@@ -52,7 +52,7 @@ struct LiveValue {
 
 /// The finish counter's binding.
 fn finish_counter() -> Result<String, Refusal> {
-    binding_name("lookup", "finished_count")
+    binding_name("lookup", 0, "finished_count")
 }
 
 /// One count into the finish counter for a sample finished on entry.
@@ -64,7 +64,7 @@ fn finished_on_entry() -> Result<String, Refusal> {
 fn fused_steps_word() -> Result<String, Refusal> {
     Ok(format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
-        binding_name("lookup", "fused_steps")?
+        binding_name("lookup", 0, "fused_steps")?
     ))
 }
 
@@ -78,7 +78,7 @@ fn launch_budget(pre: &Buffer, count: &Option<String>) -> Vec<usize> {
         return vec![];
     };
     let chain = pre.one_line_chain(std::slice::from_ref(count));
-    let plane = binding_name("lookup", "fused_steps").unwrap_or_default();
+    let plane = binding_name("lookup", 0, "fused_steps").unwrap_or_default();
     for decl in &chain {
         let value = decl.value.as_deref().unwrap_or("");
         let parts: Vec<&str> = value.split('[').collect();

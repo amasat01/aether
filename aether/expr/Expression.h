@@ -187,8 +187,9 @@ public:
      */
     AETHER_DEVICEHOST() constexpr working_type squaredNormWorking_() const
     {
-        static_assert(Derived::element_extents::Rank == 1, "squaredNorm: only rank-1 expressions are supported");
-        return detail::GenericReduce<Derived::element_extents::static_extent(0), Derived, detail::SumOp<working_type>,
+        static_assert(Derived::element_extents::Rank >= 1, "squaredNorm: a rank-0 expression has no components");
+        return detail::GenericReduce<detail::staticNumel<typename Derived::element_extents>(), Derived,
+            detail::SumOp<working_type>,
             detail::SquareOp<working_type>, working_type>::eval(static_cast<const Derived&>(*this), SampleIndex::make(0));
     }
 
@@ -236,9 +237,10 @@ public:
     /** @brief Sum of all components. */
     AETHER_DEVICEHOST() constexpr element_type sum() const
     {
-        static_assert(Derived::element_extents::Rank == 1, "sum: only rank-1 expressions are supported");
+        static_assert(Derived::element_extents::Rank >= 1, "sum: a rank-0 expression has no components");
         return detail::fromWorkingValue<element_type>(
-            detail::GenericReduce<Derived::element_extents::static_extent(0), Derived, detail::SumOp<working_type>,
+            detail::GenericReduce<detail::staticNumel<typename Derived::element_extents>(), Derived,
+                detail::SumOp<working_type>,
                 detail::SelfOp<working_type>, working_type>::eval(static_cast<const Derived&>(*this), SampleIndex::make(0)));
     }
 

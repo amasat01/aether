@@ -400,8 +400,16 @@ pub(crate) fn name_value(
     if named {
         let name = match &role {
             Some(r) => Name::new(
-                format!("{}_i", binding_name(r, &f.field_text(n_h, "name")?)?),
-                if text == format!("{}[i]", binding_name(r, &f.field_text(n_h, "name")?)?) {
+                format!(
+                    "{}_i",
+                    binding_name(r, f.node(p).rank(), &f.field_text(n_h, "name")?)?
+                ),
+                if text
+                    == format!(
+                        "{}[i]",
+                        binding_name(r, f.node(p).rank(), &f.field_text(n_h, "name")?)?
+                    )
+                {
                     NameKind::LeafView
                 } else {
                     NameKind::RowLeaf
@@ -433,7 +441,7 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     Ok(match f.node(p).class.clone() {
         Class::Leaf => values::leaf(f, p)?,
         Class::At => values::at(f, p)?,
-        Class::PlaneExtent => values::plane_extent(f, p)?,
+        Class::AxisExtent => values::axis_extent(f, p)?,
         Class::SampleIndex => values::sample_index()?,
         Class::SamplePosition => values::sample_position(f)?,
         Class::Select => values::select(f, p)?,

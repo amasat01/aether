@@ -145,5 +145,39 @@ TEST_F(ExprReduceTest, ViewMaterializedDotAndSumMatchRawAccessorArithmetic)
     EXPECT_DOUBLE_EQ(a.sum(), sumExpected);
 }
 
+TEST_F(ExprReduceTest, SumAndNormFoldEveryComponentOfAValueOfRankTwoAndThree)
+{
+    // A fold visits the components in storage order, so a hand sum in that order agrees bit for bit.
+    Item<double, 2, 3> m;
+    Item<double, 2, 3, 4> t;
+    for (std::size_t i = 0; i < 2; ++i)
+        for (std::size_t j = 0; j < 3; ++j) {
+            m(i, j) = 0.5 + static_cast<double>(3 * i + j);
+            for (std::size_t k = 0; k < 4; ++k)
+                t(i, j, k) = 0.25 * static_cast<double>(12 * i + 4 * j + k) - 1.0;
+        }
+    double accM = 0.0, accSqM = 0.0, accT = 0.0, accSqT = 0.0;
+    bool firstM = true, firstT = true;
+    for (std::size_t i = 0; i < 2; ++i)
+        for (std::size_t j = 0; j < 3; ++j) {
+            const double v = m(i, j);
+            accM = firstM ? v : v + accM;
+            accSqM = firstM ? v * v : v * v + accSqM;
+            firstM = false;
+            for (std::size_t k = 0; k < 4; ++k) {
+                const double w = t(i, j, k);
+                accT = firstT ? w : w + accT;
+                accSqT = firstT ? w * w : w * w + accSqT;
+                firstT = false;
+            }
+        }
+    EXPECT_DOUBLE_EQ(m.sum(), accM);
+    EXPECT_DOUBLE_EQ(m.norm(), std::sqrt(accSqM));
+    EXPECT_DOUBLE_EQ(t.sum(), accT);
+    EXPECT_DOUBLE_EQ(t.norm(), std::sqrt(accSqT));
+    EXPECT_DOUBLE_EQ(aether::rt::sum(t), accT);
+    EXPECT_DOUBLE_EQ(aether::rt::norm(t), std::sqrt(accSqT));
+}
+
 } // namespace
 } // namespace aether_tests

@@ -60,7 +60,7 @@ fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, Refusal> {
         if !is_mask(w, s) {
             return Ok(None);
         }
-        let id = binding_name(&s.role, &s.name)?;
+        let id = binding_name(&s.role, s.shape.len(), &s.name)?;
         Ok(Some(format!(
             "    const hawk_abi::HostMask {id} =\n        hawk_abi::host_mask({});",
             deref(s)?
@@ -419,6 +419,7 @@ fn interchange_of(
     let scanned = &input.needs;
     let eligible = is_plain_frame(unit, scanned, sums)
         && !scanned.has(Need::AccumCompensated)
+        && !scanned.has(Need::AccumCompensatedAt)
         && !scanned.has(Need::StoreCompensated)
         && an::lane_form_access(ctx, walk)?;
     if !eligible {
@@ -450,6 +451,7 @@ fn needs_of_unit(
     input: &Render,
     shape: &EntryShape,
     has_companions: bool,
+    folds_axes: bool,
     has_sums: bool,
     interchange: &Interchange,
 ) -> Needs {
@@ -469,6 +471,7 @@ fn needs_of_unit(
         has_sums,
         unit.build.cells_row,
     );
+    needs.fold_axes = folds_axes;
     // a compensated kind's scattered target commits through a run of the kind's correction plane:
     // the helper is needed there too
     let compensated_kind = matches!(unit.kind.sink, SinkPolicy::Compensated { .. });
@@ -552,7 +555,7 @@ fn companion_folds(
     for (comp, target) in companions {
         lines.extend([signature(&fold_name(name, target)), "{".into(), unpack(ctx, walk, w)?,
             "    const std::int64_t hawk_end = base + count;\n    for (std::int64_t hawk_i = base; hawk_i < hawk_end; ++hawk_i) {\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));\n        (void)hawk_i;\n        (void)nSamples;".into(),
-            format!("        hawk_abi::fold_companion({}, {}, i);", binding_name("accum_out", target)?, binding_name("accum_out", comp)?), "    }".into(), "}".into(), String::new()]);
+            format!("        hawk_abi::fold_companion({}, {}, i);", binding_name("accum_out", 0, target)?, binding_name("accum_out", 0, comp)?), "    }".into(), "}".into(), String::new()]);
     }
     Ok(lines)
 }
@@ -601,6 +604,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         input,
         &shape,
         !companions.is_empty(),
+        folds_axes(&shape.walk, &companions),
         !sums.is_empty(),
         &interchange,
     );
@@ -669,16 +673,16 @@ fn lane_shape(
         w.slots
             .iter()
             .filter(|s| is_mask(w, s))
-            .map(|s| binding_name(&s.role, &s.name))
+            .map(|s| binding_name(&s.role, s.shape.len(), &s.name))
             .collect::<Result<_, _>>()?
     } else {
         vec![]
     };
     let finish = match &w.finish {
-        Some(f) if guards.contains(&binding_name("terminated", f)?) => Some(FinishLanes {
-            mask: binding_name("terminated", f)?,
-            twin: format!("{}_w", binding_name("terminated", f)?),
-            counter: binding_name("lookup", "finished_count")?,
+        Some(f) if guards.contains(&binding_name("terminated", 0, f)?) => Some(FinishLanes {
+            mask: binding_name("terminated", 0, f)?,
+            twin: format!("{}_w", binding_name("terminated", 0, f)?),
+            counter: binding_name("lookup", 0, "finished_count")?,
         }),
         _ => None,
     };
@@ -780,7 +784,7 @@ fn two_path_lines(
 ) -> Result<Vec<String>, Refusal> {
     let word = format!(
         "{}[aether::SampleIndex::make(static_cast<std::size_t>(0))].eval()",
-        binding_name("lookup", "fused_steps")?
+        binding_name("lookup", 0, "fused_steps")?
     );
     let mut lines = vec![
         format!("    if ({word} == 1) {{"),
@@ -955,7 +959,7 @@ mod tests {
                     c,
                     "Leaf",
                     &[],
-                    &format!("(('kind', 'vocab_read'), ('role', 'per_sample'), ('name', '{name}'), ('quantity', None), ('wire_index', 0), ('sorted', False))"),
+                    &format!("(('kind', 'vocab_read'), ('role', 'plane_in'), ('name', '{name}'), ('quantity', None), ('wire_index', 0), ('sorted', False))"),
                 )
             };
             let operands: Vec<u32> = if kind == "pow" {

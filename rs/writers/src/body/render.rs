@@ -214,7 +214,7 @@ fn plan_guard(
         .map(|m| {
             format!(
                 "{}[i].eval()",
-                binding_name("terminated", m).unwrap_or_default()
+                binding_name("terminated", 0, m).unwrap_or_default()
             )
         })
         .collect();
@@ -516,7 +516,7 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
             if f.unit.team.is_some() {
                 return Err(nib("a wide write of a team stage"));
             }
-            if nops == 2 {
+            if nops >= 2 {
                 stores::sinks::wide_write(f, p)?;
                 continue;
             }
@@ -542,7 +542,7 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
         if plans.companions.contains(&f.field_text(h, "name")?) {
             continue;
         }
-        if class == Class::AccumWrite && nops == 2 {
+        if class == Class::AccumWrite && nops >= 2 {
             stores::sinks::accum(f, s, p)?;
             continue;
         }

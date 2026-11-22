@@ -7,20 +7,24 @@ use crate::ir::door::Scalar;
 use crate::refuse::{nib, Refusal};
 use crate::spell::binding_name;
 
-/// A component read at a runtime index: `plane[i].at(k)` straight from the view of a read-only
-/// input row, else
-/// `item(k)` of the value held once as an item. A read of an element-wise value that the read-pushing
+/// A component read at runtime indices, one per axis of the value: `plane[i].at(k)` straight from the view of a
+/// read-only input row of rank one, else
+/// `item(k, l, ..)` of the value held once as an item. A read of an element-wise value that the read-pushing
 /// rewrite could not move to its operands (a loop-variable index) takes the held item as well: the value is
 /// computed once before the loop and indexed at run time.
 pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
-    let (source, index) = (f.opp(p)[0], f.text(f.opp(p)[1]).clone());
+    let source = f.opp(p)[0];
+    let indices: Vec<String> = f.opp(p)[1..].iter().map(|&q| f.text(q).clone()).collect();
+    let index = indices.join(", ");
+    // the plane views and proxies below are of rank-one values and take one index
+    let one = indices.len() == 1;
     let warp = match literal_of(f.ctx(), f.node(p).h)? {
         Scalar::Absent => false,
         Scalar::Text(name) if name == "warp_read" => true,
         _ => return Err(nib("a runtime-index read with a literal")),
     };
     // a source already held in a placed plane is read from the plane, whatever made it
-    if f.proxies.iter().any(|x| x.name == *f.peek(source)) {
+    if one && f.proxies.iter().any(|x| x.name == *f.peek(source)) {
         return Ok(Out::Value(format!("{}.at({index})", f.text(source)), None));
     }
     if f.node(source).class == Class::Leaf {
@@ -28,15 +32,18 @@ pub(crate) fn component_at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
             text_field(f.ctx(), f.node(source).h, "role")?,
             text_field(f.ctx(), f.node(source).h, "name")?,
         );
-        if role == "mutable" && !warp {
+        // a mutable plane of rank one is served by its own view; a deeper value is held once, like any other
+        if role == "mutable" && !warp && one {
             return mutable_read(f, p, source, &name, &index);
         }
         // a read of one element of a plane the warp holds goes to the view at the run-time index
-        let in_place =
-            f.node(source).rank() == 1 && matches!(role.as_str(), "vec_in" | "per_sample");
-        if warp || in_place {
+        let in_place = f.node(source).rank() == 1 && role == "plane_in";
+        if one && (warp || in_place) {
             return Ok(Out::Value(
-                format!("{}[i].at({index})", binding_name(&role, &name)?),
+                format!(
+                    "{}[i].at({index})",
+                    binding_name(&role, f.node(source).rank(), &name)?
+                ),
                 None,
             ));
         }
@@ -120,7 +127,7 @@ fn mutable_read(
     if f.node(source).rank() != 1 {
         return Err(nib("a runtime-index read of a mutable plane"));
     }
-    let text = format!("{}[i].at({index})", binding_name("mutable", name)?);
+    let text = format!("{}[i].at({index})", binding_name("mutable", 0, name)?);
     if f.nodes().any(|n| n.class == Class::Loop) {
         if !f.is_slot(f.node(p).h) || stored_inside_a_loop(f, name)? {
             return Err(nib("a runtime-index read of a mutable plane"));

@@ -9,8 +9,8 @@ pub enum Class {
     Leaf,
     /// An indexed read of a plane.
     At,
-    /// The extent of a plane along an axis.
-    PlaneExtent,
+    /// The extent of one axis of a plane.
+    AxisExtent,
     /// The index of the sample being computed.
     SampleIndex,
     /// The position of the sample within its batch.
@@ -81,7 +81,7 @@ impl Class {
         match name {
             "Leaf" => Class::Leaf,
             "At" => Class::At,
-            "PlaneExtent" => Class::PlaneExtent,
+            "AxisExtent" => Class::AxisExtent,
             "SampleIndex" => Class::SampleIndex,
             "SamplePosition" => Class::SamplePosition,
             "Select" => Class::Select,
@@ -126,7 +126,7 @@ impl Class {
         match self {
             Class::Leaf => "Leaf",
             Class::At => "At",
-            Class::PlaneExtent => "PlaneExtent",
+            Class::AxisExtent => "AxisExtent",
             Class::SampleIndex => "SampleIndex",
             Class::SamplePosition => "SamplePosition",
             Class::Select => "Select",

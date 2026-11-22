@@ -56,7 +56,7 @@ fn mk(c: *mut RxCtx, cls: &str, ops: &[u32], fields: &str) -> u32 {
 fn helpers_read_a_graph_back() {
     let c = unsafe { rx_ctx_new() };
     let leaf = |n: &str| {
-        format!("(('kind', 'vocab_read'), ('role', 'vec_in'), ('name', '{n}'), ('quantity', None), ('wire_index', 0), ('sorted', False))")
+        format!("(('kind', 'vocab_read'), ('role', 'plane_in'), ('name', '{n}'), ('quantity', None), ('wire_index', 0), ('sorted', False))")
     };
     let (a, b) = (
         mk(c, "Leaf", &[], &leaf("a")),
@@ -94,13 +94,13 @@ fn helpers_read_a_graph_back() {
     let args = door::walk_args(c, w).unwrap();
     assert_eq!(
         args,
-        [("mutable", "y"), ("vec_in", "a"), ("vec_in", "b")]
+        [("mutable", "y"), ("plane_in", "a"), ("plane_in", "b")]
             .map(|(r, n)| (r.to_string(), n.to_string()))
     );
-    assert!(door::walk_binds(c, w, "vec_in", "a").unwrap());
+    assert!(door::walk_binds(c, w, "plane_in", "a").unwrap());
     assert!(!door::walk_binds(c, w, "mutable", "a").unwrap());
     assert!(!door::walk_binds(c, w, "terminated", "y").unwrap());
-    assert!(door::walk_binds(c, 99, "vec_in", "a").is_err());
+    assert!(door::walk_binds(c, 99, "plane_in", "a").is_err());
     let like = door::canonical_over(c, &[y], w).unwrap();
     assert_eq!(door::walk_args(c, like).unwrap(), args);
     assert!(door::class_is(c, s, "Op").unwrap());
@@ -149,7 +149,7 @@ fn typed_readers_answer_for_a_small_graph() {
     let c = unsafe { rx_ctx_new() };
     let leaf = |n: &str| {
         format!(
-            "(('kind', 'vocab_read'), ('role', 'vec_in'), ('name', '{n}'), ('quantity', None), \
+            "(('kind', 'vocab_read'), ('role', 'plane_in'), ('name', '{n}'), ('quantity', None), \
              ('wire_index', 0), ('sorted', False))"
         )
     };
@@ -166,11 +166,12 @@ fn typed_readers_answer_for_a_small_graph() {
         &[a, k],
         "(('kind', 'add'), ('literal', None))",
     );
-    let at = mk_typed(c, "At", "f64", &[], None, &[a, k], "()");
+    let index = mk_typed(c, "Const", "i64", &[], None, &[], "(('literal', 2),)");
+    let at = mk_typed(c, "At", "f64", &[], None, &[a, index], "()");
     let y = mk_typed(c, "Assign", "f64", &[], None, &[s], "(('name', 'y'),)");
     assert_eq!(
         door::field_text(c, a, "role").unwrap().as_deref(),
-        Some("vec_in")
+        Some("plane_in")
     );
     assert_eq!(door::field_text(c, a, "quantity").unwrap(), None);
     assert_eq!(door::field_int(c, a, "wire_index").unwrap(), Some(0));
@@ -210,7 +211,7 @@ fn typed_readers_answer_for_a_small_graph() {
 #[test]
 fn literals_read_back_typed() {
     let c = unsafe { rx_ctx_new() };
-    let leaf = "(('kind', 'vocab_read'), ('role', 'vec_in'), ('name', 'a'), ('quantity', None), ('wire_index', 0), ('sorted', False))";
+    let leaf = "(('kind', 'vocab_read'), ('role', 'plane_in'), ('name', 'a'), ('quantity', None), ('wire_index', 0), ('sorted', False))";
     let a = mk(c, "Leaf", &[], leaf);
     for (literal, want) in [
         ("None", Scalar::Absent),
@@ -243,7 +244,7 @@ fn literals_read_back_typed() {
     assert_eq!(door::field_ints(c, op, "literal").unwrap(), None);
     assert_eq!(
         door::field_text(c, a, "role").unwrap().as_deref(),
-        Some("vec_in")
+        Some("plane_in")
     );
     unsafe { rx_ctx_free(c) };
 }

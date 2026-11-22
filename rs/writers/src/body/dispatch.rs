@@ -400,18 +400,24 @@ fn speculable(f: &Frame, p: usize) -> Result<bool, Refusal> {
             && f.field_text(f.node(f.opp(p)[1]).h, "label")? == "param_cell");
     }
     if n.kind == Some(OpKind::ComponentAt) {
-        let (v, i) = (f.opp(p)[0], f.opp(p)[1]);
-        let idx = if f.node(i).class == Class::Const {
-            match literal_of(f.ctx(), f.node(i).h)? {
-                Scalar::Int(v) => Some(v),
-                _ => None,
+        let v = f.opp(p)[0];
+        let indices = &f.opp(p)[1..];
+        let in_range = |(&i, &extent): (&usize, &usize)| -> Result<bool, Refusal> {
+            if f.node(i).class != Class::Const {
+                return Ok(false);
             }
-        } else {
-            None
+            Ok(match literal_of(f.ctx(), f.node(i).h)? {
+                Scalar::Int(x) => x >= 0 && (x as usize) < extent,
+                _ => false,
+            })
         };
-        return Ok(idx.is_some_and(|x| {
-            x >= 0 && (x as usize) < f.node(v).ty.shape.first().copied().unwrap_or(0)
-        }));
+        // every index is a constant inside its own axis
+        for pair in indices.iter().zip(f.node(v).ty.shape.iter()) {
+            if !in_range(pair)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
     }
     Ok(true)
 }
@@ -627,5 +633,5 @@ fn mix_plane(f: &Frame, p: usize) -> Result<Option<String>, Refusal> {
         return Ok(None);
     };
     let name = crate::ir::runtime_names::mix_plane(&format!("dispatch{index}"));
-    Ok(Some(spell::binding_name("lookup", &name)?))
+    Ok(Some(spell::binding_name("lookup", 0, &name)?))
 }

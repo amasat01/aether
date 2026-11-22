@@ -1,5 +1,6 @@
 //! Values that are read, not computed: leaves, indexed reads, literals, plane extents, the sample
 //! index and selects.
+use super::frame::needs::Need;
 use super::{Frame, Out};
 use crate::body::{kind_of, Class, OpKind};
 use crate::ir::door;
@@ -37,7 +38,7 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         });
     // a read-only row read at a runtime index is served by the plane's own view, at any width
     let runtime = only_components
-        && matches!(role.as_str(), "vec_in" | "per_sample")
+        && role == "plane_in"
         && rank == 1
         && uses
             .iter()
@@ -57,9 +58,9 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
             };
     f.set_lazy(p, lazy);
     let text = if lazy {
-        format!("{}[i]", spell::binding_name(&role, &name)?)
+        format!("{}[i]", spell::binding_name(&role, rank, &name)?)
     } else if rank > 0 {
-        spell::row_leaf(&role, &name)?
+        spell::row_leaf(&role, rank, &name)?
     } else {
         spell::leaf(&role, &name, 0, &dtype)?
     };
@@ -82,16 +83,25 @@ pub fn at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         f.set_text(p, cell);
         return Ok(Out::Bound);
     }
-    if f.node(leaf_p).class != Class::Leaf || ops_n != 2 {
+    if f.node(leaf_p).class != Class::Leaf || ops_n < 2 {
         return Err(nib("an indexed read of a non-leaf"));
     }
     let role = text_field(f.ctx(), leaf_h, "role")?;
+    let indices: Vec<String> = f.opp(p)[1..].iter().map(|&q| f.text(q).clone()).collect();
     let text = spell::at(
         &role,
         &text_field(f.ctx(), leaf_h, "name")?,
-        f.text(f.opp(p)[1]),
-        rank,
+        &indices,
+        &text_field(f.ctx(), f.node(p).h, "edge")?,
+        (&f.node(p).ty.dtype, &f.node(p).ty.shape),
+        has_axes(f, leaf_h)?,
     )?;
+    if text.contains("aether::edge::") {
+        f.need(Need::Edge);
+    }
+    if text.contains("hawk_abi::view_item<") {
+        f.need(Need::ViewItem);
+    }
     // a plane read at another lane that only library calls read is their per-sample operand as it
     // is, not a copy of the row
     if rank > 0
@@ -107,13 +117,22 @@ pub fn at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     Ok(Out::Value(text, None))
 }
 
-/// The extent of a plane.
-pub fn plane_extent(f: &Frame, p: usize) -> Result<Out, Refusal> {
-    let h = f.node(p).h;
+/// Whether a plane leaf declares axes (a plane without them has one runtime axis).
+fn has_axes(f: &Frame, leaf: u32) -> Result<bool, Refusal> {
+    Ok(crate::ir::door::axes_declared(f.ctx(), leaf)? > 0)
+}
+
+/// The extent of one axis of a plane.
+pub fn axis_extent(f: &Frame, p: usize) -> Result<Out, Refusal> {
+    let leaf = f.node(f.opp(p)[0]).h;
+    let axis = crate::ir::door::field_int(f.ctx(), f.node(p).h, "axis")?.unwrap_or(0);
     Ok(Out::Value(
-        spell::plane_extent(
-            &text_field(f.ctx(), h, "role")?,
-            &text_field(f.ctx(), h, "name")?,
+        spell::axis_extent(
+            &text_field(f.ctx(), leaf, "role")?,
+            f.node(f.opp(p)[0]).rank(),
+            &text_field(f.ctx(), leaf, "name")?,
+            axis,
+            has_axes(f, leaf)?,
         )?,
         None,
     ))

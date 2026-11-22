@@ -178,7 +178,7 @@ fn sample_free(f: &Frame, root: u32) -> Result<bool, Refusal> {
         }
         seen.push(h);
         match Class::of(f.ctx(), h)? {
-            Class::PlaneExtent | Class::Const | Class::RoleConst => {}
+            Class::AxisExtent | Class::Const | Class::RoleConst => {}
             Class::Leaf => {
                 if !matches!(
                     door::text_field(f.ctx(), h, "role")?.as_str(),

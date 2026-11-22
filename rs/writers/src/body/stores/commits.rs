@@ -176,7 +176,8 @@ fn candidate(f: &Frame, s: u32, read: &[(String, String)]) -> Result<Option<Cand
         return Ok(None);
     }
     let (mut node, mut chain, mut links) = (f.opp(p)[0], vec![f.opp(p)[0]], vec![]);
-    while f.node(node).kind == Some(OpKind::AddAt) {
+    // a chain of stores at one index each; an accumulate at several indices is not a link
+    while f.node(node).kind == Some(OpKind::AddAt) && f.node(f.opp(node)[0]).rank() == 1 {
         links.push((f.opp(node)[1], f.opp(node)[2]));
         node = f.opp(node)[0];
         chain.push(node);
@@ -226,7 +227,7 @@ fn candidate(f: &Frame, s: u32, read: &[(String, String)]) -> Result<Option<Cand
         chain,
         parts,
         links,
-        target: binding_name(&role, &name)?,
+        target: binding_name(&role, n.ty.shape.len(), &name)?,
         indices: flat_indices(&n.ty.shape),
     }))
 }

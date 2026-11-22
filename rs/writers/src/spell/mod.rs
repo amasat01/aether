@@ -6,28 +6,33 @@ use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
 pub use band::{band_literal, literal_op};
 
-/// The prefix of the names a role's slots are bound under, none for a role that has no binding.
-pub fn ident_prefix(role: &str) -> Option<&'static str> {
+/// The prefix of the names a role's slots are bound under, none for a role that has no binding. A plane read per sample is
+/// named by the rank of its value: scalar, vector, matrix, or a general plane.
+pub fn ident_prefix(role: &str, rank: usize) -> Option<&'static str> {
     Some(match role {
         "mutable" => "mut",
         "out" => "out",
         "wide_out" => "wout",
         "accum_out" => "aout",
-        "vec_in" => "vin",
-        "mat_in" => "mtx",
+        "plane_in" => match rank {
+            0 => "psc",
+            1 => "vin",
+            2 => "mtx",
+            _ => "pin",
+        },
         "wide_in" => "win",
-        "per_sample" => "psc",
         "lookup" => "lut",
         "terminated" => "trm",
         "uniform" => "uni",
         "nsamples" => "nsm",
+        "extent" => "ext",
         _ => return None,
     })
 }
 
-/// The C++ name a slot of `role` and `name` is bound under.
-pub fn binding_name(role: &str, name: &str) -> Result<String, Refusal> {
-    ident_prefix(role)
+/// The C++ name a slot of `role`, value rank `rank` and `name` is bound under.
+pub fn binding_name(role: &str, rank: usize, name: &str) -> Result<String, Refusal> {
+    ident_prefix(role, rank)
         .map(|p| format!("{p}_{name}"))
         .ok_or_else(|| nib(format!("slot role {role}")))
 }
@@ -79,7 +84,7 @@ pub fn real_literal(x: f64) -> String {
 
 /// A rank-0 leaf read at the body's own sample.
 pub fn leaf(role: &str, name: &str, rank: usize, dtype: &str) -> Result<String, Refusal> {
-    let b = binding_name(role, name)?;
+    let b = binding_name(role, rank, name)?;
     if rank > 0 {
         return Err(nib(format!("leaf of rank {rank} ({role})")));
     }
@@ -94,13 +99,125 @@ pub fn leaf(role: &str, name: &str, rank: usize, dtype: &str) -> Result<String, 
     })
 }
 
-/// A plane read at a computed index (`index` is the rendered index operand).
-pub fn at(role: &str, name: &str, index: &str, rank: usize) -> Result<String, Refusal> {
-    Ok(format!(
-        "{}[aether::SampleIndex::make(static_cast<std::size_t>({index}))]{}",
-        binding_name(role, name)?,
-        if rank > 0 { ".get()" } else { ".eval()" }
-    ))
+/// The index text of one axis under an edge rule, and the condition under which the access exists: `clamp` and `wrap` fold the
+/// index into the axis, `zero` keeps it and states the range test (a read outside yields zero, a write outside is dropped), and
+/// `unchecked` passes it on the caller's promise. `extent` is the text of the axis's extent.
+fn edged(edge: &str, index: &str, extent: &str) -> Result<(String, Option<String>), Refusal> {
+    Ok(match edge {
+        "clamp" | "wrap" | "unchecked" => {
+            (format!("aether::edge::{edge}({index}, {extent})"), None)
+        }
+        "zero" => (
+            format!("static_cast<std::size_t>({index})"),
+            Some(format!("aether::edge::inside({index}, {extent})")),
+        ),
+        other => return Err(nib(format!("the edge rule {other:?}"))),
+    })
+}
+
+/// The element of a plane at one index per axis, under an edge rule, and the range test a `zero` edge adds. A plane with axes is
+/// addressed through its view's call form, a plane without axes (one runtime axis) through the sample index.
+pub fn element_at(
+    binding: &str,
+    indices: &[String],
+    edge: &str,
+    axes: bool,
+) -> Result<(String, Option<String>), Refusal> {
+    if !axes {
+        let [index] = indices else {
+            return Err(nib("an access to a plane without axes at several indices"));
+        };
+        let (position, test) = match edge {
+            "unchecked" => (format!("static_cast<std::size_t>({index})"), None),
+            _ => edged(edge, index, &format!("{binding}.samples()"))?,
+        };
+        return Ok((
+            format!("{binding}[aether::SampleIndex::make({position})]"),
+            test,
+        ));
+    }
+    let (args, test) = axis_args(binding, 0, indices, edge)?;
+    Ok((format!("{binding}({})", args.join(", ")), test))
+}
+
+/// The index text of every axis of a plane with axes under an edge rule, and the joined range test of a `zero` edge. The view
+/// stores the components of a value of rank `value_rank` ahead of the axes, so axis `n` is the view's dimension `value_rank + n`.
+fn axis_args(
+    binding: &str,
+    value_rank: usize,
+    indices: &[String],
+    edge: &str,
+) -> Result<(Vec<String>, Option<String>), Refusal> {
+    let mut args = vec![];
+    let mut tests = vec![];
+    for (axis, index) in indices.iter().enumerate() {
+        let (arg, test) = edged(
+            edge,
+            index,
+            &format!("{binding}.extent({})", value_rank + axis),
+        )?;
+        args.push(arg);
+        tests.extend(test);
+    }
+    Ok((args, (!tests.is_empty()).then(|| tests.join(" && "))))
+}
+
+/// A read guarded by a `zero` edge's range test: the read inside, a zero outside; the read itself otherwise. A value of rank
+/// zero has the element type's default as its zero; a value of rank above zero a constant of its extents, held as an item so
+/// that both arms have one type.
+fn guarded(
+    read: String,
+    test: Option<String>,
+    dtype: &str,
+    shape: &[usize],
+) -> Result<String, Refusal> {
+    let Some(test) = test else {
+        return Ok(read);
+    };
+    if shape.is_empty() {
+        return Ok(format!(
+            "(({test}) ? {read} : std::decay_t<decltype({read})>{{}})"
+        ));
+    }
+    let zero = format!(
+        "{}(aether::constant<aether::extents<{}>>({}))",
+        carry_type(dtype, shape)?,
+        ext(shape),
+        cast("0", dtype)?
+    );
+    Ok(format!("(({test}) ? {read} : {zero})"))
+}
+
+/// A plane read at the indices an `At` names, one per axis of the plane, under its edge rule; the value read has `shape` and
+/// `dtype`. A plane with axes is read through its view's call form (a value of rank above zero is read component by component
+/// into an item), a plane without axes (one runtime axis) through the sample index.
+pub fn at(
+    role: &str,
+    name: &str,
+    indices: &[String],
+    edge: &str,
+    value: (&str, &[usize]),
+    axes: bool,
+) -> Result<String, Refusal> {
+    let (dtype, shape) = value;
+    let binding = binding_name(role, shape.len(), name)?;
+    if axes && !shape.is_empty() {
+        let (args, test) = axis_args(&binding, shape.len(), indices, edge)?;
+        let read = format!(
+            "hawk_abi::view_item<{}, {}>({binding}, {})",
+            elem(dtype)?,
+            ext(shape),
+            args.join(", ")
+        );
+        return guarded(read, test, dtype, shape);
+    }
+    let (element, test) = element_at(&binding, indices, edge, axes)?;
+    let read = match (axes, shape.len()) {
+        (true, _) => element,
+        (false, 0) => format!("{element}.eval()"),
+        (false, _) => format!("{element}.get()"),
+    };
+    guarded(read, test, dtype, shape)
 }
 
 /// `cast`: a plain static_cast between Real, Int and bool.
@@ -138,7 +255,7 @@ pub fn cast_op(
 
 /// The name of the cell a by-value parameter of `role` is read from.
 pub fn param_cell(role: &str, name: &str) -> Result<String, Refusal> {
-    Ok(format!("{}_cell", binding_name(role, name)?))
+    Ok(format!("{}_cell", binding_name(role, 0, name)?))
 }
 
 /// The value a constant node holds, as far as a constant can be spelled from it.
@@ -503,10 +620,10 @@ pub fn declare(
 }
 
 /// A leaf of rank >= 1 read whole (a row of the sample): materialised as an Item.
-pub fn row_leaf(role: &str, name: &str) -> Result<String, Refusal> {
-    let b = binding_name(role, name)?;
+pub fn row_leaf(role: &str, rank: usize, name: &str) -> Result<String, Refusal> {
+    let b = binding_name(role, rank, name)?;
     match role {
-        "vec_in" | "mat_in" | "per_sample" | "lookup" | "mutable" => Ok(format!("{b}[i].get()")),
+        "plane_in" | "lookup" | "mutable" => Ok(format!("{b}[i].get()")),
         _ => Err(nib(format!("leaf role {role} of rank > 0"))),
     }
 }
@@ -692,12 +809,23 @@ fn product_op(op: &TensorOp) -> Option<Result<String, Refusal>> {
     }))
 }
 
-/// A PlaneExtent node: the element count of the plane's view.
-pub fn plane_extent(role: &str, name: &str) -> Result<String, Refusal> {
-    Ok(format!(
-        "static_cast<Int>({}.samples())",
-        binding_name(role, name)?
-    ))
+/// An AxisExtent node: the extent of one axis of the plane's view; a plane without axes has one axis, its samples.
+pub fn axis_extent(
+    role: &str,
+    rank: usize,
+    name: &str,
+    axis: i64,
+    axes: bool,
+) -> Result<String, Refusal> {
+    let binding = binding_name(role, rank, name)?;
+    match (axes, axis) {
+        (true, _) => Ok(format!(
+            "static_cast<Int>({binding}.extent({}))",
+            rank as i64 + axis
+        )),
+        (false, 0) => Ok(format!("static_cast<Int>({binding}.samples())")),
+        (false, _) => Err(nib("an axis beyond the first of a plane without axes")),
+    }
 }
 
 /// The C++ type one loop-carried local is declared as: a plain scalar at rank 0, an Item above.
@@ -824,5 +952,105 @@ mod tests {
             .unwrap_err()
             .reason
             .starts_with("not in this build: "));
+    }
+
+    /// Oracle: the rule of each edge stated in words, spelled by hand for a table of two axes read at `(i, k)`.
+    #[test]
+    fn a_read_at_two_indices_is_the_views_call_form_under_each_edge_rule() {
+        let at = |edge: &str| {
+            at(
+                "lookup",
+                "p",
+                &["i".into(), "k".into()],
+                edge,
+                ("f64", &[]),
+                true,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            at("clamp"),
+            "lut_p(aether::edge::clamp(i, lut_p.extent(0)), aether::edge::clamp(k, lut_p.extent(1)))"
+        );
+        assert_eq!(
+            at("wrap"),
+            "lut_p(aether::edge::wrap(i, lut_p.extent(0)), aether::edge::wrap(k, lut_p.extent(1)))"
+        );
+        assert_eq!(
+            at("unchecked"),
+            "lut_p(aether::edge::unchecked(i, lut_p.extent(0)), aether::edge::unchecked(k, lut_p.extent(1)))"
+        );
+        let zero = at("zero");
+        assert!(zero.starts_with("((aether::edge::inside(i, lut_p.extent(0)) && aether::edge::inside(k, lut_p.extent(1))) ? lut_p("));
+        assert!(zero.ends_with("{})"));
+        assert!(at_refused("diagonal"));
+    }
+
+    /// Whether a read under an unknown edge rule is refused.
+    fn at_refused(edge: &str) -> bool {
+        at("lookup", "p", &["i".into()], edge, ("f64", &[]), true).is_err()
+    }
+
+    /// Oracle: the spelling stated by hand: a value of rank above zero out of a plane with axes is read into an item component
+    /// by component, and a zero edge yields a constant of the extents held as the same item type.
+    #[test]
+    fn a_value_of_rank_above_zero_is_read_into_an_item_and_a_zero_edge_gives_a_constant_of_its_extents(
+    ) {
+        let shape: &[usize] = &[3];
+        let vector = |edge: &str, axes: bool, indices: &[String]| {
+            at("lookup", "p", indices, edge, ("f64", shape), axes).unwrap()
+        };
+        let two = ["i".to_string(), "k".to_string()];
+        assert_eq!(
+            vector("clamp", true, &two),
+            "hawk_abi::view_item<Real, 3>(lut_p, aether::edge::clamp(i, lut_p.extent(1)), aether::edge::clamp(k, lut_p.extent(2)))"
+        );
+        let zero = vector("zero", true, &two);
+        assert!(zero.ends_with(": aether::Item<Real, 3>(aether::constant<aether::extents<3>>(static_cast<Real>(0))))"), "{zero}");
+        let flat = vector("zero", false, &["j".to_string()]);
+        assert!(
+            flat.contains(".get() : aether::Item<Real, 3>(aether::constant"),
+            "{flat}"
+        );
+    }
+
+    /// Oracle: a plane without axes keeps the sample-index text, and `unchecked` adds no helper to it.
+    #[test]
+    fn a_read_of_a_plane_without_axes_keeps_the_sample_index_text_when_unchecked() {
+        assert_eq!(
+            at(
+                "lookup",
+                "p",
+                &["j".into()],
+                "unchecked",
+                ("f64", &[]),
+                false
+            )
+            .unwrap(),
+            "lut_p[aether::SampleIndex::make(static_cast<std::size_t>(j))].eval()"
+        );
+        assert!(at(
+            "lookup",
+            "p",
+            &["j".into(), "k".into()],
+            "clamp",
+            ("f64", &[]),
+            false
+        )
+        .is_err());
+    }
+
+    /// Oracle: the axis extent of a plane with axes asks the view for that axis; a plane without axes has its samples as axis 0.
+    #[test]
+    fn an_axis_extent_asks_the_view_for_the_axis() {
+        assert_eq!(
+            axis_extent("lookup", 0, "p", 1, true).unwrap(),
+            "static_cast<Int>(lut_p.extent(1))"
+        );
+        assert_eq!(
+            axis_extent("lookup", 0, "p", 0, false).unwrap(),
+            "static_cast<Int>(lut_p.samples())"
+        );
+        assert!(axis_extent("lookup", 0, "p", 1, false).is_err());
     }
 }

@@ -511,12 +511,24 @@ fn trip_loop_open(lp: &CutLoop, bounds: &TripBounds) -> Vec<String> {
     ]
 }
 
-/// The head of the lane loop inside a trip: the sample index, the proxies and views, the lane's own flag and index.
+/// Whether a line of the loop body names the lane's sample position `hawk_i` as a whole word.
+fn names_sample_index(line: &str) -> bool {
+    let ident = crate::spell::SAMPLE_INDEX_IDENT;
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    line.match_indices(ident).any(|(at, _)| {
+        !line[..at].chars().next_back().is_some_and(word)
+            && !line[at + ident.len()..].chars().next().is_some_and(word)
+    })
+}
+
+/// The head of the lane loop inside a trip: the sample index, the proxies and views, the lane's own flag and index. The sample
+/// position `hawk_i` is declared only when the body reads it (`wants_index`), so a body that does not keeps its recorded text.
 fn lane_prologue(
     lp: &CutLoop,
     bounds: &TripBounds,
     proxies: &[(String, String, usize)],
     views: &[String],
+    wants_index: bool,
     lines: &mut Vec<String>,
 ) {
     let (itype, index) = (&bounds.itype, &bounds.index);
@@ -531,6 +543,13 @@ fn lane_prologue(
             .into(),
         "        (void)i;".into(),
     ]);
+    if wants_index {
+        lines.extend([
+            "        const std::int64_t hawk_i = static_cast<std::int64_t>(hawk_tlo + hawk_t);"
+                .into(),
+            "        (void)hawk_i;".into(),
+        ]);
+    }
     for proxy in proxies {
         lines.push(proxy_line(proxy, "hawk_l"))
     }
@@ -618,8 +637,11 @@ fn trips(
     if stops {
         lines.push("    std::int64_t hawk_live = 0;".into())
     }
-    lane_prologue(lp, &bounds, proxies, views, &mut lines);
-    lane_step(lp, rows, &reads, &bounds, stops, &mut lines)?;
+    let mut step = vec![];
+    lane_step(lp, rows, &reads, &bounds, stops, &mut step)?;
+    let wants_index = step.iter().chain(views).any(|l| names_sample_index(l));
+    lane_prologue(lp, &bounds, proxies, views, wants_index, &mut lines);
+    lines.extend(step);
     if stops {
         lines.push("        hawk_ron[hawk_l] = hawk_more ? 1.0 : 0.0;".into())
     }
@@ -633,4 +655,19 @@ fn trips(
     }
     lines.extend(["    }".to_string(), "    }".to_string()]);
     Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::names_sample_index;
+
+    #[test]
+    fn the_sample_position_is_found_as_a_whole_word_only() {
+        assert!(names_sample_index("const auto x = f(hawk_i);"));
+        assert!(names_sample_index("hawk_i + 1"));
+        assert!(!names_sample_index(
+            "const bool hawk_in = hawk_l < hawk_tn;"
+        ));
+        assert!(!names_sample_index("static_cast<Int>(hawk_t)"));
+    }
 }

@@ -75,6 +75,66 @@ template <class ViewT, class T>
 @ARM@
 }
 "####;
+/// The compensated add at an element of a plane with axes: the term is added at the element the view's call form names, and the
+/// correction at the same element of the companion plane.
+pub const ACCUM_ADD_COMPENSATED_AT: &str = r####"
+template <class E, class T>
+@QUAL@ void accum_add_compensated_at(E& slot, E& compSlot, T term)
+{
+    static_assert(std::is_floating_point_v<E>,
+                  "hawk_abi::accum_add_compensated_at: a scattered compensated "
+                  "accumulate commits through the target's atomic add, and "
+                  "only a floating accumulate plane has one");
+    E t = static_cast<E>(term);
+    AETHER_FP_BARRIER(t);  // rounded once: never fused into `old + t`
+@ARM@
+}
+"####;
+/// The scattered add at an element of a plane with axes: the element is named by the view's call form, so the helper takes it.
+pub const ACCUM_ADD_AT: &str = r####"
+template <class E, class T>
+@QUAL@ void accum_add_at(E& slot, T term)
+{
+    static_assert(std::is_floating_point_v<E>,
+                  "hawk_abi::accum_add_at: a scattered accumulate commits through the "
+                  "target's atomic add, and only a floating accumulate plane has one");
+@ARM@
+}
+"####;
+/// The value of rank above zero a plane with axes holds at one position: each component is the view's call form with the
+/// component's indices ahead of the axis indices (the storage order is the value's components, then the axes).
+pub const VIEW_ITEM: &str = r####"
+template <class T, std::size_t... Es, class ViewT, class... Axes>
+@QUAL@ aether::Item<T, Es...> view_item(const ViewT& view, Axes... axes)
+{
+    constexpr std::size_t kRank = sizeof...(Es);
+    constexpr std::size_t kExtents[kRank] = {Es...};
+    aether::Item<T, Es...> out;
+    for (std::size_t flat = 0; flat < (Es * ...); ++flat) {
+        std::size_t component[kRank];
+        std::size_t rest = flat;
+        for (std::size_t axis = kRank; axis-- > 0;) {
+            component[axis] = rest % kExtents[axis];
+            rest /= kExtents[axis];
+        }
+        [&]<std::size_t... K>(std::index_sequence<K...>) {
+            out(component[K]...) = view(component[K]..., axes...);
+        }(std::make_index_sequence<kRank>{});
+    }
+    return out;
+}
+"####;
+/// The scattered or at an element of a plane with axes: the element is named by the view's call form, so the helper takes it.
+pub const ACCUM_OR_AT: &str = r####"
+template <class E, class T>
+@QUAL@ void accum_or_at(E& slot, T bits)
+{
+    static_assert(std::is_integral_v<E> && sizeof(E) == 4,
+                  "hawk_abi::accum_or_at: a scattered OR commits through the "
+                  "target's atomic OR, on a 32-bit integer plane");
+@ARM@
+}
+"####;
 /// The atomic or helper.
 pub const ACCUM_OR: &str = r####"
 template <class ViewT, class T>
@@ -95,6 +155,30 @@ template <class ViewT>
 {
     auto& t = target(at.global());
     auto& c = comp(at.global());
+    using E = std::remove_reference_t<decltype(t)>;
+    const E s = t + c;
+    const E e = twoSumErr_(t, c, s);
+    t = s;
+    c = aether::accum::isFiniteBits(s) ? e : E(0);
+}
+"####;
+/// The helper that folds a companion into a target with axes, element by element in storage order: such a plane is
+/// contiguous, so its element at a flat position is the data's.
+pub const FOLD_COMPANION_AXES: &str = r####"
+template <class ViewT>
+@QUAL@ auto& flat_element(ViewT& view, const aether::SampleIndex& at)
+{
+    if constexpr (ViewT::rank() == 1) {
+        return view(at.global());
+    } else {
+        return view.data()[at.global()];
+    }
+}
+template <class ViewT>
+@QUAL@ void fold_companion(ViewT& target, ViewT& comp, const aether::SampleIndex& at)
+{
+    auto& t = flat_element(target, at);
+    auto& c = flat_element(comp, at);
     using E = std::remove_reference_t<decltype(t)>;
     const E s = t + c;
     const E e = twoSumErr_(t, c, s);
@@ -285,6 +369,8 @@ template <class T, class R> @QUAL@ T int_from_real(R x)
     return static_cast<T>(x);
 }
 "####;
+/// The include of the edge-rule helpers of an indexed access.
+pub const EDGE_INCLUDE: &str = "#include \"aether/view/Edge.h\"\n";
 /// The count clamp helper.
 pub const CLAMP_COUNT: &str = r####"@QUAL@ int hawk_clamp_count(long long n)
 {

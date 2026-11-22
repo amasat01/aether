@@ -146,6 +146,35 @@ struct IsFiniteOp {
 // stops nesting instantiations at 200).
 // ---------------------------------------------------------------------------
 
+/** @brief The product of the static extents of `X` from axis `From` on: the elements of a value of those extents. */
+template<class X, std::size_t From = 0>
+AETHER_DEVICEHOST() constexpr std::size_t staticNumel()
+{
+    std::size_t n = 1;
+    for (std::size_t axis = From; axis < X::Rank; ++axis) {
+        n *= X::static_extent(axis);
+    }
+    return n;
+}
+
+/**
+ * @brief The component of `e` at the row-major flat position `K`, whatever the rank of `e`; for a rank-1 value this
+ *        is `e.eval<K>(i)`. Lets a fold visit every component of a value of any rank in storage order.
+ */
+template<std::size_t K, class E, std::size_t... Axes>
+AETHER_DEVICEHOST() constexpr decltype(auto) evalFlat(const E& e, const SampleIndex& i, std::index_sequence<Axes...>)
+{
+    using X = typename E::element_extents;
+    return e.template eval<(K / staticNumel<X, Axes + 1>()) % X::static_extent(Axes)...>(i);
+}
+
+template<std::size_t K, class E>
+AETHER_DEVICEHOST() constexpr decltype(auto) evalFlat(const E& e, const SampleIndex& i)
+{
+    return evalFlat<K>(e, i, std::make_index_sequence<E::element_extents::Rank>{});
+}
+
+/** @brief The folds below visit the `N` components of `e` in row-major order (`N` = its elements). */
 template<std::size_t N, class E, class ReduceOp, class TransfOp, class OutT>
 struct GenericReduce {
     AETHER_DEVICEHOST() static constexpr OutT eval(const E& e, const SampleIndex& i)
@@ -157,8 +186,8 @@ private:
     template<std::size_t... K>
     AETHER_DEVICEHOST() static constexpr OutT fold(std::index_sequence<K...>, const E& e, const SampleIndex& i)
     {
-        OutT acc = TransfOp{}(toWorkingValue(e.template eval<0>(i)));
-        ((acc = ReduceOp{}(TransfOp{}(toWorkingValue(e.template eval<K + 1>(i))), acc)), ...);
+        OutT acc = TransfOp{}(toWorkingValue(evalFlat<0>(e, i)));
+        ((acc = ReduceOp{}(TransfOp{}(toWorkingValue(evalFlat<K + 1>(e, i))), acc)), ...);
         return acc;
     }
 };

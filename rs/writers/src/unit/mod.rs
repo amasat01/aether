@@ -4,9 +4,9 @@
 //! unpacking of the entry's
 //! arguments. The host and device arms differ only in the arguments they pass here.
 use crate::body::frame::needs::{Need, Needs as BodyNeeds};
-use crate::contract::types::{Active, Exports, Scalar, Target, ThreadBox, Walk as TypedWalk};
+use crate::contract::types::{Active, Axis, Exports, Scalar, Target, ThreadBox, Walk as TypedWalk};
 use crate::ir::door::RxCtx;
-use crate::refuse::{not_written, Refusal};
+use crate::refuse::{fault, not_written, Refusal};
 use crate::spell::binding_name;
 use text::*;
 
@@ -65,13 +65,13 @@ pub fn unpack_lines(
 ) -> Result<String, Refusal> {
     let mut lines: Vec<String> = vec![];
     for s in &w.slots {
-        let id = binding_name(&s.role, &s.name)?;
+        let id = binding_name(&s.role, s.shape.len(), &s.name)?;
         let q = if WRITABLE.contains(&s.role.as_str()) {
             ""
         } else {
             "const "
         };
-        let src = reconstruct(s, &source_of(s)?)?;
+        let src = reconstruct(s, &source_of(s)?, &runtime_extents(w, s, source_of)?)?;
         match binding_of(s)? {
             Some(own) => lines.push(own),
             None => {
@@ -219,6 +219,13 @@ pub struct Slot {
     pub shape: Vec<i64>,
     /// The slot's position in the argument list.
     pub index: i64,
+    /// The axes of the plane, in storage order; empty for a plane without axes (one runtime axis).
+    pub axes: Vec<Axis>,
+}
+
+/// The name of the slot that carries the runtime extent of one axis of a plane.
+pub fn extent_name(plane: &str, label: &str) -> String {
+    format!("{plane}_{label}")
 }
 
 /// The kernel's walk as the contract carries it.
@@ -246,11 +253,15 @@ pub fn element(dtype: &str) -> Result<String, Refusal> {
     })
 }
 
-/// The C++ type an entry binds a slot to: a plain value or a view over its extents.
+/// The C++ type an entry binds a slot to: a plain value or a view over its extents. A plane with axes is a view of its value
+/// shape followed by its axes (a static extent as a number, a runtime one as `dyn`); a plane without axes has one runtime axis.
 pub fn view_type(s: &Slot) -> Result<String, Refusal> {
     if an::mirror_of(&s.role, &s.dtype, s.shape.len())? == "value" {
         if s.role == "nsamples" {
             return Ok("EAGLE_ABI_INDEX_T".into());
+        }
+        if s.role == "extent" {
+            return Ok("std::int64_t".into());
         }
         return if INT_PLANE.contains(&s.dtype.as_str()) {
             Ok("Int".into())
@@ -258,25 +269,64 @@ pub fn view_type(s: &Slot) -> Result<String, Refusal> {
             element(&s.dtype)
         };
     }
-    let ext: Vec<String> = s
-        .shape
-        .iter()
-        .map(|e| e.to_string())
-        .chain(["aether::dyn".to_string()])
-        .collect();
     Ok(format!(
-        "aether::View<{}, aether::extents<{}>, aether::layout_right>",
+        "aether::View<{}, {}, aether::layout_right>",
         element(&s.dtype)?,
-        ext.join(", ")
+        extents_type(s)
     ))
 }
 
-/// The expression that rebuilds a slot's view from the entry's source text for it.
-pub fn reconstruct(s: &Slot, src: &str) -> Result<String, Refusal> {
+/// The extents of a plane's view: its value shape, then its axes (a static extent as a number, a runtime one as `dyn`); a plane
+/// without axes has one runtime axis.
+fn extents_type(s: &Slot) -> String {
+    let axes: Vec<String> = if s.axes.is_empty() {
+        vec!["aether::dyn".into()]
+    } else {
+        s.axes
+            .iter()
+            .map(|a| a.extent.map_or("aether::dyn".into(), |e| e.to_string()))
+            .collect()
+    };
+    let all: Vec<String> = s.shape.iter().map(|e| e.to_string()).chain(axes).collect();
+    format!("aether::extents<{}>", all.join(", "))
+}
+
+/// The expression that rebuilds a slot's view from the entry's source text for it. A plane with axes, or one holding a value of
+/// rank three or more, is built from the handle's data pointer and device and its extents: `runtime_extents` are the texts of
+/// its runtime axes, in axis order. A plane without axes holding a value of rank zero to two is read through the unit's helpers
+/// when it crosses as a mirror; one that crosses as a scalar handle (a lookup) is built from its extents as soon as its value has
+/// a rank, since the helpers read a mirror.
+pub fn reconstruct(s: &Slot, src: &str, runtime_extents: &[String]) -> Result<String, Refusal> {
     if an::mirror_of(&s.role, &s.dtype, s.shape.len())? == "value" {
         return Ok(src.into());
     }
     let e = element(&s.dtype)?;
+    let mirror = an::mirror_of(&s.role, &s.dtype, s.shape.len())? == "GRefMirror";
+    // the helpers every unit carries spell a mirror plane of rank zero to two without axes; any other plane is built from its
+    // extents
+    if !s.axes.is_empty() || s.shape.len() > 2 || (!mirror && !s.shape.is_empty()) {
+        let (data, kind, id) = if mirror {
+            ("data_", "deviceType_", "deviceId_")
+        } else {
+            ("data", "deviceType", "deviceId")
+        };
+        let ext = extents_type(s);
+        return Ok(format!(
+            "aether::View<{e}, {ext}, aether::layout_right>(\n            reinterpret_cast<{e}*>(({src}).{data}),\n            aether::layout_right::mapping<{ext}>({ext}({})),\n            aether::Device(static_cast<DLDeviceType>(({src}).{kind}), ({src}).{id}))",
+            // a plane without axes has one runtime axis: its samples. A mirror's pitch counts them; a handle states the elements of
+            // the whole plane (value components included), so the samples are those over the value's components.
+            if s.axes.is_empty() {
+                if mirror {
+                    format!("static_cast<std::size_t>(({src}).compStride_)")
+                } else {
+                    let per_sample: i64 = s.shape.iter().product();
+                    format!("static_cast<std::size_t>(({src}).samples / {per_sample})")
+                }
+            } else {
+                runtime_extents.join(", ")
+            }
+        ));
+    }
     Ok(match s.shape.len() {
         0 => format!("hawk_abi::scalar_view<{e}>({src})"),
         1 => format!("hawk_abi::vec_view<{e}, {}>({src})", s.shape[0]),
@@ -285,6 +335,30 @@ pub fn reconstruct(s: &Slot, src: &str) -> Result<String, Refusal> {
             s.shape[0], s.shape[1]
         ),
     })
+}
+
+/// The texts of a plane's runtime extents, read from the slots that carry them, in axis order.
+fn runtime_extents(
+    w: &Walk,
+    s: &Slot,
+    source_of: &dyn Fn(&Slot) -> Result<String, Refusal>,
+) -> Result<Vec<String>, Refusal> {
+    let mut texts = vec![];
+    for axis in s.axes.iter().filter(|a| a.extent.is_none()) {
+        let wanted = extent_name(&s.name, &axis.label);
+        let slot = w
+            .slots
+            .iter()
+            .find(|x| x.role == "extent" && x.name == wanted)
+            .ok_or_else(|| {
+                fault(format!(
+                    "plane {:?} has a runtime axis {:?} and the walk carries no extent slot for it",
+                    s.name, axis.label
+                ))
+            })?;
+        texts.push(source_of(slot)?);
+    }
+    Ok(texts)
 }
 
 /// The row-sum text of a banded mode: value-initialised zeros (an accumulator has no `E(0)`), the
@@ -329,10 +403,22 @@ pub struct Needs {
     pub team: bool,
     /// Whether the body commits an or into a slot.
     pub scatter_or: bool,
+    /// Whether the body commits an or at an element of a plane with axes.
+    pub scatter_or_at: bool,
+    /// Whether the body reads a value of rank above zero out of a plane with axes.
+    pub view_item: bool,
+    /// Whether the body adds a term at an element of a plane with axes.
+    pub scatter_at: bool,
+    /// Whether the body adds a compensated term at an element of a plane with axes.
+    pub compensated_at: bool,
+    /// Whether the body names an edge-rule helper of an indexed access.
+    pub edges: bool,
     /// Whether the body adds compensated terms.
     pub compensated: bool,
     /// Whether the unit folds a companion into its target.
     pub fold: bool,
+    /// Whether a folded plane has axes, which gives its fold the helper that walks the data in storage order.
+    pub fold_axes: bool,
     /// Whether the body opens run commits.
     pub runs: bool,
     /// Whether the unit finishes lanes.
@@ -366,9 +452,10 @@ fn include_block(m: &Mode, arms: &Arms, n: &Needs) -> String {
         (n.linalg || n.rays || n.team, FACTS_INCLUDE),
         (!m.includes.is_empty(), m.includes),
         (n.random, RANDOM_INCLUDE),
+        (n.edges, EDGE_INCLUDE),
         (n.runs, RUN_INCLUDE),
         (
-            n.compensated || n.store_compensated || n.fold || n.sample_sum,
+            n.compensated || n.compensated_at || n.store_compensated || n.fold || n.sample_sum,
             TWO_SUM_INCLUDE,
         ),
         (n.linalg, LINALG_INCLUDE),
@@ -401,7 +488,15 @@ fn helper_block(m: &Mode, q: &str, arms: &Arms, n: &Needs) -> String {
         helpers += &fill(TWO_SUM_ERR, q, "")
     }
     if n.fold {
-        helpers += &fill(FOLD_COMPANION, q, "")
+        helpers += &fill(
+            if n.fold_axes {
+                FOLD_COMPANION_AXES
+            } else {
+                FOLD_COMPANION
+            },
+            q,
+            "",
+        )
     }
     if n.sample_sum {
         let halves: Vec<String> = (1..(64 - (n.row as u64).leading_zeros()))
@@ -424,6 +519,9 @@ fn helper_block(m: &Mode, q: &str, arms: &Arms, n: &Needs) -> String {
     if n.compensated {
         helpers += &fill(ACCUM_ADD_COMPENSATED, q, arms.accum_add_compensated)
     }
+    if n.compensated_at {
+        helpers += &fill(ACCUM_ADD_COMPENSATED_AT, q, arms.accum_add_compensated)
+    }
     if n.store_compensated {
         helpers += &fill(STORE_COMPENSATED, q, "")
     }
@@ -441,6 +539,15 @@ fn helper_block(m: &Mode, q: &str, arms: &Arms, n: &Needs) -> String {
     }
     if n.scatter_or {
         helpers += &fill(ACCUM_OR, q, arms.accum_or)
+    }
+    if n.view_item {
+        helpers += &fill(VIEW_ITEM, q, "")
+    }
+    if n.scatter_or_at {
+        helpers += &fill(ACCUM_OR_AT, q, arms.accum_or)
+    }
+    if n.scatter_at {
+        helpers += &fill(ACCUM_ADD_AT, q, arms.accum_add)
     }
     if n.tiled {
         helpers += &fill(arms.tiled, q, "")
@@ -498,14 +605,29 @@ pub fn needs_of_body(
         rays: body.has(Need::Geometry),
         team: body.has(Need::Team),
         scatter_or: body.has(Need::AccumOr),
+        view_item: body.has(Need::ViewItem),
+        scatter_or_at: body.has(Need::AccumOrAt),
+        scatter_at: body.has(Need::AccumAt),
+        edges: body.has(Need::Edge),
         compensated: body.has(Need::AccumCompensated),
+        compensated_at: body.has(Need::AccumCompensatedAt),
         fold,
+        fold_axes: false,
         runs: body.has(Need::AccumRun),
         finish,
         narrow_int,
         sample_sum,
         row,
     }
+}
+
+/// Whether a companion's target plane has axes: the walk's slot of that name states them.
+pub fn folds_axes(w: &Walk, companions: &[(String, String)]) -> bool {
+    companions.iter().any(|(_, target)| {
+        w.slots
+            .iter()
+            .any(|s| &s.name == target && !s.axes.is_empty())
+    })
 }
 
 /// The scalar mode of a unit by value.
@@ -547,6 +669,7 @@ pub fn walk_from(walk: &TypedWalk) -> Walk {
                 dtype: slot.dtype.name().to_string(),
                 shape: slot.shape.clone(),
                 index: slot.index,
+                axes: slot.axes.clone().unwrap_or_default(),
             })
             .collect(),
     }
@@ -622,6 +745,45 @@ mod tests {
             .unwrap()
             .contains("extern \"C\" __device__ unsigned long long eagle_layout_sizes[5] = {"));
     }
+    /// Arms with no text: the tests below look at the helper text, not at an arm's.
+    fn empty_arms() -> Arms {
+        Arms {
+            accum_add: "",
+            accum_add_compensated: "",
+            accum_or: "",
+            finish_count: "",
+            mix_count: "",
+            spacing: "",
+            tiled: "",
+            warp_sum: "",
+            sample_sum_warp: "",
+            banded_include: "",
+            banded_sum: "",
+            banded_ss_helpers: "",
+        }
+    }
+    #[test]
+    fn a_fold_of_a_plane_without_axes_keeps_the_flat_helper() {
+        let m = mode_of(Scalar::Float32);
+        let mut n = needs_of_body(&BodyNeeds::default(), false, true, false, false, false, 0);
+        let plain = helper_block(&m, "static inline", &empty_arms(), &n);
+        assert!(plain.contains("fold_companion") && !plain.contains("flat_element"));
+        n.fold_axes = true;
+        let walked = helper_block(&m, "static inline", &empty_arms(), &n);
+        assert!(walked.contains("flat_element"));
+    }
+    #[test]
+    fn the_compensated_add_at_an_element_is_a_helper_of_its_own() {
+        let m = mode_of(Scalar::Float32);
+        let mut n = needs_of_body(&BodyNeeds::default(), false, false, false, false, false, 0);
+        n.compensated = true;
+        let flat = helper_block(&m, "static inline", &empty_arms(), &n);
+        assert!(flat.contains("ViewT& target, ViewT& comp") && !flat.contains("compensated_at"));
+        n.compensated = false;
+        n.compensated_at = true;
+        let at = helper_block(&m, "static inline", &empty_arms(), &n);
+        assert!(at.contains("accum_add_compensated_at") && !at.contains("ViewT& target"));
+    }
     #[test]
     fn prelude_is_filled() {
         let arms = Arms {
@@ -652,8 +814,14 @@ mod tests {
             rays: false,
             team: false,
             scatter_or: false,
+            view_item: false,
+            scatter_or_at: false,
+            scatter_at: false,
+            edges: false,
             compensated: false,
+            compensated_at: false,
             fold: false,
+            fold_axes: false,
             runs: false,
             finish: false,
             narrow_int: false,
@@ -662,5 +830,38 @@ mod tests {
         };
         let p = prelude(&m, "static inline", &arms, &n);
         assert!(p.contains("using Real = float;\nusing Int = long long;") && !p.contains('@'));
+    }
+
+    /// Oracle: the extents written by hand, the value shape first, then each axis as a number or `dyn`.
+    #[test]
+    fn a_plane_with_axes_is_a_view_of_its_axes_rebuilt_from_the_handle_and_the_runtime_extents() {
+        let plane = Slot {
+            role: "lookup".into(),
+            name: "p".into(),
+            dtype: "f64".into(),
+            shape: vec![],
+            index: 0,
+            axes: vec![
+                Axis {
+                    label: "i".into(),
+                    extent: None,
+                },
+                Axis {
+                    label: "k".into(),
+                    extent: Some(3),
+                },
+            ],
+        };
+        assert_eq!(
+            view_type(&plane).unwrap(),
+            "aether::View<Real, aether::extents<aether::dyn, 3>, aether::layout_right>"
+        );
+        let text = reconstruct(&plane, "h", &["n".into()]).unwrap();
+        assert!(
+            text.contains("aether::extents<aether::dyn, 3>(n)"),
+            "{text}"
+        );
+        assert!(text.contains("(h).data"), "{text}");
+        assert_eq!(extent_name("p", "i"), "p_i");
     }
 }

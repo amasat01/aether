@@ -65,18 +65,14 @@ pub enum Dtype {
 pub enum Role {
     /// A plane the unit reads and writes in place.
     Mutable,
-    /// A plane with one value per sample.
-    PerSample,
-    /// A vector read in one piece.
-    VecIn,
+    /// A plane read per sample, whatever the rank of its value (the slot's shape says it).
+    PlaneIn,
     /// A table indexed by a run-time value.
     Lookup,
     /// An output with several values per sample.
     WideOut,
     /// A value shared by all samples, passed by value.
     Uniform,
-    /// A matrix read in one piece.
-    MatIn,
     /// An output accumulated over samples.
     AccumOut,
     /// A mask that marks a sample as finished.
@@ -87,6 +83,8 @@ pub enum Role {
     Nsamples,
     /// A plain output plane.
     Out,
+    /// The extent of one runtime axis of a plane, passed by value; the runtime reads it from the bound array.
+    Extent,
 }
 
 /// How the unit's loads and stores relate one sample to the others.
@@ -113,6 +111,17 @@ pub struct Slot {
     pub shape: Vec<i64>,
     /// The position of the slot in the entry's argument list.
     pub index: i64,
+    /// The axes of a plane the slot declares, in storage order; none for a plane declared without axes.
+    pub axes: Option<Vec<Axis>>,
+}
+
+/// One axis of a plane: its label and its extent, none when the extent is known only at run time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Axis {
+    /// The axis's label.
+    pub label: String,
+    /// The axis's extent, at least 1; none for a runtime extent.
+    pub extent: Option<i64>,
 }
 
 /// The argument list of a unit and how it is accessed.
@@ -552,17 +561,16 @@ impl Role {
     pub fn name(self) -> &'static str {
         match self {
             Role::Mutable => "mutable",
-            Role::PerSample => "per_sample",
-            Role::VecIn => "vec_in",
+            Role::PlaneIn => "plane_in",
             Role::Lookup => "lookup",
             Role::WideOut => "wide_out",
             Role::Uniform => "uniform",
-            Role::MatIn => "mat_in",
             Role::AccumOut => "accum_out",
             Role::Terminated => "terminated",
             Role::WideIn => "wide_in",
             Role::Nsamples => "nsamples",
             Role::Out => "out",
+            Role::Extent => "extent",
         }
     }
 }

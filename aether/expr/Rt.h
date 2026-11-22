@@ -64,19 +64,29 @@ AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr decltype(auto) at(X&& x, Ks..
     }
 }
 
-/** @brief `acc = T(x0); acc = R(T(x_k), acc)`, k ascending: `GenericReduce`'s order. */
+/** @brief Component `k` (row-major flat position) of one sample of `a`, whatever its rank. */
+template<class A, std::size_t... Axes>
+AETHER_DEVICEHOST() AETHER_FORCEINLINE() constexpr decltype(auto) atFlat(
+    const A& a, std::size_t k, std::index_sequence<Axes...>)
+{
+    using X = ext_t<A>;
+    return at(a, ((k / aether::detail::staticNumel<X, Axes + 1>()) % X::static_extent(Axes))...);
+}
+
+/** @brief `acc = T(x0); acc = R(T(x_k), acc)`, k ascending over every component: `GenericReduce`'s order. */
 template<class R, class T, class Out, class A>
 AETHER_DEVICEHOST() constexpr Out reduce(const A& a)
 {
-    static_assert(ext_t<A>::Rank == 1, "rt: only rank-1 operands are supported");
-    constexpr std::size_t N = ext_t<A>::static_extent(0);
-    Out acc = T{}(toWorkingValue(at(a, std::size_t{ 0 })));
+    static_assert(ext_t<A>::Rank >= 1, "rt: a rank-0 operand has no components");
+    constexpr std::size_t N = aether::detail::staticNumel<ext_t<A>>();
+    constexpr auto axes = std::make_index_sequence<ext_t<A>::Rank>{};
+    Out acc = T{}(toWorkingValue(atFlat(a, std::size_t{ 0 }, axes)));
     if constexpr (N > 1) {
-        acc = R{}(T{}(toWorkingValue(at(a, std::size_t{ 1 }))), acc);
+        acc = R{}(T{}(toWorkingValue(atFlat(a, std::size_t{ 1 }, axes))), acc);
     }
     AETHER_NO_UNROLL()
     for (std::size_t k = 2; k < N; ++k) {
-        acc = R{}(T{}(toWorkingValue(at(a, k))), acc);
+        acc = R{}(T{}(toWorkingValue(atFlat(a, k, axes))), acc);
     }
     return acc;
 }

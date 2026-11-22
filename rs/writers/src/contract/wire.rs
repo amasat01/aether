@@ -164,8 +164,8 @@ members!(Target, [Host, Device]);
 members!(Scalar, [Float64, Float32, Banded]);
 members!(Dtype, [F64, F32, I32, I64, Int32, Uint32, Bool]);
 #[rustfmt::skip]
-members!(Role, [Mutable, PerSample, VecIn, Lookup, WideOut, Uniform, MatIn, AccumOut, Terminated,
-    WideIn, Nsamples, Out]);
+members!(Role, [Mutable, PlaneIn, Lookup, WideOut, Uniform, AccumOut, Terminated,
+    WideIn, Nsamples, Out, Extent]);
 members!(Access, [SampleLocal, CrossSampleRead, CrossSampleWrite]);
 members!(MapBits, [B32, B64]);
 members!(Grid, [Lanes, Keys, Chunks, Targets]);
@@ -177,7 +177,8 @@ members!(StepOp, [Lu, LuSolve, LuSolveT, LuInverse, LuDet, Chol, CholFrom, ChoSo
     ScatterZero, ScatterChunks, ScatterCells]);
 
 // The records: each field once, in wire order, under its own name.
-record!(Slot, "slot", [role, name, dtype, shape, index]);
+record!(Slot, "slot", [role, name, dtype, shape, index, axes]);
+record!(Axis, "axis", [label, extent]);
 record!(Walk, "walk", [access, finish, slots]);
 record!(Kind, "kind", [guard, lanes, sink]);
 #[rustfmt::skip]
@@ -591,11 +592,12 @@ mod tests {
             access: Access::SampleLocal,
             finish: Some("m".into()),
             slots: vec![Slot {
-                role: Role::PerSample,
+                role: Role::PlaneIn,
                 name: "x".into(),
                 dtype: Dtype::F64,
                 shape: vec![3],
                 index: 0,
+                axes: None,
             }],
         };
         let stage = TeamStage {
