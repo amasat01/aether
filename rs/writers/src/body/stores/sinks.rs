@@ -283,7 +283,10 @@ fn element_call(
     helper: &str,
     component: &[usize],
 ) -> Result<(String, Option<String>), Refusal> {
-    if text_field(f.ctx(), h, "order")? == "lane" {
+    // the value of a minimum or maximum does not depend on the order lanes arrive in, so the lane order changes nothing here: it
+    // fixes the winner, which a later launch records
+    let op = text_field(f.ctx(), h, "op")?;
+    if text_field(f.ctx(), h, "order")? == "lane" && op != "min" && op != "max" {
         return Err(nib("an atomic update in lane order"));
     }
     let operands = door::operands(f.ctx(), h)?;
