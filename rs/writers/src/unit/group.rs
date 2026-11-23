@@ -210,49 +210,93 @@ fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
     Ok(seen)
 }
 
-/// The names of the planes the sinks write and of the planes their values read.
-fn touched(ctx: *mut RxCtx, sinks: &[u32]) -> Result<(Vec<String>, Vec<String>), Refusal> {
+/// What one run of sinks does to the planes: the planes it writes (and whether each write accumulates), the planes its values read,
+/// and those it reads through an index (at another lane of the launch).
+struct Touch {
+    /// The planes the sinks write, each with whether the write is an accumulate.
+    written: Vec<(String, bool)>,
+    /// The planes the sinks' values read.
+    read: Vec<String>,
+    /// The planes the sinks' values read through an index.
+    read_elsewhere: Vec<String>,
+}
+
+/// What `sinks` do to the planes.
+fn touched(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Touch, Refusal> {
     let mut written = vec![];
     for &sink in sinks {
-        let commits = door::class_is(ctx, sink, "Assign")? || door::class_is(ctx, sink, "Update")?;
-        if commits && door::text_field(ctx, sink, "role")? != "scratch" {
-            written.push(door::text_field(ctx, sink, "name")?);
+        let assigns = door::class_is(ctx, sink, "Assign")?;
+        if (assigns || door::class_is(ctx, sink, "Update")?)
+            && door::text_field(ctx, sink, "role")? != "scratch"
+        {
+            let accumulates = !assigns && door::text_field(ctx, sink, "op")? != "store";
+            written.push((door::text_field(ctx, sink, "name")?, accumulates));
         }
     }
-    let mut read = vec![];
+    let (mut read, mut read_elsewhere) = (vec![], vec![]);
     for node in reachable(ctx, sinks)? {
         if door::class_is(ctx, node, "Leaf")? {
             read.push(door::text_field(ctx, node, "name")?);
         }
+        if !door::class_is(ctx, node, "At")? {
+            continue;
+        }
+        let ops = door::operands(ctx, node)?;
+        // a read of a uniform's cell (an `At` with a role constant) is no read at another lane
+        if ops.len() >= 2
+            && door::class_is(ctx, ops[0], "Leaf")?
+            && !door::class_is(ctx, ops[1], "RoleConst")?
+        {
+            read_elsewhere.push(door::text_field(ctx, ops[0], "name")?);
+        }
     }
-    Ok((written, read))
+    Ok(Touch {
+        written,
+        read,
+        read_elsewhere,
+    })
 }
 
-/// Refuses a sink beside the group that touches a plane the group's body writes, or writes one the body reads: the two run lane by
-/// lane in one pass, so such a pair has no order the author stated. Sinks that touch other planes are correct in any order.
-fn refuse_shared_planes(
+/// Whether the sinks beside the group run after the group's phases (else before them), refusing a pair that no order serves.
+///
+/// Every read of a plane sees its launch-start value, so a read must run before the write of the same lane's cell: the sinks
+/// beside the group run BEFORE the group's first phase when they read a plane the body writes, and AFTER its last phase when
+/// they write a plane the body reads (before, when neither). Both at once is a cycle, and is refused. Across the lanes of
+/// different groups the call has no order to give: a plane one run writes may be read by the other only at the lane's own
+/// element, and written by the other only by accumulating (adds commute).
+fn outside_runs_after(
     ctx: *mut RxCtx,
     kernel: &str,
     body: &[u32],
     outside: &[u32],
-) -> Result<(), Refusal> {
-    let (body_written, body_read) = touched(ctx, body)?;
-    let (outside_written, outside_read) = touched(ctx, outside)?;
-    let clash = |written: &[String], others: [&[String]; 2]| {
-        written
-            .iter()
-            .find(|name| others.iter().any(|set| set.contains(name)))
-            .cloned()
-    };
-    let shared = clash(&body_written, [&outside_written, &outside_read])
-        .or_else(|| clash(&outside_written, [&body_read, &[]]));
-    match shared {
-        Some(name) => Err(unwritten(
-            kernel,
-            &format!("a sink beside a group that shares the plane '{name}' with the group's body"),
-        )),
-        None => Ok(()),
+) -> Result<bool, Refusal> {
+    let (inside, beside) = (touched(ctx, body)?, touched(ctx, outside)?);
+    for (writer, reader, who) in [
+        (&inside, &beside, "the sinks beside the group"),
+        (&beside, &inside, "the group body"),
+    ] {
+        for (plane, accumulates) in &writer.written {
+            let rewritten = reader
+                .written
+                .iter()
+                .any(|(other, adds)| other == plane && !(*adds && *accumulates));
+            if rewritten || reader.read_elsewhere.contains(plane) {
+                return Err(unwritten(
+                    kernel,
+                    &format!("the plane '{plane}' written on one side of the group and rewritten or read at another lane by {who}"),
+                ));
+            }
+        }
     }
+    let reads_body_writes = inside.written.iter().any(|(p, _)| beside.read.contains(p));
+    let writes_body_reads = beside.written.iter().any(|(p, _)| inside.read.contains(p));
+    if reads_body_writes && writes_body_reads {
+        return Err(unwritten(
+            kernel,
+            "sinks beside a group that read a plane the body writes and write a plane the body reads",
+        ));
+    }
+    Ok(writes_body_reads)
 }
 
 /// The scratch reads among `nodes`: each read's place node and the plane's name.
@@ -331,7 +375,7 @@ fn chunk_text(
     unit: &Unit,
     sinks: &[u32],
     offset: &str,
-    phase: usize,
+    (label, phase): (&str, usize),
     needs: &mut Needs,
 ) -> Result<String, Refusal> {
     let (before, after) = reach(ctx, sinks, &unit.name)?;
@@ -347,7 +391,7 @@ fn chunk_text(
     let binding = lane_binding(offset);
     if before + after == 0 {
         return Ok(format!(
-            "{GROUP_INDENT}// phase {phase}\n{GROUP_INDENT}for (std::int64_t hawk_rank = 0; hawk_rank < hawk_size; ++hawk_rank) {{\n{binding}\n{}\n{GROUP_INDENT}}}",
+            "{GROUP_INDENT}// {label}\n{GROUP_INDENT}for (std::int64_t hawk_rank = 0; hawk_rank < hawk_size; ++hawk_rank) {{\n{binding}\n{}\n{GROUP_INDENT}}}",
             interior.text
         ));
     }
@@ -362,7 +406,7 @@ fn chunk_text(
     needs.merge(&edge.needs);
     let (a, b) = (format!("hawk_lo{phase}"), format!("hawk_hi{phase}"));
     Ok([
-        format!("{GROUP_INDENT}// phase {phase}: the interior lanes, then the lanes at the edges"),
+        format!("{GROUP_INDENT}// {label}: the interior lanes, then the lanes at the edges"),
         format!("{GROUP_INDENT}const std::int64_t {a} = hawk_size < {before} ? hawk_size : {before};"),
         format!("{GROUP_INDENT}const std::int64_t {b} = hawk_size - {after} > {a} ? hawk_size - {after} : {a};"),
         format!("{GROUP_INDENT}for (std::int64_t hawk_rank = {a}; hawk_rank < {b}; ++hawk_rank) {{"),
@@ -437,31 +481,39 @@ pub fn group_body(
     );
     text.extend(group_lines(&lanes, &size));
     let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
-    refuse_shared_planes(ctx, kernel, &body, &outside)?;
+    let after = outside_runs_after(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
     let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
+    if !outside.is_empty() && !after {
+        let label = ("sinks beside the group, before its phases", phase_count);
+        text.push(chunk_text(
+            ctx, walk, unit, &outside, &offset, label, &mut needs,
+        )?);
+    }
     for phase in 0..phase_count {
         let mut sinks = vec![];
-        for (&sink, &at) in body.iter().zip(&phases) {
-            if at as usize == phase && !door::class_is(ctx, sink, "Barrier")? {
+        for (&sink, &of) in body.iter().zip(&phases) {
+            if of as usize == phase && !door::class_is(ctx, sink, "Barrier")? {
                 sinks.push(sink);
             }
         }
         for chunk in chunks(ctx, &sinks)? {
+            let label = (format!("phase {phase}"), phase);
             text.push(chunk_text(
-                ctx, walk, unit, &chunk, &offset, phase, &mut needs,
+                ctx,
+                walk,
+                unit,
+                &chunk,
+                &offset,
+                (&label.0, label.1),
+                &mut needs,
             )?);
         }
     }
-    if !outside.is_empty() {
+    if !outside.is_empty() && after {
+        let label = ("sinks beside the group, after its phases", phase_count);
         text.push(chunk_text(
-            ctx,
-            walk,
-            unit,
-            &outside,
-            &offset,
-            phase_count,
-            &mut needs,
+            ctx, walk, unit, &outside, &offset, label, &mut needs,
         )?);
     }
     text.push("    }".to_string());
