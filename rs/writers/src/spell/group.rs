@@ -19,13 +19,43 @@ pub fn lane_pointer(binding: &str) -> String {
     format!("hawk_p_{binding}")
 }
 
-/// The declaration of the pointer of `lane_pointer` over the view bound as `binding`. The promise `__restrict` makes holds because
-/// only an input plane (a plane the unit never writes) gets one; a plane the body also writes is read through its view.
-pub fn lane_pointer_declaration(binding: &str) -> String {
-    format!(
+/// The name of the component pitch a group hoists beside the pointer of a vector or matrix input plane: the distance, in
+/// elements, between the same lane's neighbouring components in the plane's structure-of-arrays storage.
+pub fn lane_pitch(binding: &str) -> String {
+    format!("hawk_pitch_{binding}")
+}
+
+/// The declarations of the pointer of `lane_pointer` over the view bound as `binding`, and for a value of rank above zero (`rank`)
+/// the pitch of `lane_pitch`, which is the view's last extent. The promise `__restrict` makes holds because only an input plane
+/// (a plane the unit never writes) gets one; a plane the body also writes is read through its view.
+pub fn lane_pointer_declarations(binding: &str, rank: usize) -> Vec<String> {
+    let mut lines = vec![format!(
         "const auto* __restrict {} = {binding}.data();",
         lane_pointer(binding)
-    )
+    )];
+    if rank > 0 {
+        lines.push(format!(
+            "const std::int64_t {} = static_cast<std::int64_t>({binding}.extent({rank}));",
+            lane_pitch(binding)
+        ));
+    }
+    lines
+}
+
+/// The row of a vector or matrix input plane at the lane `hawk_i`, as an item of its components, read through the hoisted pointer
+/// and pitch: component `k` (row-major) of the lane is `k` pitches after the lane's own place.
+pub fn lane_row(binding: &str, value: (&str, &[usize])) -> Result<String, Refusal> {
+    let (dtype, shape) = value;
+    let (pointer, pitch) = (lane_pointer(binding), lane_pitch(binding));
+    let cells: Vec<String> = (0..shape.iter().product::<usize>())
+        .map(|k| format!("{pointer}[{k} * {pitch} + hawk_i]"))
+        .collect();
+    Ok(format!(
+        "aether::Item<{}, {}>{{{}}}",
+        element(dtype)?,
+        ext(shape),
+        cells.join(", ")
+    ))
 }
 
 /// The opening of the function that is the body of one group of a `count` group: its base lane and its size are its arguments.

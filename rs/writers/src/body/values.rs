@@ -60,7 +60,14 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let text = if lazy {
         format!("{}[i]", spell::binding_name(&role, rank, &name)?)
     } else if rank > 0 {
-        spell::row_leaf(&role, rank, &name)?
+        if f.group_phase && is_lane_pointer_plane(f, h, &role)? {
+            spell::group::lane_row(
+                &spell::binding_name(&role, rank, &name)?,
+                (&dtype, &f.node(p).ty.shape),
+            )?
+        } else {
+            spell::row_leaf(&role, rank, &name)?
+        }
     } else if f.group_phase && is_lane_pointer_plane(f, h, &role)? {
         format!(
             "{}[hawk_i]",
@@ -72,7 +79,7 @@ pub fn leaf(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     Ok(Out::Value(text, Some(role)))
 }
 
-/// Whether a scalar leaf is read through a hoisted pointer in a group phase: an input plane without named axes (see
+/// Whether a leaf is read through a hoisted pointer in a group phase: an input plane without named axes (see
 /// `unit::group::input_planes`, which declares the pointers by the same rule).
 pub(crate) fn is_lane_pointer_plane(f: &Frame, leaf: u32, role: &str) -> Result<bool, Refusal> {
     Ok(role == "plane_in" && !has_axes(f, leaf)?)

@@ -18,7 +18,7 @@ use crate::ir::door::{self, RxCtx};
 use crate::refuse::{fault, not_written, Refusal};
 use crate::spell::binding_name;
 use crate::spell::group::{
-    group_calls, group_function_open, lane_pointer_declaration, scratch_declare,
+    group_calls, group_function_open, lane_pointer_declarations, scratch_declare,
 };
 
 /// The indent of the statements of the group loop.
@@ -201,23 +201,23 @@ fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
     Ok(seen)
 }
 
-/// The bindings of the input planes the sinks read at the lane's own element: the planes a phase loop reads through a pointer hoisted
-/// before the group loop (`body::values::is_lane_pointer_plane` states the same rule for the read). Only an input plane qualifies:
-/// a pointer is `__restrict`, a promise that nothing else in the loop stores through the plane's memory, which holds for a plane
-/// the unit never writes. A plane the body also writes, a plane with named axes (read through an index), a vector or matrix plane
-/// (read by component through its view's pitch) and a uniform (loop-invariant already) keep their own reads.
-fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<String>, Refusal> {
-    let mut planes = vec![];
+/// The bindings and ranks of the input planes the sinks read at the lane's own element: the planes a phase loop reads through a
+/// pointer (and, for a vector or matrix plane, a component pitch) hoisted before the group loop (`body::values::is_lane_pointer_plane`
+/// states the same rule for the read). Only an input plane qualifies: a pointer is `__restrict`, a promise that nothing else in
+/// the loop stores through the plane's memory, which holds for a plane the unit never writes. A plane the body also writes, a
+/// plane with named axes (read through an index) and a uniform (loop-invariant already) keep their own reads.
+fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<(String, usize)>, Refusal> {
+    let mut planes: Vec<(String, usize)> = vec![];
     for node in reachable(ctx, sinks)? {
         if door::class_is(ctx, node, "Leaf")?
             && door::text_field(ctx, node, "role")? == "plane_in"
-            && crate::body::ty_of(ctx, node)?.shape.is_empty()
             && door::axes_declared(ctx, node)? == 0
         {
+            let rank = crate::body::ty_of(ctx, node)?.shape.len();
             let name = door::text_field(ctx, node, "name")?;
-            let binding = binding_name("plane_in", 0, &name)?;
-            if !planes.contains(&binding) {
-                planes.push(binding);
+            let binding = binding_name("plane_in", rank, &name)?;
+            if !planes.iter().any(|(known, _)| *known == binding) {
+                planes.push((binding, rank));
             }
         }
     }
@@ -491,10 +491,14 @@ pub fn group_body(
         .chain(unit.sinks.iter().filter(|&&s| s != group))
         .copied()
         .collect();
-    let mut text: Vec<String> = input_planes(ctx, &everything)?
-        .iter()
-        .map(|plane| format!("    {}", lane_pointer_declaration(plane)))
-        .collect();
+    let mut text: Vec<String> = vec![];
+    for (binding, rank) in input_planes(ctx, &everything)? {
+        text.extend(
+            lane_pointer_declarations(&binding, rank)
+                .into_iter()
+                .map(|line| format!("    {line}")),
+        );
+    }
     let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
     let after = outside_runs_after(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
