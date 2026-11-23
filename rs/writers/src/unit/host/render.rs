@@ -416,6 +416,10 @@ fn interchange_of(
     sums: &[u32],
 ) -> Result<Interchange, Refusal> {
     let unit = input.unit;
+    // a group writes its own loops over the lanes, one per phase: a loop of the body stays inside the lane loop
+    if crate::unit::group::of(ctx, walk, unit)?.is_some() {
+        return Ok(Interchange::default());
+    }
     let scanned = &input.needs;
     let eligible = is_plain_frame(unit, scanned, sums)
         && !scanned.has(Need::AccumCompensated)

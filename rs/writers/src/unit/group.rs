@@ -210,6 +210,51 @@ fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
     Ok(seen)
 }
 
+/// The names of the planes the sinks write and of the planes their values read.
+fn touched(ctx: *mut RxCtx, sinks: &[u32]) -> Result<(Vec<String>, Vec<String>), Refusal> {
+    let mut written = vec![];
+    for &sink in sinks {
+        let commits = door::class_is(ctx, sink, "Assign")? || door::class_is(ctx, sink, "Update")?;
+        if commits && door::text_field(ctx, sink, "role")? != "scratch" {
+            written.push(door::text_field(ctx, sink, "name")?);
+        }
+    }
+    let mut read = vec![];
+    for node in reachable(ctx, sinks)? {
+        if door::class_is(ctx, node, "Leaf")? {
+            read.push(door::text_field(ctx, node, "name")?);
+        }
+    }
+    Ok((written, read))
+}
+
+/// Refuses a sink beside the group that touches a plane the group's body writes, or writes one the body reads: the two run lane by
+/// lane in one pass, so such a pair has no order the author stated. Sinks that touch other planes are correct in any order.
+fn refuse_shared_planes(
+    ctx: *mut RxCtx,
+    kernel: &str,
+    body: &[u32],
+    outside: &[u32],
+) -> Result<(), Refusal> {
+    let (body_written, body_read) = touched(ctx, body)?;
+    let (outside_written, outside_read) = touched(ctx, outside)?;
+    let clash = |written: &[String], others: [&[String]; 2]| {
+        written
+            .iter()
+            .find(|name| others.iter().any(|set| set.contains(name)))
+            .cloned()
+    };
+    let shared = clash(&body_written, [&outside_written, &outside_read])
+        .or_else(|| clash(&outside_written, [&body_read, &[]]));
+    match shared {
+        Some(name) => Err(unwritten(
+            kernel,
+            &format!("a sink beside a group that shares the plane '{name}' with the group's body"),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The scratch reads among `nodes`: each read's place node and the plane's name.
 fn scratch_reads(ctx: *mut RxCtx, nodes: &[u32]) -> Result<Vec<(u32, String)>, Refusal> {
     let mut reads = vec![];
@@ -344,9 +389,6 @@ pub fn group_body(
     if unit.target != Target::Host {
         return Err(unwritten(kernel, "a group body for the device target"));
     }
-    if unit.sinks.len() != 1 {
-        return Err(unwritten(kernel, "an ordinary sink beside a group"));
-    }
     let membership = door::text_field(ctx, group, "membership")?;
     for node in door::walk_order(ctx, walk)? {
         for (class, what) in [
@@ -394,6 +436,8 @@ pub fn group_body(
         "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {".to_string(),
     );
     text.extend(group_lines(&lanes, &size));
+    let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
+    refuse_shared_planes(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
     let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
     for phase in 0..phase_count {
@@ -408,6 +452,17 @@ pub fn group_body(
                 ctx, walk, unit, &chunk, &offset, phase, &mut needs,
             )?);
         }
+    }
+    if !outside.is_empty() {
+        text.push(chunk_text(
+            ctx,
+            walk,
+            unit,
+            &outside,
+            &offset,
+            phase_count,
+            &mut needs,
+        )?);
     }
     text.push("    }".to_string());
     Ok(Rendered {
