@@ -498,6 +498,9 @@ fn entry_lines(
     tiled: &Option<String>,
     sums: &[u32],
 ) -> Result<Vec<String>, Refusal> {
+    if crate::unit::group::of(ctx, walk, input.unit)?.is_some() {
+        return Ok(vec![input.body.clone()]);
+    }
     let runs = &input.needs.runs;
     let (prologue, epilogue) = loop_frame(&shape.lane, &shape.active, &shape.segment, shape.boxed)?;
     if shape.two_path {

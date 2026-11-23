@@ -71,6 +71,12 @@ pub enum Class {
     AccumUpdate,
     /// The end of a sample: counts a finished sample.
     Finish,
+    /// A scratch plane of a group: local to one group, read and written by the lane's place in it.
+    Scratch,
+    /// The lane's place in its group.
+    GroupRank,
+    /// The number of lanes of the lane's group.
+    GroupSize,
     /// Any other class: only its name is kept.
     Other(String),
 }
@@ -110,6 +116,9 @@ impl Class {
             "Assign" => Class::Assign,
             "SampleSum" => Class::SampleSum,
             "Finish" => Class::Finish,
+            "Scratch" => Class::Scratch,
+            "GroupRank" => Class::GroupRank,
+            "GroupSize" => Class::GroupSize,
             other => Class::Other(other.to_string()),
         }
     }
@@ -165,6 +174,9 @@ impl Class {
             Class::SampleSum => "SampleSum",
             Class::AccumUpdate => "accumulating update",
             Class::Finish => "Finish",
+            Class::Scratch => "Scratch",
+            Class::GroupRank => "GroupRank",
+            Class::GroupSize => "GroupSize",
             Class::Other(name) => name,
         }
     }

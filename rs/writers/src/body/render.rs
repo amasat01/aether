@@ -52,6 +52,15 @@ fn at(ctx: *mut RxCtx, walk: u32, h: u32) -> Result<usize, Refusal> {
     walk_position(ctx, walk, h)
 }
 
+/// The sinks a render is given in place of the contract's, and, for a phase of a group, how that phase is written.
+#[derive(Clone, Copy)]
+pub(super) struct Given<'a> {
+    /// The sinks to write.
+    pub(super) sinks: &'a [u32],
+    /// The form of the phase when the sinks are one phase of a group.
+    pub(super) phase: Option<PhaseForm>,
+}
+
 /// `render_frame` over the given sinks when there are any (and then with no refusal of a box or a
 /// single step), else over the contract's own: the whole pipeline.
 pub(super) fn render_frame_over<'e>(
@@ -61,8 +70,9 @@ pub(super) fn render_frame_over<'e>(
     indent: &str,
     cut: &[u32],
     emit: Option<&'e mut dyn LoopEmitter>,
-    given_sinks: Option<&[u32]>,
+    given: Option<Given>,
 ) -> Result<(Frame<'e>, Option<String>), Refusal> {
+    let (given_sinks, phase) = (given.as_ref().map(|g| g.sinks), given.and_then(|g| g.phase));
     let one_trip = emit.as_ref().is_some_and(|e| e.one_trip());
     check_unit(walk, unit, cut, one_trip, given_sinks)?;
     let (guard_names, _) = guard_and_policy(unit);
@@ -77,7 +87,10 @@ pub(super) fn render_frame_over<'e>(
     let mut read = top_level_reads(ctx, &rows.nodes)?;
     let mut early = early_stores(ctx, walk, &rows, &sinks, &companions, &read)?;
     let count = rows.nodes.len();
-    let outside = dispatch::outside(ctx, &rows.nodes, &rows.opp, &sinks, walk)?;
+    let mut outside = dispatch::outside(ctx, &rows.nodes, &rows.opp, &sinks, walk)?;
+    if phase.is_some() {
+        reached_only(ctx, walk, &rows, &sinks, &mut outside)?;
+    }
     let forced = forced_reads(ctx, &rows.nodes, &rows.opp)?;
     let mut f = new_frame(
         ctx,
@@ -90,6 +103,7 @@ pub(super) fn render_frame_over<'e>(
         sinks,
         block_fold,
     );
+    f.edge_lanes = phase.is_some_and(|p| p.edge_lanes);
     f.stores = stores::storeplan::Plan::build(&f)?;
     if f.placed {
         f.absorbed = placed::written(&f)?
@@ -118,6 +132,31 @@ pub(super) fn render_frame_over<'e>(
         f.buf.reads.push(Default::default())
     }
     Ok((f, guard.cond))
+}
+
+/// Narrows `outside` to the positions the given sinks reach: the walk of a group holds the nodes of every phase, and a phase writes
+/// only what its own sinks read.
+fn reached_only(
+    ctx: *mut RxCtx,
+    walk: u32,
+    rows: &WalkRows,
+    sinks: &[u32],
+    outside: &mut [bool],
+) -> Result<(), Refusal> {
+    let mut seen = vec![false; rows.nodes.len()];
+    let mut stack = sinks
+        .iter()
+        .map(|&s| at(ctx, walk, s))
+        .collect::<Result<Vec<_>, _>>()?;
+    while let Some(p) = stack.pop() {
+        if !std::mem::replace(&mut seen[p], true) {
+            stack.extend(rows.opp[p].iter());
+        }
+    }
+    for (kept, reached) in outside.iter_mut().zip(seen) {
+        *kept &= reached;
+    }
+    Ok(())
 }
 
 /// Refuses the units this render does not write: no walk, a fused
@@ -368,6 +407,7 @@ fn new_frame<'e>(
         cut: cut.to_vec(),
         loop_emitter: emit,
         sincos: vec![],
+        edge_lanes: false,
         compensated: None,
         placed: unit.target == crate::contract::types::Target::Device
             || (!cut.is_empty() && !one_trip),

@@ -72,6 +72,9 @@ pub fn at(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let n = &f.node(p);
     let (leaf_p, ops_n, rank) = (f.opp(p)[0], n.ops.len(), n.rank());
     let leaf_h = f.node(leaf_p).h;
+    if f.node(leaf_p).class == Class::Scratch {
+        return super::scratch::read(f, p);
+    }
     if ops_n == 2
         && f.node(f.opp(p)[1]).class == Class::RoleConst
         && text_field(f.ctx(), f.node(f.opp(p)[1]).h, "label")? == "param_cell"

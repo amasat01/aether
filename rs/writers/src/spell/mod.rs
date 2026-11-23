@@ -2,6 +2,7 @@
 //! operations, stores. A construct
 //! it does not spell yet is a refusal "not in this build: <construct>".
 mod band;
+pub mod group;
 use crate::kind::OpKind;
 use crate::refuse::{nib, Refusal};
 pub use band::{band_literal, literal_op};

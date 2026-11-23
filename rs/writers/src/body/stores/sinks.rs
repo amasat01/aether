@@ -71,6 +71,9 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
 /// An indexed store: the value into the plane element the index list names, under the write's edge rule (a scalar value
 /// only). A `zero` edge drops a write outside the plane. A store under the conflict rule `any` is an atomic exchange.
 pub(crate) fn indexed_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
+    if text_field(f.ctx(), f.node(p).h, "role")? == "scratch" {
+        return crate::body::scratch::store(f, p);
+    }
     // lanes that may share a key: the store is one atomic exchange, so some lane's value wins and none is torn
     if text_field(f.ctx(), f.node(p).h, "conflict")? == "any" {
         let h = f.node(p).h;
@@ -334,7 +337,7 @@ fn element_call(
 }
 
 /// The text of component `component` of the value `text` (the value itself when it has no components).
-fn component_of(text: String, component: &[usize]) -> String {
+pub(crate) fn component_of(text: String, component: &[usize]) -> String {
     if component.is_empty() {
         return text;
     }
@@ -585,7 +588,7 @@ pub(crate) fn finish(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
 }
 
 /// The flattened component indices of a shape, row-major.
-fn flat_indices(shape: &[usize]) -> Vec<Vec<usize>> {
+pub(crate) fn flat_indices(shape: &[usize]) -> Vec<Vec<usize>> {
     let mut out: Vec<Vec<usize>> = vec![vec![]];
     for &extent in shape {
         out = out

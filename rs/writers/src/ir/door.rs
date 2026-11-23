@@ -593,6 +593,96 @@ pub fn axes_declared(ctx: impl Into<CtxPtr>, leaf: u32) -> Result<usize, Refusal
     Ok(count)
 }
 
+/// One part of a pair a field holds, as the IR's pair reader fills it: a kind (0 nothing, 1 whole number, 2 text) and the value.
+#[repr(C)]
+struct PairPart {
+    /// 0 nothing, 1 a whole number, 2 a text.
+    kind: c_int,
+    /// The whole number, when the kind says so.
+    number: i64,
+    /// The text, NUL-terminated, when the kind says so.
+    text: [c_char; 64],
+}
+
+/// A pair of parts (`rx_pair`).
+#[repr(C)]
+struct Pair {
+    /// The first part of the pair.
+    first: PairPart,
+    /// The second part of the pair.
+    second: PairPart,
+}
+
+/// The (label, extent) pairs a field holds, in order: an axis list. An extent known only at run time is `None`.
+pub fn field_axes(
+    ctx: impl Into<CtxPtr>,
+    node: u32,
+    name: &str,
+) -> Result<Vec<(String, Option<i64>)>, Refusal> {
+    let ctx = ctx.into().raw();
+    let field = cs(name)?;
+    let mut count = 0usize;
+    let status = unsafe {
+        rx_field_pairs(
+            ctx,
+            node,
+            field.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            &mut count,
+        )
+    };
+    if status != RX_TRUNC {
+        present(ctx, status)?;
+    }
+    let mut pairs: Vec<Pair> = Vec::with_capacity(count);
+    let status = unsafe {
+        rx_field_pairs(
+            ctx,
+            node,
+            field.as_ptr(),
+            pairs.as_mut_ptr().cast(),
+            count,
+            &mut count,
+        )
+    };
+    check(ctx, status)?;
+    // SAFETY: the call filled `count` pairs of the capacity it was given.
+    unsafe { pairs.set_len(count) };
+    pairs
+        .iter()
+        .map(|pair| {
+            let label = match pair.first.kind {
+                2 => {
+                    let bytes: Vec<u8> = pair
+                        .first
+                        .text
+                        .iter()
+                        .take_while(|&&c| c != 0)
+                        .map(|&c| c as u8)
+                        .collect();
+                    String::from_utf8(bytes).map_err(fault)?
+                }
+                _ => {
+                    return Err(fault(format!(
+                        "the axis list {name} holds a label that is not a text"
+                    )))
+                }
+            };
+            let extent = match pair.second.kind {
+                0 => None,
+                1 => Some(pair.second.number),
+                _ => {
+                    return Err(fault(format!(
+                        "the axis list {name} holds an extent that is not a whole number"
+                    )))
+                }
+            };
+            Ok((label, extent))
+        })
+        .collect()
+}
+
 /// A field that holds an integer; `None` when the field holds nothing.
 pub fn field_int(ctx: impl Into<CtxPtr>, node: u32, name: &str) -> Result<Option<i64>, Refusal> {
     let ctx = ctx.into().raw();

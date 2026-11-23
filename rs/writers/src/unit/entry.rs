@@ -65,7 +65,9 @@ fn body_of(ctx: *mut RxCtx, prepared: &Prepared) -> Result<(String, bool, Option
         return Ok((supplied.0.clone(), supplied.1, None));
     }
     let (walk, unit) = (prepared.walk, &prepared.unit);
-    let rendered = if let Form::TeamStage(stage) = &unit.form {
+    let rendered = if let Some(group) = crate::unit::group::of(ctx, walk, unit)? {
+        crate::unit::group::group_body(ctx, walk, unit, group)?
+    } else if let Form::TeamStage(stage) = &unit.form {
         crate::unit::team_stage::stage_body(ctx, unit, stage)?
     } else if let Form::Fused(_) = &unit.form {
         crate::unit::fused::fused_body(ctx, walk, unit, "        ")?

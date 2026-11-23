@@ -15,6 +15,7 @@ pub mod boxed;
 pub mod device;
 pub mod entry;
 pub mod fused;
+pub mod group;
 pub mod host;
 pub mod sums;
 mod team_banded;

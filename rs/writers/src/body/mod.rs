@@ -11,6 +11,7 @@ pub(crate) mod loops;
 mod ops;
 mod placed;
 mod render;
+pub(crate) mod scratch;
 pub mod stores;
 mod team;
 mod values;
@@ -187,6 +188,9 @@ pub struct Frame<'e> {
     pub(crate) stores: stores::storeplan::Plan,
     /// The carried slots a loop without a break lets a store run write in place, by handle.
     pub mutable_carries: std::collections::HashSet<u32>,
+    /// Whether the lanes being written are the edge lanes of a group phase: a scratch read at a moved place is folded by its edge
+    /// rule there, and plain for an interior lane.
+    pub edge_lanes: bool,
     /// The banded `sincos` pairs bound so far, by the position of the shared operand: the names of the sine and the cosine.
     sincos: Vec<(usize, String, String)>,
 }
@@ -445,6 +449,13 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         Class::SampleIndex => values::sample_index()?,
         Class::SamplePosition => values::sample_position(f)?,
         Class::Select => values::select(f, p)?,
+        Class::GroupRank => scratch::rank(),
+        Class::GroupSize => scratch::size(),
+        // a scratch plane is a name for its arrays; only the reads and stores of it write text
+        Class::Scratch => {
+            f.set_text(p, String::new());
+            Out::Bound
+        }
         Class::Const | Class::RoleConst => values::constant(f, p)?,
         Class::Op => ops::op(f, p)?,
         Class::Loop => loops::stmt(f, p)?,
@@ -524,7 +535,52 @@ pub fn render_body_over_with_needs(
     indent: &str,
     sinks: &[u32],
 ) -> Result<frame::needs::Rendered, Refusal> {
-    let frame = render::render_frame_over(ctx, walk, unit, indent, &[], None, Some(sinks))?.0;
+    let frame = render::render_frame_over(
+        ctx,
+        walk,
+        unit,
+        indent,
+        &[],
+        None,
+        Some(render::Given { sinks, phase: None }),
+    )?
+    .0;
+    Ok(frame::needs::Rendered {
+        text: frame.buf.lines.join("\n"),
+        needs: frame.recorded_needs(),
+    })
+}
+
+/// How the body of one phase of a group is written.
+#[derive(Clone, Copy)]
+pub struct PhaseForm {
+    /// Whether the lanes are the edge lanes of the phase (a moved scratch place is folded by its edge rule) and not its interior.
+    pub edge_lanes: bool,
+}
+
+/// The body of one phase of a group over the given sinks, over the walk of the whole group: it writes only what its sinks reach,
+/// for the interior lanes of the phase loop or for its edge lanes.
+pub fn render_phase_with_needs(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+    indent: &str,
+    sinks: &[u32],
+    form: PhaseForm,
+) -> Result<frame::needs::Rendered, Refusal> {
+    let frame = render::render_frame_over(
+        ctx,
+        walk,
+        unit,
+        indent,
+        &[],
+        None,
+        Some(render::Given {
+            sinks,
+            phase: Some(form),
+        }),
+    )?
+    .0;
     Ok(frame::needs::Rendered {
         text: frame.buf.lines.join("\n"),
         needs: frame.recorded_needs(),
