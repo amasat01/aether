@@ -5,8 +5,10 @@
 
 // `aether::accum::run` on one arm (test_Run.cu: the device, test_Run.cpp: the
 // host). The including file defines `runArm<T>(c, compensated, out, commits)`
-// and `kDevice`, then includes this header. Each case is a keyed sum of
-// terms in [-1, 1) whose error against a long-double reference, over
+// and `kDevice`, then includes this header. `runArm` delivers each slot as the
+// pair (high plane, companion plane), both widened to double, unsummed. Each
+// case is a keyed sum of terms in [-1, 1) whose error against a double-double
+// reference (an error-free accumulation, the same on every platform), over
 // eps * sum|t| per slot, is within 8 plain and 1 compensated (8 when runs are
 // shorter than a warp: the in-warp tree before the one compensated commit is
 // plain), and whose commit count is the one the arm's run structure implies.
@@ -16,6 +18,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -133,24 +136,49 @@ inline std::pair<unsigned long long, unsigned long long> expectedCommits(const C
     return { run, lane };
 }
 
+/**
+ * @brief A running sum held as an unevaluated pair `high + low` of doubles.
+ *
+ * Each term is added with an error-free transformation (Knuth's two-sum), so
+ * the pair carries about 106 bits and the float or double terms of these cases
+ * accumulate without a rounding that matters at the bounds checked here.
+ */
+struct DoubleDouble {
+    double high = 0.0;
+    double low  = 0.0;
+
+    /** @brief Add `term`; the rounding error of the addition goes to `low`. */
+    void add(double term)
+    {
+        const double sum         = high + term;
+        const double virtualTerm = sum - high;
+        const double error       = (high - (sum - virtualTerm)) + (term - virtualTerm);
+        low += error;
+        high = sum + low; // renormalise so `high` stays the rounded total
+        low -= high - sum;
+    }
+};
+
 template<class T>
 void runCase(const Case& c, bool compensated)
 {
-    std::vector<long double> ref(c.slots, 0.0L), mass(c.slots, 0.0L);
+    std::vector<DoubleDouble> ref(c.slots), mass(c.slots);
     for (std::size_t l = 0; l < c.key.size(); ++l) {
-        const auto t = static_cast<long double>(static_cast<T>(termOf(l)));
-        ref[static_cast<std::size_t>(c.key[l])] += t;
-        mass[static_cast<std::size_t>(c.key[l])] += std::fabs(t);
+        const double t = static_cast<double>(static_cast<T>(termOf(l)));
+        ref[static_cast<std::size_t>(c.key[l])].add(t);
+        mass[static_cast<std::size_t>(c.key[l])].add(std::fabs(t));
     }
-    std::vector<long double> got;
+    std::vector<std::pair<double, double>> got;
     unsigned long long commits[2] = { 0, 0 };
     runArm<T>(c, compensated, got, commits);
     double worst = 0.0;
     for (std::size_t k = 0; k < c.slots; ++k) {
-        if (mass[k] == 0.0L)
+        if (mass[k].high == 0.0)
             continue;
-        const double err = static_cast<double>(std::fabs(got[k] - ref[k])
-                                                / (std::numeric_limits<T>::epsilon() * mass[k]));
+        // The differences of the planes against the reference planes are
+        // formed before anything is summed, so nothing is rounded away.
+        const double diff = (got[k].first - ref[k].high) + (got[k].second - ref[k].low);
+        const double err  = std::fabs(diff) / (std::numeric_limits<T>::epsilon() * mass[k].high);
         worst = err > worst ? err : worst;
     }
     const auto want = expectedCommits(c, kDevice);

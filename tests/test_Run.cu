@@ -7,6 +7,7 @@
 
 #define AETHER_RUN_COUNT_COMMITS 1
 
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -65,7 +66,8 @@ void runKernel(RunView<T> target, RunView<T> comp, const long long* key, const T
 }
 
 template<class T>
-void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsigned long long (&commits)[2]);
+void runArm(const Case& c, bool compensated, std::vector<std::pair<double, double>>& out,
+    unsigned long long (&commits)[2]);
 
 } // namespace
 } // namespace aether_tests
@@ -76,7 +78,8 @@ namespace aether_tests {
 namespace {
 
 template<class T>
-void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsigned long long (&commits)[2])
+void runArm(const Case& c, bool compensated, std::vector<std::pair<double, double>>& out,
+    unsigned long long (&commits)[2])
 {
     const std::size_t n = c.key.size();
     std::vector<T> term(n);
@@ -109,9 +112,9 @@ void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsi
     cudaMemcpy(hi.data(), dTarget, c.slots * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(lo.data(), dComp, c.slots * sizeof(T), cudaMemcpyDeviceToHost);
     ASSERT_EQ(cudaMemcpyFromSymbol(commits, aether_run_commits, sizeof(commits)), cudaSuccess);
-    out.assign(c.slots, 0.0L);
+    out.resize(c.slots);
     for (std::size_t k = 0; k < c.slots; ++k)
-        out[k] = static_cast<long double>(hi[k]) + static_cast<long double>(lo[k]);
+        out[k] = { static_cast<double>(hi[k]), static_cast<double>(lo[k]) };
     cudaFree(dKey);
     cudaFree(dTerm);
     cudaFree(dTarget);

@@ -9,6 +9,7 @@
 #define AETHER_RUN_COUNT_COMMITS 1
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -24,7 +25,8 @@ struct Case;
 constexpr bool kDevice = false;
 
 template<class T>
-void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsigned long long (&commits)[2]);
+void runArm(const Case& c, bool compensated, std::vector<std::pair<double, double>>& out,
+    unsigned long long (&commits)[2]);
 
 } // namespace
 } // namespace aether_tests
@@ -35,7 +37,8 @@ namespace aether_tests {
 namespace {
 
 template<class T>
-void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsigned long long (&commits)[2])
+void runArm(const Case& c, bool compensated, std::vector<std::pair<double, double>>& out,
+    unsigned long long (&commits)[2])
 {
     namespace run = aether::accum::run;
     const std::size_t n = c.key.size();
@@ -74,9 +77,9 @@ void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsi
     }
     commits[0] = aether_run_commits[0];
     commits[1] = aether_run_commits[1];
-    out.assign(c.slots, 0.0L);
+    out.resize(c.slots);
     for (std::size_t k = 0; k < c.slots; ++k)
-        out[k] = static_cast<long double>(hi[k]) + static_cast<long double>(lo[k]);
+        out[k] = { static_cast<double>(hi[k]), static_cast<double>(lo[k]) };
 }
 
 } // namespace
