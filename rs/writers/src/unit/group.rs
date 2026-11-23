@@ -16,7 +16,8 @@ use crate::body::{render_phase_with_needs, PhaseForm};
 use crate::contract::types::{Target, Unit};
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{fault, not_written, Refusal};
-use crate::spell::group::scratch_declare;
+use crate::spell::binding_name;
+use crate::spell::group::{lane_pointer_declaration, scratch_declare};
 
 /// The indent of the statements of the group loop.
 const GROUP_INDENT: &str = "        ";
@@ -208,6 +209,29 @@ fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
         }
     }
     Ok(seen)
+}
+
+/// The bindings of the input planes the sinks read at the lane's own element: the planes a phase loop reads through a pointer hoisted
+/// before the group loop (`body::values::is_lane_pointer_plane` states the same rule for the read). Only an input plane qualifies:
+/// a pointer is `__restrict`, a promise that nothing else in the loop stores through the plane's memory, which holds for a plane
+/// the unit never writes. A plane the body also writes, a plane with named axes (read through an index), a vector or matrix plane
+/// (read by component through its view's pitch) and a uniform (loop-invariant already) keep their own reads.
+fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<String>, Refusal> {
+    let mut planes = vec![];
+    for node in reachable(ctx, sinks)? {
+        if door::class_is(ctx, node, "Leaf")?
+            && door::text_field(ctx, node, "role")? == "plane_in"
+            && crate::body::ty_of(ctx, node)?.shape.is_empty()
+            && door::axes_declared(ctx, node)? == 0
+        {
+            let name = door::text_field(ctx, node, "name")?;
+            let binding = binding_name("plane_in", 0, &name)?;
+            if !planes.contains(&binding) {
+                planes.push(binding);
+            }
+        }
+    }
+    Ok(planes)
 }
 
 /// What one run of sinks does to the planes: the planes it writes (and whether each write accumulates), the planes its values read,
@@ -476,6 +500,14 @@ pub fn group_body(
         );
     }
     let offset = lane_offset(&lanes);
+    let everything: Vec<u32> = body
+        .iter()
+        .chain(unit.sinks.iter().filter(|&&s| s != group))
+        .copied()
+        .collect();
+    for plane in input_planes(ctx, &everything)? {
+        text.push(format!("    {}", lane_pointer_declaration(&plane)));
+    }
     text.push(
         "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {".to_string(),
     );

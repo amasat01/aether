@@ -104,6 +104,7 @@ pub(super) fn render_frame_over<'e>(
         block_fold,
     );
     f.edge_lanes = phase.is_some_and(|p| p.edge_lanes);
+    f.group_phase = phase.is_some();
     f.stores = stores::storeplan::Plan::build(&f)?;
     if f.placed {
         f.absorbed = placed::written(&f)?
@@ -408,6 +409,7 @@ fn new_frame<'e>(
         loop_emitter: emit,
         sincos: vec![],
         edge_lanes: false,
+        group_phase: false,
         compensated: None,
         placed: unit.target == crate::contract::types::Target::Device
             || (!cut.is_empty() && !one_trip),

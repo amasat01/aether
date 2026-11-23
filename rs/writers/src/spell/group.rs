@@ -13,6 +13,21 @@ pub const GROUP_SIZE: &str = "static_cast<Int>(hawk_size)";
 /// The extent a scratch array is indexed against: the lanes of this group.
 pub const GROUP_EXTENT: &str = "static_cast<std::size_t>(hawk_size)";
 
+/// The name of the pointer a group hoists for the input plane bound as `binding`, and the lane read through it: the plane's data
+/// as a typed `__restrict` pointer, so the compiler sees an affine base in the phase loop and no alias with the scratch arrays.
+pub fn lane_pointer(binding: &str) -> String {
+    format!("hawk_p_{binding}")
+}
+
+/// The declaration of the pointer of `lane_pointer` over the view bound as `binding`. The promise `__restrict` makes holds because
+/// only an input plane (a plane the unit never writes) gets one; a plane the body also writes is read through its view.
+pub fn lane_pointer_declaration(binding: &str) -> String {
+    format!(
+        "const auto* __restrict {} = {binding}.data();",
+        lane_pointer(binding)
+    )
+}
+
 /// The array that holds component `component` of the scratch plane `name`; a scalar plane has the one array of its name.
 pub fn scratch_array(name: &str, component: Option<usize>) -> String {
     match component {

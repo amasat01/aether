@@ -191,6 +191,9 @@ pub struct Frame<'e> {
     /// Whether the lanes being written are the edge lanes of a group phase: a scratch read at a moved place is folded by its edge
     /// rule there, and plain for an interior lane.
     pub edge_lanes: bool,
+    /// Whether the body is a phase of a group, whose plane reads at the lane's own element go through the pointers the group
+    /// hoisted before its loops (`spell::group::lane_pointer`).
+    pub group_phase: bool,
     /// The banded `sincos` pairs bound so far, by the position of the shared operand: the names of the sine and the cosine.
     sincos: Vec<(usize, String, String)>,
 }
