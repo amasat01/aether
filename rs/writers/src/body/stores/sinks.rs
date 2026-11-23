@@ -396,6 +396,20 @@ pub(crate) fn old_value(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// The run the wings find for the keyed sink `sink` along the lane axes: its form, width and whether it holds over a block; none for
+/// a kernel run over a lane map (its lane facts read a dense lane id) and for a sink with no run.
+fn key_run_of(f: &mut Frame, sink: u32) -> Result<Option<(String, u32, bool)>, Refusal> {
+    if f.unit.kind.lanes {
+        return Ok(None);
+    }
+    let lane_settings = &f.unit.build.lanes;
+    let (run_max, block_run) = lane_settings
+        .run_max
+        .zip(lane_settings.block_run)
+        .ok_or_else(|| nib("a key run without the target's lane numbers"))?;
+    crate::ir::analysis::key_run(f.ctx(), f.sinks(), sink, run_max, block_run)
+}
+
 /// A scattered accumulate by the sink's handle (a loop body's sink has no slot of its own).
 pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
     let h = sink;
@@ -445,12 +459,24 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         ));
     }
     if operands.len() > 2 || !shape.is_empty() || !matches!(edge.as_str(), "unchecked" | "clamp") {
+        // a scalar added at several indices under no drop or wrap: the wings prove a run along the lane axes every index is
+        // invariant along, and the lanes of such a run add into one element
+        let several = operands.len() > 2
+            && shape.is_empty()
+            && matches!(edge.as_str(), "unchecked" | "clamp");
+        let run = match several {
+            true => key_run_of(f, sink)?
+                .filter(|(form, ..)| form == "proven")
+                .map(|(_, width, _)| width),
+            false => None,
+        };
         let at = Addend {
             contract: &contract,
             target: &target,
             comp: comp.as_deref(),
             value: &value,
             shape: &shape,
+            run,
         };
         return accum_at(f, h, &operands, &at);
     }
@@ -468,16 +494,7 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         return Ok(());
     }
     let c = if comp.is_some() { "Compensated" } else { "" };
-    let run = if f.unit.kind.lanes {
-        None
-    } else {
-        let lane_settings = &f.unit.build.lanes;
-        let (run_max, block_run) = lane_settings
-            .run_max
-            .zip(lane_settings.block_run)
-            .ok_or_else(|| nib("a key run without the target's lane numbers"))?;
-        crate::ir::analysis::key_run(f.ctx(), f.sinks(), sink, run_max, block_run)?
-    };
+    let run = key_run_of(f, sink)?;
     let line = match (run, &comp) {
         (None, None) => format!("hawk_abi::accum_add({target}, {index}, {value});"),
         (None, Some(cm)) => {
@@ -528,6 +545,9 @@ struct Addend<'a> {
     value: &'a str,
     /// The shape of the value (empty for a scalar).
     shape: &'a [usize],
+    /// The width of the aligned run the add commits through, when the wings proved one: every index is invariant along the run, so
+    /// the run's lanes add into one element and commit once.
+    run: Option<u32>,
 }
 
 /// A scattered accumulate into a plane with axes: the term added at the element the index list names under the write's edge rule
@@ -550,17 +570,35 @@ fn accum_at(f: &mut Frame, h: u32, operands: &[u32], at: &Addend) -> Result<(), 
         };
         let (element, test) = place(at.target)?;
         let value = component_of(at.value.to_string(), &component);
-        let add = match at.comp {
+        let add = match (at.comp, at.run) {
             _ if at.contract == "or" => {
                 f.need(Need::AccumOrAt);
                 format!("hawk_abi::accum_or_at({element}, {value});")
             }
-            Some(comp) => {
+            (Some(comp), Some(width)) => {
+                f.need(Need::AccumRun);
+                f.need_run(at.target);
+                f.need(Need::CompensatedRun);
+                let (correction, _) = place(comp)?;
+                format!(
+                    "aether::accum::run::addCompensatedAt<{width}>({element}, {correction}, {value}, i, hawk_run_{});",
+                    at.target
+                )
+            }
+            (None, Some(width)) => {
+                f.need(Need::AccumRun);
+                f.need_run(at.target);
+                format!(
+                    "aether::accum::run::addAt<{width}>({element}, {value}, i, hawk_run_{});",
+                    at.target
+                )
+            }
+            (Some(comp), None) => {
                 f.need(Need::AccumCompensatedAt);
                 let (correction, _) = place(comp)?;
                 format!("hawk_abi::accum_add_compensated_at({element}, {correction}, {value});")
             }
-            None => {
+            (None, None) => {
                 f.need(Need::AccumAt);
                 format!("hawk_abi::accum_add_at({element}, {value});")
             }

@@ -98,9 +98,9 @@ struct Open {
 
 namespace detail {
 
-/** @brief Element type behind a view's slot reference. */
+/** @brief Element type of a view, whatever its number of axes. */
 template<class ViewT>
-using slot_t = std::remove_cv_t<std::remove_reference_t<decltype(std::declval<ViewT&>()(offset_t{ 0 }))>>;
+using slot_t = std::remove_cv_t<typename std::remove_reference_t<ViewT>::element_type>;
 
 /** @brief One atomic add of `t` into `slot`; returns the value it replaced. */
 template<class E>
@@ -264,6 +264,34 @@ AETHER_DEVICEHOST() inline void close(Open<E>& run)
 #endif
 }
 
+/** @brief `add<W>` at an element given directly: the same aligned run, for a
+ *         plane whose slot the caller addresses itself (a view of several
+ *         axes, the run's lanes sharing one element). Same tree, same proof
+ *         obligation: the element is the same over every aligned group of `W`
+ *         lanes.
+ * @param slot  the element the run sums into.
+ * @param term  the value to add.
+ * @param own   the lane's own sample index (the alignment vote reads it).
+ * @param run   the host's open run (`open(target)`); unused on the device. */
+template<int W, class E, class T, class I>
+AETHER_DEVICEHOST() inline void addAt(E& slot, T term, const I& own, Open<E>& run)
+{
+    static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "a run is 2..32 lanes");
+#if defined(__CUDA_ARCH__)
+    (void)run;
+    if (detail::warpAligned_(__activemask(), own)) {
+        const E s = detail::runSum_<W>(static_cast<E>(term));
+        if ((detail::laneId_() & (W - 1)) == 0u)
+            detail::commit_(&slot, s, true);
+        return;
+    }
+    detail::commit_(&slot, static_cast<E>(term), false);
+#else
+    (void)own;
+    detail::openAdd_(run, &slot, static_cast<E*>(nullptr), static_cast<E>(term));
+#endif
+}
+
 /**
  * @brief Add `term` into `target(at.global())`, one atomic per aligned run of
  *        `W` lanes.
@@ -279,21 +307,7 @@ AETHER_DEVICEHOST() inline void close(Open<E>& run)
 template<int W, class ViewT, class T, class I, class E>
 AETHER_DEVICEHOST() inline void add(ViewT& target, const SampleIndex& at, T term, const I& own, Open<E>& run)
 {
-    static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "a run is 2..32 lanes");
-    E* slot = &target(at.global());
-#if defined(__CUDA_ARCH__)
-    (void)run;
-    if (detail::warpAligned_(__activemask(), own)) {
-        const E s = detail::runSum_<W>(static_cast<E>(term));
-        if ((detail::laneId_() & (W - 1)) == 0u)
-            detail::commit_(slot, s, true);
-        return;
-    }
-    detail::commit_(slot, static_cast<E>(term), false);
-#else
-    (void)own;
-    detail::openAdd_(run, slot, static_cast<E*>(nullptr), static_cast<E>(term));
-#endif
+    addAt<W>(target(at.global()), term, own, run);
 }
 
 /** @brief As `add<32>` with no proof: a warp whose 32 slot indices one vote
@@ -339,28 +353,34 @@ AETHER_DEVICEHOST() inline void addSorted(ViewT& target, const SampleIndex& at, 
 #endif
 }
 
+/** @brief `addCompensated<W>` at an element given directly (see `addAt`):
+ *         `slot` and its companion `compSlot` are the run's two elements. */
+template<int W, class E, class T, class I>
+AETHER_DEVICEHOST() inline void addCompensatedAt(E& slot, E& compSlot, T term, const I& own, Open<E>& run)
+{
+    static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "a run is 2..32 lanes");
+#if defined(__CUDA_ARCH__)
+    (void)run;
+    if (detail::warpAligned_(__activemask(), own)) {
+        const E s = detail::runSum_<W>(static_cast<E>(term));
+        if ((detail::laneId_() & (W - 1)) == 0u)
+            detail::commitComp_(&slot, &compSlot, s, E(0), true);
+        return;
+    }
+    detail::commitComp_(&slot, &compSlot, static_cast<E>(term), E(0), false);
+#else
+    (void)own;
+    detail::openAdd_(run, &slot, &compSlot, static_cast<E>(term));
+#endif
+}
+
 /** @brief Compensated `add<W>`: the plain run sum, then ONE compensated
  *         commit into `target` and `comp`. */
 template<int W, class ViewT, class T, class I, class E>
 AETHER_DEVICEHOST() inline void addCompensated(
     ViewT& target, ViewT& comp, const SampleIndex& at, T term, const I& own, Open<E>& run)
 {
-    static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "a run is 2..32 lanes");
-    E* slot     = &target(at.global());
-    E* compSlot = &comp(at.global());
-#if defined(__CUDA_ARCH__)
-    (void)run;
-    if (detail::warpAligned_(__activemask(), own)) {
-        const E s = detail::runSum_<W>(static_cast<E>(term));
-        if ((detail::laneId_() & (W - 1)) == 0u)
-            detail::commitComp_(slot, compSlot, s, E(0), true);
-        return;
-    }
-    detail::commitComp_(slot, compSlot, static_cast<E>(term), E(0), false);
-#else
-    (void)own;
-    detail::openAdd_(run, slot, compSlot, static_cast<E>(term));
-#endif
+    addCompensatedAt<W>(target(at.global()), comp(at.global()), term, own, run);
 }
 
 /** @brief True for a block whose every thread is live and whose samples

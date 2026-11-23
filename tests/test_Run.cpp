@@ -56,6 +56,7 @@ void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsi
                 switch (c.form) {
                 case Form::Aligned32: run::addCompensated<32>(target, comp, at, term, self, open); break;
                 case Form::Aligned16: run::addCompensated<16>(target, comp, at, term, self, open); break;
+                case Form::Element32: run::addCompensatedAt<32>(target(c.key[l]), comp(c.key[l]), term, self, open); break;
                 case Form::Tested: run::addTestedCompensated(target, comp, at, term, open); break;
                 case Form::Sorted: run::addSortedCompensated(target, comp, at, term, open); break;
                 }
@@ -63,6 +64,7 @@ void runArm(const Case& c, bool compensated, std::vector<long double>& out, unsi
                 switch (c.form) {
                 case Form::Aligned32: run::add<32>(target, at, term, self, open); break;
                 case Form::Aligned16: run::add<16>(target, at, term, self, open); break;
+                case Form::Element32: run::addAt<32>(target(c.key[l]), term, self, open); break;
                 case Form::Tested: run::addTested(target, at, term, open); break;
                 case Form::Sorted: run::addSorted(target, at, term, open); break;
                 }

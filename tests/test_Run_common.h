@@ -23,7 +23,8 @@
 namespace aether_tests {
 namespace {
 
-enum class Form { Aligned32, Aligned16, Tested, Sorted };
+enum class Form { Aligned32, Aligned16, Tested, Sorted, Element32 };
+// Element32 is Aligned32 through the element-slot entry: the slot is the target's element at the lane's key.
 
 struct Case {
     std::string name;
@@ -108,9 +109,10 @@ inline std::pair<unsigned long long, unsigned long long> expectedCommits(const C
         }
         switch (c.form) {
         case Form::Aligned32:
+        case Form::Element32:
         case Form::Aligned16: {
             const bool aligned = (c.own % 32) == 0;
-            const unsigned width = c.form == Form::Aligned32 ? 32u : 16u;
+            const unsigned width = c.form == Form::Aligned16 ? 16u : 32u;
             if (aligned)
                 run += 32u / width;
             else
@@ -179,6 +181,16 @@ TEST(AccumRun, HalfWarpRunCommitsOncePerHalf)
 TEST(AccumRun, MisalignedWarpCommitsPerLane)
 {
     runAll(byQuotient("misaligned", Form::Aligned32, 64 * 1024, 32, 1000));
+}
+
+TEST(AccumRun, ElementSlotRunCommitsOncePerWarp)
+{
+    runAll(byQuotient("element_8192", Form::Element32, 64 * 8192, 8192));
+}
+
+TEST(AccumRun, ElementSlotMisalignedWarpCommitsPerLane)
+{
+    runAll(byQuotient("element_misaligned", Form::Element32, 64 * 1024, 32, 1000));
 }
 
 TEST(AccumRun, TestedRunCommitsOncePerUniformWarp)

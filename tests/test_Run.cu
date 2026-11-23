@@ -42,6 +42,8 @@ void runKernel(RunView<T> target, RunView<T> comp, const long long* key, const T
             run::addCompensated<32>(target, comp, at, term[l], self, open);
         else if (form == 1)
             run::addCompensated<16>(target, comp, at, term[l], self, open);
+        else if (form == 4)
+            run::addCompensatedAt<32>(target(key[l]), comp(key[l]), term[l], self, open);
         else if (form == 2)
             run::addTestedCompensated(target, comp, at, term[l], open);
         else
@@ -52,6 +54,8 @@ void runKernel(RunView<T> target, RunView<T> comp, const long long* key, const T
             run::add<32>(target, at, term[l], self, open);
         else if (form == 1)
             run::add<16>(target, at, term[l], self, open);
+        else if (form == 4)
+            run::addAt<32>(target(key[l]), term[l], self, open);
         else if (form == 2)
             run::addTested(target, at, term[l], open);
         else
