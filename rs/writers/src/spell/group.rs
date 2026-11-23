@@ -28,6 +28,28 @@ pub fn lane_pointer_declaration(binding: &str) -> String {
     )
 }
 
+/// The opening of the function that is the body of one group of a `count` group: its base lane and its size are its arguments.
+/// The text holds the phases once and calls the function twice (`group_calls`), so the function is forced inline (the attribute
+/// after the parameters is the spelling clang and gcc both accept on a lambda): each call site is then compiled with its own size.
+pub fn group_function_open() -> String {
+    "    const auto hawk_group = [&](const std::int64_t hawk_base, const std::int64_t hawk_size) __attribute__((always_inline)) {"
+        .to_string()
+}
+
+/// The calls of `hawk_group` for the groups `[base, base + count)` of `n` lanes, after the function's definition: the whole groups
+/// get the literal `n` as their size, so every phase loop has a known trip count, and only the last group of the launch (the one
+/// with fewer than `n` lanes left, if there is one) gets its size at run time. `hawk_split` is the first group that is not whole,
+/// held to the call's range, so a launch tiled over several calls is right whether or not a call holds the short group.
+pub fn group_calls(n: i64) -> Vec<String> {
+    vec![
+        format!("    const std::int64_t hawk_whole = nSamples / {n};"),
+        "    const std::int64_t hawk_end = base + count;".to_string(),
+        "    const std::int64_t hawk_split = hawk_whole < base ? base : hawk_whole < hawk_end ? hawk_whole : hawk_end;".to_string(),
+        format!("    for (std::int64_t hawk_g = base; hawk_g < hawk_split; ++hawk_g) hawk_group(hawk_g * {n}, {n});"),
+        format!("    for (std::int64_t hawk_g = hawk_split; hawk_g < hawk_end; ++hawk_g) hawk_group(hawk_g * {n}, nSamples - hawk_g * {n});"),
+    ]
+}
+
 /// The array that holds component `component` of the scratch plane `name`; a scalar plane has the one array of its name.
 pub fn scratch_array(name: &str, component: Option<usize>) -> String {
     match component {

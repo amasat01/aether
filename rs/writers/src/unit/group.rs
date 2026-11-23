@@ -17,7 +17,9 @@ use crate::contract::types::{Target, Unit};
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{fault, not_written, Refusal};
 use crate::spell::binding_name;
-use crate::spell::group::{lane_pointer_declaration, scratch_declare};
+use crate::spell::group::{
+    group_calls, group_function_open, lane_pointer_declaration, scratch_declare,
+};
 
 /// The indent of the statements of the group loop.
 const GROUP_INDENT: &str = "        ";
@@ -109,45 +111,33 @@ fn grid_axes(ctx: *mut RxCtx, group: u32, kernel: &str) -> Result<(Vec<Axis>, St
     Ok((axes, size))
 }
 
-/// The statements that set `hawk_first` (the first lane of the group, in `count` form) or `hawk_base` (the lane of rank 0, in
-/// `axes` form) and `hawk_size` for the group `hawk_g`.
-fn group_lines(lanes: &Lanes, size: &str) -> Vec<String> {
-    match lanes {
-        Lanes::Count(n) => vec![
-            format!("{GROUP_INDENT}const std::int64_t hawk_base = hawk_g * {n};"),
-            format!("{GROUP_INDENT}const std::int64_t hawk_left = nSamples - hawk_base;"),
-            format!(
-                "{GROUP_INDENT}const std::int64_t hawk_size = hawk_left < {n} ? hawk_left : {n};"
-            ),
-        ],
-        Lanes::Axes(axes) => {
-            let others: Vec<&Axis> = axes.iter().filter(|a| !a.spanned).collect();
-            let mut terms = vec![];
-            for (j, axis) in others.iter().enumerate() {
-                let inner: Vec<&str> = others[j + 1..].iter().map(|a| a.extent.as_str()).collect();
-                let divided = if inner.is_empty() {
-                    "hawk_g".to_string()
-                } else {
-                    format!("hawk_g / ({})", product(&inner))
-                };
-                let coordinate = if j == 0 {
-                    divided
-                } else {
-                    format!("({divided}) % {}", axis.extent)
-                };
-                terms.push(format!("({coordinate}) * {}", axis.stride));
-            }
-            let base = if terms.is_empty() {
-                "0".to_string()
-            } else {
-                terms.join(" + ")
-            };
-            vec![
-                format!("{GROUP_INDENT}const std::int64_t hawk_base = {base};"),
-                format!("{GROUP_INDENT}const std::int64_t hawk_size = {size};"),
-            ]
-        }
+/// The statements that set `hawk_base` (the lane of rank 0) and `hawk_size` for the group `hawk_g` of an `axes` group.
+fn axes_group_lines(axes: &[Axis], size: &str) -> Vec<String> {
+    let others: Vec<&Axis> = axes.iter().filter(|a| !a.spanned).collect();
+    let mut terms = vec![];
+    for (j, axis) in others.iter().enumerate() {
+        let inner: Vec<&str> = others[j + 1..].iter().map(|a| a.extent.as_str()).collect();
+        let divided = if inner.is_empty() {
+            "hawk_g".to_string()
+        } else {
+            format!("hawk_g / ({})", product(&inner))
+        };
+        let coordinate = if j == 0 {
+            divided
+        } else {
+            format!("({divided}) % {}", axis.extent)
+        };
+        terms.push(format!("({coordinate}) * {}", axis.stride));
     }
+    let base = if terms.is_empty() {
+        "0".to_string()
+    } else {
+        terms.join(" + ")
+    };
+    vec![
+        format!("{GROUP_INDENT}const std::int64_t hawk_base = {base};"),
+        format!("{GROUP_INDENT}const std::int64_t hawk_size = {size};"),
+    ]
 }
 
 /// The offset of the lane of place `hawk_rank` from the group's first lane: the rank itself for consecutive lanes, else the
@@ -488,16 +478,12 @@ pub fn group_body(
     };
     let body = door::field_refs(ctx, group, "body_sinks")?.unwrap_or_default();
     let phases = door::field_ints(ctx, group, "phases")?.unwrap_or_default();
-    let mut text = vec![];
+    let mut scratch = vec![];
     for plane in door::field_refs(ctx, group, "scratch")?.unwrap_or_default() {
         let ty = crate::body::ty_of(ctx, plane)?;
         let bound = bound.ok_or_else(|| fault("a scratch plane in a group with no static size"))?;
         let name = door::text_field(ctx, plane, "name")?;
-        text.extend(
-            scratch_declare(&name, &ty.dtype, &ty.shape, bound)?
-                .into_iter()
-                .map(|line| format!("    {line}")),
-        );
+        scratch.extend(scratch_declare(&name, &ty.dtype, &ty.shape, bound)?);
     }
     let offset = lane_offset(&lanes);
     let everything: Vec<u32> = body
@@ -505,20 +491,18 @@ pub fn group_body(
         .chain(unit.sinks.iter().filter(|&&s| s != group))
         .copied()
         .collect();
-    for plane in input_planes(ctx, &everything)? {
-        text.push(format!("    {}", lane_pointer_declaration(&plane)));
-    }
-    text.push(
-        "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {".to_string(),
-    );
-    text.extend(group_lines(&lanes, &size));
+    let mut text: Vec<String> = input_planes(ctx, &everything)?
+        .iter()
+        .map(|plane| format!("    {}", lane_pointer_declaration(plane)))
+        .collect();
     let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
     let after = outside_runs_after(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
+    let mut per_group: Vec<String> = vec![];
     let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
     if !outside.is_empty() && !after {
         let label = ("sinks beside the group, before its phases", phase_count);
-        text.push(chunk_text(
+        per_group.push(chunk_text(
             ctx, walk, unit, &outside, &offset, label, &mut needs,
         )?);
     }
@@ -531,7 +515,7 @@ pub fn group_body(
         }
         for chunk in chunks(ctx, &sinks)? {
             let label = (format!("phase {phase}"), phase);
-            text.push(chunk_text(
+            per_group.push(chunk_text(
                 ctx,
                 walk,
                 unit,
@@ -544,11 +528,29 @@ pub fn group_body(
     }
     if !outside.is_empty() && after {
         let label = ("sinks beside the group, after its phases", phase_count);
-        text.push(chunk_text(
+        per_group.push(chunk_text(
             ctx, walk, unit, &outside, &offset, label, &mut needs,
         )?);
     }
-    text.push("    }".to_string());
+    match &lanes {
+        Lanes::Count(n) => {
+            text.push(group_function_open());
+            text.extend(scratch.iter().map(|line| format!("{GROUP_INDENT}{line}")));
+            text.extend(per_group);
+            text.push("    };".to_string());
+            text.extend(group_calls(*n));
+        }
+        Lanes::Axes(axes) => {
+            text.extend(scratch.iter().map(|line| format!("    {line}")));
+            text.push(
+                "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {"
+                    .to_string(),
+            );
+            text.extend(axes_group_lines(axes, &size));
+            text.extend(per_group);
+            text.push("    }".to_string());
+        }
+    }
     Ok(Rendered {
         text: text.join("\n"),
         needs,
