@@ -25,6 +25,9 @@
 # g++ only, CPP_MODE (`AETHER_CPP_MODE`), no CUDA toolchain, no GPU involved
 # (both arms are DEVICEHOST-safe surface — see the test files' own note).
 
+# Needs the raptor wing's generated header: `AETHER_FACTS_DIR` names the directory holding `raptor_facts.h`,
+# which every arm pre-includes as the library build does.
+
 set -uo pipefail
 
 REPO_ROOT="${1:-${AETHER_REPO_ROOT:-}}"
@@ -33,6 +36,7 @@ if [[ -z "${REPO_ROOT}" ]]; then
 fi
 
 CXX="${CXX:-g++}"
+FACTS_DIR="${AETHER_FACTS_DIR:-}"
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -40,6 +44,11 @@ FAIL=0
 
 if ! command -v "${CXX}" > /dev/null 2>&1; then
     echo "WARNING [fatal]: compiler '${CXX}' not found; this gate cannot run"
+    exit 1
+fi
+if [[ ! -f "${FACTS_DIR}/raptor_facts.h" ]]; then
+    echo "WARNING [fatal]: set AETHER_FACTS_DIR to the directory holding the raptor" \
+         "wing's raptor_facts.h (got '${FACTS_DIR}')" >&2
     exit 1
 fi
 
@@ -65,7 +74,10 @@ arm() {
 
     sed -e "s|@AETHER_H@|${AETHER_H}|" "${src}" > "${gen}"
 
-    "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" -c "${gen}" \
+    # LC_ALL=C: the patterns below are the compiler's untranslated wording, and a UTF-8 locale makes gcc quote with
+    # typographic marks they do not contain.
+    LC_ALL=C "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" \
+        -I"${FACTS_DIR}" -include raptor_facts.h -c "${gen}" \
         -o "${WORK}/${tag}.o" > "${log}" 2>&1 || rc=$?
 
     if [[ "${expect}" == "fail" ]]; then

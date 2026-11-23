@@ -231,6 +231,9 @@ gate-cpp: gate-need-cxx
 	  $(gate_sub) builddir=$(GATE_DIR)/cpp-$$dbg cpp=ON debug=$$dbg build test
 	done
 	AETHER_FACTS_DIR=$(facts_dir) tests/compile_fail/check_bandedreal_typing_rejected.sh
+	for s in bandchain_typing_rejected constview_no_assign device_umbrella_hostfree texture_write_rejected; do
+	  AETHER_FACTS_DIR=$(facts_dir) tests/compile_fail/check_$$s.sh || exit 1
+	done
 
 # The same suite under ASan and UBSan, with the non-vacuity checks
 gate-sanitize: gate-need-cxx

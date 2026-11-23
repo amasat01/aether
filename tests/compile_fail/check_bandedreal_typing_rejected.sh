@@ -43,7 +43,8 @@
 #                             device code by accident. Without this arm the two
 #                             egress arms above are satisfied by a type that is
 #                             merely awkward in one direction.
-#   ARM WALL-DIRECT           `br * 2.0` MUST fail. The storage face must not
+#   ARM WALL-DIRECT           `br * 2.0` MUST fail; stderr MUST name
+#                             `no match for 'operator*'`. The storage face must not
 #                             open a cross-representation operator route that
 #                             `Band` itself refuses.
 #   ARM WALL-VIA-CARRIER      `Band(br) * 2.0` MUST fail; stderr MUST name
@@ -52,7 +53,8 @@
 #                             show that entering the carrier through the storage
 #                             type does not launder a value around it.
 #   ARM BANDRAW-NO-IMPLICIT-BAND
-#                             `Band b = BandRaw{...};` MUST fail. `normalize` is
+#                             `Band b = BandRaw{...};` MUST fail; stderr MUST name
+#                             `from 'const ...BandRaw' to non-scalar type`. `normalize` is
 #                             the ONLY bridge, because it is the only operation
 #                             that makes the carrier's ordered-limb promise true.
 #                             The whole point of `BandRaw` being a TYPE is that
@@ -240,7 +242,7 @@ int main()
     return static_cast<int>(bad.hi);
 }
 EOF
-arm WALL-DIRECT fail "-" "${WORK}/WALL-DIRECT.cpp"
+arm WALL-DIRECT fail "no match for 'operator*'" "${WORK}/WALL-DIRECT.cpp"
 
 # ---- ARM WALL-VIA-CARRIER -------------------------------------------------
 cat > "${WORK}/WALL-VIA-CARRIER.cpp" <<'EOF'
@@ -265,7 +267,7 @@ int main()
     return static_cast<int>(b.hi);
 }
 EOF
-arm BANDRAW-NO-IMPLICIT-BAND fail "-" "${WORK}/BANDRAW-NO-IMPLICIT-BAND.cpp"
+arm BANDRAW-NO-IMPLICIT-BAND fail "from 'const aether::banded::detail::BandRaw' to non-scalar type" "${WORK}/BANDRAW-NO-IMPLICIT-BAND.cpp"
 
 # ---- ARM POW-SANCTIONED ----------------------------------------------------
 cat > "${WORK}/POW-DEFERRED.cpp" <<'EOF'

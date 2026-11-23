@@ -54,7 +54,9 @@
 #                             NAMED header, not into a black box only the
 #                             full umbrella can reach.
 #
-# Usage: `tests/compile_fail/check_device_umbrella_hostfree.sh [<aether repo root>]`
+# Needs the raptor wing's generated header: `AETHER_FACTS_DIR` names the directory holding `raptor_facts.h`,
+# which every arm pre-includes as the library build does.
+# Usage: `AETHER_FACTS_DIR=<dir> tests/compile_fail/check_device_umbrella_hostfree.sh [<aether repo root>]`
 # Exit code IS the verdict.
 
 set -uo pipefail
@@ -65,6 +67,7 @@ if [[ -z "${REPO_ROOT}" ]]; then
 fi
 
 CXX="${CXX:-g++}"
+FACTS_DIR="${AETHER_FACTS_DIR:-}"
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
 
@@ -72,6 +75,11 @@ FAIL=0
 
 if ! command -v "${CXX}" > /dev/null 2>&1; then
     echo "WARNING [fatal]: compiler '${CXX}' not found; this gate cannot run"
+    exit 1
+fi
+if [[ ! -f "${FACTS_DIR}/raptor_facts.h" ]]; then
+    echo "WARNING [fatal]: set AETHER_FACTS_DIR to the directory holding the raptor" \
+         "wing's raptor_facts.h (got '${FACTS_DIR}')" >&2
     exit 1
 fi
 
@@ -104,7 +112,10 @@ arm() {
     sed -e "s|@DEVICE_H@|${DEVICE_H}|" -e "s|@AETHER_H@|${AETHER_H}|" -e "s|@MAKEVIEW_H@|${MAKEVIEW_H}|" \
         "${src}" > "${gen}"
 
-    "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" -c "${gen}" \
+    # LC_ALL=C: the patterns below are the compiler's untranslated wording, and a UTF-8 locale makes gcc quote with
+    # typographic marks they do not contain.
+    LC_ALL=C "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" \
+        -I"${FACTS_DIR}" -include raptor_facts.h -c "${gen}" \
         -o "${WORK}/${tag}.o" > "${log}" 2>&1 || rc=$?
 
     if [[ "${expect}" == "fail" ]]; then

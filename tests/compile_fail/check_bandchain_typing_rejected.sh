@@ -48,7 +48,9 @@ arm() {
         echo "using namespace aether::banded; namespace bd = aether::banded::detail;"
         echo "int main() { const Band a{1.5f, 0.f, 0.f}; ${body} return 0; }"
     } > "${src}"
-    "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" -c "${src}" -o "${WORK}/${tag}.o" > "${log}" 2>&1 || rc=$?
+    # LC_ALL=C: the patterns below are the compiler's untranslated wording, and a UTF-8 locale makes gcc quote with
+    # typographic marks they do not contain.
+    LC_ALL=C "${CXX}" -std=c++23 -DAETHER_CPP_MODE=1 -I"${REPO_ROOT}" -c "${src}" -o "${WORK}/${tag}.o" > "${log}" 2>&1 || rc=$?
     if [[ "${expect}" == "fail" ]]; then
         if [[ ${rc} -eq 0 ]]; then
             echo "ARM ${tag}: VERDICT RED — compiled, but must be rejected"
