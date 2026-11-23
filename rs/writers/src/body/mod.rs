@@ -194,6 +194,9 @@ pub struct Frame<'e> {
     /// Whether the body is a phase of a group, whose plane reads at the lane's own element go through the pointers the group
     /// hoisted before its loops (`spell::group::lane_pointer`).
     pub group_phase: bool,
+    /// The output planes a group phase writes at the lane's own element through the pointer the group hoisted for each
+    /// (`spell::group::lane_pointer`), by binding.
+    pub pointer_outputs: Vec<String>,
     /// The banded `sincos` pairs bound so far, by the position of the shared operand: the names of the sine and the cosine.
     sincos: Vec<(usize, String, String)>,
 }
@@ -556,9 +559,12 @@ pub fn render_body_over_with_needs(
 
 /// How the body of one phase of a group is written.
 #[derive(Clone, Copy)]
-pub struct PhaseForm {
+pub struct PhaseForm<'a> {
     /// Whether the lanes are the edge lanes of the phase (a moved scratch place is folded by its edge rule) and not its interior.
     pub edge_lanes: bool,
+    /// The bindings of the output planes the phase writes through a pointer hoisted before the group (`unit::group::output_planes`
+    /// states which planes qualify).
+    pub pointer_outputs: &'a [String],
 }
 
 /// The body of one phase of a group over the given sinks, over the walk of the whole group: it writes only what its sinks reach,
@@ -569,7 +575,7 @@ pub fn render_phase_with_needs(
     unit: &Unit,
     indent: &str,
     sinks: &[u32],
-    form: PhaseForm,
+    form: PhaseForm<'_>,
 ) -> Result<frame::needs::Rendered, Refusal> {
     let frame = render::render_frame_over(
         ctx,

@@ -58,7 +58,7 @@ pub(super) struct Given<'a> {
     /// The sinks to write.
     pub(super) sinks: &'a [u32],
     /// The form of the phase when the sinks are one phase of a group.
-    pub(super) phase: Option<PhaseForm>,
+    pub(super) phase: Option<PhaseForm<'a>>,
 }
 
 /// `render_frame` over the given sinks when there are any (and then with no refusal of a box or a
@@ -105,6 +105,9 @@ pub(super) fn render_frame_over<'e>(
     );
     f.edge_lanes = phase.is_some_and(|p| p.edge_lanes);
     f.group_phase = phase.is_some();
+    f.pointer_outputs = phase
+        .map(|p| p.pointer_outputs.to_vec())
+        .unwrap_or_default();
     f.stores = stores::storeplan::Plan::build(&f)?;
     if f.placed {
         f.absorbed = placed::written(&f)?
@@ -410,6 +413,7 @@ fn new_frame<'e>(
         sincos: vec![],
         edge_lanes: false,
         group_phase: false,
+        pointer_outputs: vec![],
         compensated: None,
         placed: unit.target == crate::contract::types::Target::Device
             || (!cut.is_empty() && !one_trip),

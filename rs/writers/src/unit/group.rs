@@ -224,6 +224,40 @@ fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<(String, usize)>, 
     Ok(planes)
 }
 
+/// The bindings of the scalar output planes a phase loop writes through a pointer hoisted before the group loop (the store form
+/// `body::stores::sinks::store` spells for them). A written plane gets the `__restrict` pointer only when the unit's own facts
+/// keep the promise that nothing else reaches its memory inside the loops: (1) no node of the unit reads the plane, in the body or
+/// beside the group, (2) no sink but a plain own-element store (`Assign`) names it: a keyed add, an append or any other write
+/// is at another lane or through a key, and (3) the value stored is a scalar. Any other written plane keeps its view store.
+fn output_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<String>, Refusal> {
+    let read = touched(ctx, sinks)?.read;
+    let (mut own, mut elsewhere): (Vec<(String, String)>, Vec<String>) = (vec![], vec![]);
+    for &sink in sinks {
+        // a barrier is no sink and names no plane; every sink class carries the plane's name
+        if !door::is_a(ctx, sink, "sink")? {
+            continue;
+        }
+        let name = door::text_field(ctx, sink, "name")?;
+        let scalar_value = || -> Result<bool, Refusal> {
+            let value = door::operands(ctx, sink)?[0];
+            Ok(crate::body::ty_of(ctx, value)?.shape.is_empty())
+        };
+        if door::class_is(ctx, sink, "Assign")? && scalar_value()? {
+            let binding = binding_name(&door::text_field(ctx, sink, "role")?, 0, &name)?;
+            own.push((name, binding));
+        } else {
+            elsewhere.push(name);
+        }
+    }
+    let mut planes: Vec<String> = vec![];
+    for (name, binding) in own {
+        if !read.contains(&name) && !elsewhere.contains(&name) && !planes.contains(&binding) {
+            planes.push(binding);
+        }
+    }
+    Ok(planes)
+}
+
 /// What one run of sinks does to the planes: the planes it writes (and whether each write accumulates), the planes its values read,
 /// and those it reads through an index (at another lane of the launch).
 struct Touch {
@@ -381,6 +415,14 @@ fn lane_binding(offset: &str) -> String {
     )
 }
 
+/// How the loops of a group reach the lanes of the planes.
+struct LoopLanes<'a> {
+    /// The offset of the lane of place `hawk_rank` from the group's first lane.
+    offset: &'a str,
+    /// The bindings of the output planes the loops write through a hoisted pointer (`output_planes`).
+    outputs: &'a [String],
+}
+
 /// The text of one chunk of a phase: its loop over the interior lanes, and, when the chunk moves a scratch place, the loop over
 /// the edge lanes beside it.
 fn chunk_text(
@@ -388,7 +430,7 @@ fn chunk_text(
     walk: u32,
     unit: &Unit,
     sinks: &[u32],
-    offset: &str,
+    lanes: &LoopLanes,
     (label, phase): (&str, usize),
     needs: &mut Needs,
 ) -> Result<String, Refusal> {
@@ -399,10 +441,13 @@ fn chunk_text(
         unit,
         LOOP_INDENT,
         sinks,
-        PhaseForm { edge_lanes: false },
+        PhaseForm {
+            edge_lanes: false,
+            pointer_outputs: lanes.outputs,
+        },
     )?;
     needs.merge(&interior.needs);
-    let binding = lane_binding(offset);
+    let binding = lane_binding(lanes.offset);
     if before + after == 0 {
         return Ok(format!(
             "{GROUP_INDENT}// {label}\n{GROUP_INDENT}for (std::int64_t hawk_rank = 0; hawk_rank < hawk_size; ++hawk_rank) {{\n{binding}\n{}\n{GROUP_INDENT}}}",
@@ -415,7 +460,10 @@ fn chunk_text(
         unit,
         LOOP_INDENT,
         sinks,
-        PhaseForm { edge_lanes: true },
+        PhaseForm {
+            edge_lanes: true,
+            pointer_outputs: lanes.outputs,
+        },
     )?;
     needs.merge(&edge.needs);
     let (a, b) = (format!("hawk_lo{phase}"), format!("hawk_hi{phase}"));
@@ -491,14 +539,23 @@ pub fn group_body(
         .chain(unit.sinks.iter().filter(|&&s| s != group))
         .copied()
         .collect();
+    let outputs = output_planes(ctx, &everything)?;
     let mut text: Vec<String> = vec![];
-    for (binding, rank) in input_planes(ctx, &everything)? {
+    let hoisted = input_planes(ctx, &everything)?
+        .into_iter()
+        .map(|(binding, rank)| (binding, rank, false))
+        .chain(outputs.iter().map(|binding| (binding.clone(), 0, true)));
+    for (binding, rank, written) in hoisted {
         text.extend(
-            lane_pointer_declarations(&binding, rank)
+            lane_pointer_declarations(&binding, rank, written)
                 .into_iter()
                 .map(|line| format!("    {line}")),
         );
     }
+    let loop_lanes = LoopLanes {
+        offset: &offset,
+        outputs: &outputs,
+    };
     let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
     let after = outside_runs_after(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
@@ -507,7 +564,13 @@ pub fn group_body(
     if !outside.is_empty() && !after {
         let label = ("sinks beside the group, before its phases", phase_count);
         per_group.push(chunk_text(
-            ctx, walk, unit, &outside, &offset, label, &mut needs,
+            ctx,
+            walk,
+            unit,
+            &outside,
+            &loop_lanes,
+            label,
+            &mut needs,
         )?);
     }
     for phase in 0..phase_count {
@@ -524,7 +587,7 @@ pub fn group_body(
                 walk,
                 unit,
                 &chunk,
-                &offset,
+                &loop_lanes,
                 (&label.0, label.1),
                 &mut needs,
             )?);
@@ -533,7 +596,13 @@ pub fn group_body(
     if !outside.is_empty() && after {
         let label = ("sinks beside the group, after its phases", phase_count);
         per_group.push(chunk_text(
-            ctx, walk, unit, &outside, &offset, label, &mut needs,
+            ctx,
+            walk,
+            unit,
+            &outside,
+            &loop_lanes,
+            label,
+            &mut needs,
         )?);
     }
     match &lanes {

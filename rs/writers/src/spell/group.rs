@@ -13,7 +13,7 @@ pub const GROUP_SIZE: &str = "static_cast<Int>(hawk_size)";
 /// The extent a scratch array is indexed against: the lanes of this group.
 pub const GROUP_EXTENT: &str = "static_cast<std::size_t>(hawk_size)";
 
-/// The name of the pointer a group hoists for the input plane bound as `binding`, and the lane read through it: the plane's data
+/// The name of the pointer a group hoists for the plane bound as `binding`, and the lane read or written through it: the plane's data
 /// as a typed `__restrict` pointer, so the compiler sees an affine base in the phase loop and no alias with the scratch arrays.
 pub fn lane_pointer(binding: &str) -> String {
     format!("hawk_p_{binding}")
@@ -26,11 +26,13 @@ pub fn lane_pitch(binding: &str) -> String {
 }
 
 /// The declarations of the pointer of `lane_pointer` over the view bound as `binding`, and for a value of rank above zero (`rank`)
-/// the pitch of `lane_pitch`, which is the view's last extent. The promise `__restrict` makes holds because only an input plane
-/// (a plane the unit never writes) gets one; a plane the body also writes is read through its view.
-pub fn lane_pointer_declarations(binding: &str, rank: usize) -> Vec<String> {
+/// the pitch of `lane_pitch`, which is the view's last extent. The pointer is to const for a plane the unit reads and to
+/// writable memory for one it `written`. The promise `__restrict` makes is stated by the callers' rules (`unit::group::input_planes`
+/// and `unit::group::output_planes`): nothing else of the unit touches the plane's memory through another name in the loops.
+pub fn lane_pointer_declarations(binding: &str, rank: usize, written: bool) -> Vec<String> {
+    let constness = if written { "" } else { "const " };
     let mut lines = vec![format!(
-        "const auto* __restrict {} = {binding}.data();",
+        "{constness}auto* __restrict {} = {binding}.data();",
         lane_pointer(binding)
     )];
     if rank > 0 {

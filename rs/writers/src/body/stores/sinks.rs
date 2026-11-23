@@ -5,7 +5,7 @@ use crate::body::Class;
 use crate::body::{CompensatedPlan, CompensatedTarget, Frame, Name, NameKind};
 use crate::ir::door;
 use crate::refuse::{fault, nib, Refusal};
-use crate::spell::{binding_name, component_at, element_at, ZEROED_PLANE};
+use crate::spell::{self, binding_name, component_at, element_at, ZEROED_PLANE};
 
 /// The text of a value stored into a plane element: a banded unit's plane element is a `Real`
 /// built from the band.
@@ -63,7 +63,12 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         f.emit(format!("aether::rt::store({target}[i], {});", f.text(v)))
     } else {
         let value = f.text(v).clone();
-        f.emit(format!("{target}[i] = {};", plane_value(f, &value)))
+        let place = if f.pointer_outputs.contains(&target) {
+            format!("{}[hawk_i]", spell::group::lane_pointer(&target))
+        } else {
+            format!("{target}[i]")
+        };
+        f.emit(format!("{place} = {};", plane_value(f, &value)))
     }
     Ok(())
 }
