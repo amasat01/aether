@@ -44,13 +44,22 @@ pub fn lane_pointer_declarations(binding: &str, rank: usize, written: bool) -> V
     lines
 }
 
+/// Component `k` (row-major) of the lane `hawk_i` of the vector or matrix plane bound as `binding`, through its hoisted pointer and
+/// pitch: `k` pitches after the lane's own place.
+pub fn lane_component(binding: &str, k: usize) -> String {
+    format!(
+        "{}[{k} * {} + hawk_i]",
+        lane_pointer(binding),
+        lane_pitch(binding)
+    )
+}
+
 /// The row of a vector or matrix input plane at the lane `hawk_i`, as an item of its components, read through the hoisted pointer
 /// and pitch: component `k` (row-major) of the lane is `k` pitches after the lane's own place.
 pub fn lane_row(binding: &str, value: (&str, &[usize])) -> Result<String, Refusal> {
     let (dtype, shape) = value;
-    let (pointer, pitch) = (lane_pointer(binding), lane_pitch(binding));
     let cells: Vec<String> = (0..shape.iter().product::<usize>())
-        .map(|k| format!("{pointer}[{k} * {pitch} + hawk_i]"))
+        .map(|k| lane_component(binding, k))
         .collect();
     Ok(format!(
         "aether::Item<{}, {}>{{{}}}",

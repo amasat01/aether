@@ -34,6 +34,8 @@ pub struct Due {
     pub target: String,
     /// The subscript text of the component written (empty for an accumulate at a runtime key).
     pub at: String,
+    /// The row-major position of the component written (zero for an accumulate at a runtime key).
+    pub component: usize,
     /// The position of the value written.
     pub part: usize,
     /// The assignment operator: `=`, `+=`, or `at+=`.
@@ -259,7 +261,7 @@ fn schedule(f: &Frame, planned: &[Candidate], ready: &[i64]) -> Schedule {
             })
             .collect();
         let first = due_links.iter().min().copied();
-        for (at, &part) in indices.iter().zip(parts) {
+        for (component, (at, &part)) in indices.iter().zip(parts).enumerate() {
             let when = ready_at(f, part, ready, late, &mut memo);
             let plain = first.is_none_or(|first| when < first);
             if !plain {
@@ -269,6 +271,7 @@ fn schedule(f: &Frame, planned: &[Candidate], ready: &[i64]) -> Schedule {
                 when: when as usize,
                 target: target.clone(),
                 at: at.clone(),
+                component,
                 part,
                 op: if plain { "=" } else { "+=" },
                 key: None,
@@ -279,6 +282,7 @@ fn schedule(f: &Frame, planned: &[Candidate], ready: &[i64]) -> Schedule {
                 when: when as usize,
                 target: target.clone(),
                 at: String::new(),
+                component: 0,
                 part: e,
                 op: "at+=",
                 key: Some(k),
@@ -339,6 +343,11 @@ pub(crate) fn flush(f: &mut Frame, plan: &mut Plan, pos: usize) -> Result<(), Re
         }
         let line = match d.key {
             Some(key) => format!("{}[i].at({}) += {};", d.target, f.text(key), f.text(d.part)),
+            None if d.op == "=" && f.pointer_outputs.contains(&d.target) => format!(
+                "{} = {};",
+                crate::spell::group::lane_component(&d.target, d.component),
+                f.text(d.part)
+            ),
             None => format!(
                 "{}({}, i.global()) {} {};",
                 d.target,

@@ -63,12 +63,20 @@ pub(crate) fn store(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         f.emit(format!("aether::rt::store({target}[i], {});", f.text(v)))
     } else {
         let value = f.text(v).clone();
-        let place = if f.pointer_outputs.contains(&target) {
-            format!("{}[hawk_i]", spell::group::lane_pointer(&target))
+        if !f.pointer_outputs.contains(&target) {
+            f.emit(format!("{target}[i] = {};", plane_value(f, &value)));
+        } else if f.node(v).ty.shape.is_empty() {
+            let place = format!("{}[hawk_i]", spell::group::lane_pointer(&target));
+            f.emit(format!("{place} = {};", plane_value(f, &value)));
         } else {
-            format!("{target}[i]")
-        };
-        f.emit(format!("{place} = {};", plane_value(f, &value)))
+            for (k, component) in flat_indices(&f.node(v).ty.shape).iter().enumerate() {
+                let part = plane_value(f, &component_of(value.clone(), component));
+                f.emit(format!(
+                    "{} = {part};",
+                    spell::group::lane_component(&target, k)
+                ));
+            }
+        }
     }
     Ok(())
 }

@@ -201,13 +201,52 @@ fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
     Ok(seen)
 }
 
-/// The bindings and ranks of the input planes the sinks read at the lane's own element: the planes a phase loop reads through a
+/// A plane the phase loops of a group reach through a pointer hoisted before the group (and a component pitch when its value has
+/// components): what the host text declares, and what the unit's record states as the planes the unit assumes are distinct.
+pub struct HoistedPlane {
+    /// The plane's role as the walk spells it (`plane_in` for an input, the sink's role for an output).
+    pub role: String,
+    /// The plane's name.
+    pub name: String,
+    /// The rank of one value of the plane (0 for a scalar).
+    pub rank: usize,
+    /// Whether the unit writes the plane (the pointer is then to writable memory).
+    pub written: bool,
+}
+
+impl HoistedPlane {
+    /// The name the plane's view is bound under in the entry.
+    pub fn binding(&self) -> Result<String, Refusal> {
+        binding_name(&self.role, self.rank, &self.name)
+    }
+}
+
+/// The planes the phase loops of `group` reach through hoisted `__restrict` pointers: the single place that decides it. The
+/// pointer is a promise that the planes are distinct memory, so a launch that binds one array to two of them is refused at bind
+/// (the unit's record lists them). `unit_sinks` are the unit's sinks, the group among them.
+pub fn hoisted_planes(
+    ctx: *mut RxCtx,
+    unit_sinks: &[u32],
+    group: u32,
+) -> Result<Vec<HoistedPlane>, Refusal> {
+    let body = door::field_refs(ctx, group, "body_sinks")?.unwrap_or_default();
+    let everything: Vec<u32> = body
+        .iter()
+        .chain(unit_sinks.iter().filter(|&&s| s != group))
+        .copied()
+        .collect();
+    let mut planes = input_planes(ctx, &everything)?;
+    planes.extend(output_planes(ctx, &everything)?);
+    Ok(planes)
+}
+
+/// The input planes the sinks read at the lane's own element: the planes a phase loop reads through a
 /// pointer (and, for a vector or matrix plane, a component pitch) hoisted before the group loop (`body::values::is_lane_pointer_plane`
 /// states the same rule for the read). Only an input plane qualifies: a pointer is `__restrict`, a promise that nothing else in
 /// the loop stores through the plane's memory, which holds for a plane the unit never writes. A plane the body also writes, a
 /// plane with named axes (read through an index) and a uniform (loop-invariant already) keep their own reads.
-fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<(String, usize)>, Refusal> {
-    let mut planes: Vec<(String, usize)> = vec![];
+fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<HoistedPlane>, Refusal> {
+    let mut planes: Vec<HoistedPlane> = vec![];
     for node in reachable(ctx, sinks)? {
         if door::class_is(ctx, node, "Leaf")?
             && door::text_field(ctx, node, "role")? == "plane_in"
@@ -215,44 +254,59 @@ fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<(String, usize)>, 
         {
             let rank = crate::body::ty_of(ctx, node)?.shape.len();
             let name = door::text_field(ctx, node, "name")?;
-            let binding = binding_name("plane_in", rank, &name)?;
-            if !planes.iter().any(|(known, _)| *known == binding) {
-                planes.push((binding, rank));
+            if !planes.iter().any(|known| known.name == name) {
+                planes.push(HoistedPlane {
+                    role: "plane_in".to_string(),
+                    name,
+                    rank,
+                    written: false,
+                });
             }
         }
     }
     Ok(planes)
 }
 
-/// The bindings of the scalar output planes a phase loop writes through a pointer hoisted before the group loop (the store form
-/// `body::stores::sinks::store` spells for them). A written plane gets the `__restrict` pointer only when the unit's own facts
-/// keep the promise that nothing else reaches its memory inside the loops: (1) no node of the unit reads the plane, in the body or
-/// beside the group, (2) no sink but a plain own-element store (`Assign`) names it: a keyed add, an append or any other write
-/// is at another lane or through a key, and (3) the value stored is a scalar. Any other written plane keeps its view store.
-fn output_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<String>, Refusal> {
+/// The output planes a phase loop writes through a pointer hoisted before the group loop (the store form
+/// `body::stores::sinks::store` and the commit plan spell for them). A written plane gets the `__restrict` pointer only when the
+/// unit's own facts keep the promise that nothing else reaches its memory inside the loops: (1) no node of the unit reads the
+/// plane, in the body or beside the group, (2) every sink that names it is a plain own-element store (`Assign`) without named
+/// axes: a keyed add, an append or any other write is at another lane or through a key, and (3) a vector or matrix plane has one
+/// such store, so its whole row is written in one form. Any other written plane keeps its view store.
+fn output_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<HoistedPlane>, Refusal> {
     let read = touched(ctx, sinks)?.read;
-    let (mut own, mut elsewhere): (Vec<(String, String)>, Vec<String>) = (vec![], vec![]);
+    // (name, role, rank) of each own-element store, and the names any other sink writes
+    let (mut own, mut elsewhere): (Vec<(String, String, usize)>, Vec<String>) = (vec![], vec![]);
     for &sink in sinks {
         // a barrier is no sink and names no plane; every sink class carries the plane's name
         if !door::is_a(ctx, sink, "sink")? {
             continue;
         }
         let name = door::text_field(ctx, sink, "name")?;
-        let scalar_value = || -> Result<bool, Refusal> {
-            let value = door::operands(ctx, sink)?[0];
-            Ok(crate::body::ty_of(ctx, value)?.shape.is_empty())
-        };
-        if door::class_is(ctx, sink, "Assign")? && scalar_value()? {
-            let binding = binding_name(&door::text_field(ctx, sink, "role")?, 0, &name)?;
-            own.push((name, binding));
+        if door::class_is(ctx, sink, "Assign")? && door::axes_declared(ctx, sink)? == 0 {
+            let rank = crate::body::ty_of(ctx, door::operands(ctx, sink)?[0])?
+                .shape
+                .len();
+            own.push((name, door::text_field(ctx, sink, "role")?, rank));
         } else {
             elsewhere.push(name);
         }
     }
-    let mut planes: Vec<String> = vec![];
-    for (name, binding) in own {
-        if !read.contains(&name) && !elsewhere.contains(&name) && !planes.contains(&binding) {
-            planes.push(binding);
+    let mut planes: Vec<HoistedPlane> = vec![];
+    for (name, role, rank) in &own {
+        let stores = own.iter().filter(|(other, _, _)| other == name).count();
+        let known = planes.iter().any(|known| known.name == *name);
+        if !read.contains(name)
+            && !elsewhere.contains(name)
+            && !known
+            && (*rank == 0 || stores == 1)
+        {
+            planes.push(HoistedPlane {
+                role: role.clone(),
+                name: name.clone(),
+                rank: *rank,
+                written: true,
+            });
         }
     }
     Ok(planes)
@@ -534,20 +588,16 @@ pub fn group_body(
         scratch.extend(scratch_declare(&name, &ty.dtype, &ty.shape, bound)?);
     }
     let offset = lane_offset(&lanes);
-    let everything: Vec<u32> = body
+    let hoisted = hoisted_planes(ctx, &unit.sinks, group)?;
+    let outputs: Vec<String> = hoisted
         .iter()
-        .chain(unit.sinks.iter().filter(|&&s| s != group))
-        .copied()
-        .collect();
-    let outputs = output_planes(ctx, &everything)?;
+        .filter(|plane| plane.written)
+        .map(HoistedPlane::binding)
+        .collect::<Result<_, _>>()?;
     let mut text: Vec<String> = vec![];
-    let hoisted = input_planes(ctx, &everything)?
-        .into_iter()
-        .map(|(binding, rank)| (binding, rank, false))
-        .chain(outputs.iter().map(|binding| (binding.clone(), 0, true)));
-    for (binding, rank, written) in hoisted {
+    for plane in &hoisted {
         text.extend(
-            lane_pointer_declarations(&binding, rank, written)
+            lane_pointer_declarations(&plane.binding()?, plane.rank, plane.written)
                 .into_iter()
                 .map(|line| format!("    {line}")),
         );
