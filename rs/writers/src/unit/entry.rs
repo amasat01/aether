@@ -42,6 +42,8 @@ pub struct Render<'a> {
     /// What the body needs from the unit: recorded while the walk wrote it, else read from its text
     /// (a body the caller gave).
     pub needs: Needs,
+    /// The definitions of the functions the body calls, written ahead of the entry; empty when it calls none.
+    pub functions: String,
 }
 
 /// A request read once: the typed unit and the body a caller supplied, if any.
@@ -174,13 +176,16 @@ fn render_with(
     render: fn(*mut RxCtx, u32, &Render) -> Result<HostSource, Refusal>,
 ) -> Result<HostSource, Refusal> {
     let (body, needs_random, recorded) = body_of(ctx, &prepared)?;
-    let needs = recorded.unwrap_or_else(|| Needs::scan(&body));
+    let mut needs = recorded.unwrap_or_else(|| Needs::scan(&body));
+    let (functions, function_needs) = crate::body::function::definitions(ctx, &prepared.unit)?;
+    needs.merge(&function_needs);
     let walk = prepared.walk;
     let render_input = Render {
         unit: &prepared.unit,
         body,
         needs_random,
         needs,
+        functions,
     };
     let mut source = render(ctx, walk, &render_input)?;
     source.facts = facts_of(ctx, walk, &prepared.unit, &source)?;

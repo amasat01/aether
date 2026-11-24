@@ -59,6 +59,8 @@ pub(super) struct Given<'a> {
     pub(super) sinks: &'a [u32],
     /// The form of the phase when the sinks are one phase of a group.
     pub(super) phase: Option<PhaseForm<'a>>,
+    /// Whether the one sink is the result of a function: the walk ends in `return <its value>;` and no plane is stored.
+    pub(super) returns: bool,
 }
 
 /// `render_frame` over the given sinks when there are any (and then with no refusal of a box or a
@@ -72,6 +74,7 @@ pub(super) fn render_frame_over<'e>(
     emit: Option<&'e mut dyn LoopEmitter>,
     given: Option<Given>,
 ) -> Result<(Frame<'e>, Option<String>), Refusal> {
+    let returns = given.as_ref().is_some_and(|g| g.returns);
     let (given_sinks, phase) = (given.as_ref().map(|g| g.sinks), given.and_then(|g| g.phase));
     let one_trip = emit.as_ref().is_some_and(|e| e.one_trip());
     check_unit(walk, unit, cut, one_trip, given_sinks)?;
@@ -103,6 +106,7 @@ pub(super) fn render_frame_over<'e>(
         sinks,
         block_fold,
     );
+    f.returns = returns;
     f.edge_lanes = phase.is_some_and(|p| p.edge_lanes);
     f.group_phase = phase.is_some();
     f.pointer_outputs = phase
@@ -123,6 +127,9 @@ pub(super) fn render_frame_over<'e>(
         early,
         companions,
     };
+    if returns {
+        plans.early.clear()
+    }
     emit_zero_lines(&mut f, &mut plans);
     plans
         .early
@@ -414,6 +421,7 @@ fn new_frame<'e>(
         edge_lanes: false,
         group_phase: false,
         pointer_outputs: vec![],
+        returns: false,
         compensated: None,
         placed: unit.target == crate::contract::types::Target::Device
             || (!cut.is_empty() && !one_trip),
@@ -537,6 +545,11 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
     for s in f.sinks().to_vec() {
         let p = f.at(s)?;
         let (class, nops, h) = (f.node(p).class.clone(), f.node(p).ops.len(), f.node(p).h);
+        if f.returns {
+            let value = f.text(f.opp(p)[0]).clone();
+            f.emit(format!("return {value};"));
+            continue;
+        }
         if class == Class::Loop {
             continue;
         } // a lowered loop is a root of the walk: emitted with its scope, not a commit

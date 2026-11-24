@@ -406,7 +406,15 @@ fn spell_tensor(
         component: &component,
         lazy_source,
     };
-    let text = spell::tensor_op(&op, &mut |t| f.hoist(t))?;
+    // a parameter of a function is an item with no lane: its component is read by position alone
+    let of_param =
+        kind == OpKind::Component && source.is_some_and(|q| f.node(q).class == Class::Param);
+    let text = if of_param {
+        let ks: Vec<String> = component.iter().map(i64::to_string).collect();
+        format!("{}.get<{}>()", op.args[0], ks.join(", "))
+    } else {
+        spell::tensor_op(&op, &mut |t| f.hoist(t))?
+    };
     if lazy_source == Some(true) && !f.nodes().any(|n| n.class == Class::Loop) {
         let name = text_field(f.ctx(), f.node(f.opp(p)[0]).h, "name")?;
         if super::stores::rtstore::plane_is_stored(f, &name)? {

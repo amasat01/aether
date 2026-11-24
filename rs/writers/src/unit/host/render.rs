@@ -625,7 +625,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         prelude(&m, "static inline", &HOST_ARMS, &needs),
         extra,
         export_lines(unit, &interchange)?,
-        String::new(),
+        input.functions.clone(),
         signature(&name),
         "{".into(),
         unpack(ctx, walk, &shape.walk)?,
@@ -835,11 +835,33 @@ fn sample_sum_frame(
     let sinks = sum_sinks(ctx, sums, w)?;
     let width = sums.len() as i64;
     let store = store_lambda(&sinks, 1, row, false)?;
-    let ops: Vec<&str> = sinks.iter().map(|sink| sink.op.as_str()).collect();
-    let op = ops[0];
-    let code = op_code(op)?;
+    let pair = pair_directions(&sinks)?;
     let elem = sinks[0].element.clone();
-    let fill = identity_fill(op, row * width, "hawk_ss_rows", &elem)?;
+    // columns of different folds each fold with their own op and start from their own identity
+    let mixed = pair.is_none() && sinks.iter().any(|sink| sink.op != sinks[0].op);
+    // a slot that holds no sample is a NaN, which never wins, in a fold of pairs; else the identity of the op
+    let nan = format!("static_cast<{elem}>(__builtin_nan(\"\"))");
+    let (store, fill) = if let Some(directions) = &pair {
+        let fill = format!(
+            "    for (int hawk_k = 0; hawk_k < {}; ++hawk_k) hawk_ss_rows[hawk_k] = {nan};\n",
+            row * width
+        );
+        let lambda = pair_row_lambda(&elem, width, row, directions, &nan);
+        (format!("{store}\n{lambda}"), fill)
+    } else if mixed {
+        let codes = sinks
+            .iter()
+            .map(|sink| op_code(&sink.op))
+            .collect::<Result<Vec<_>, _>>()?;
+        let fill = mixed_declarations(&elem, row, &codes);
+        (
+            format!("{store}\n{}", mixed_row_lambda(&elem, width, row)),
+            fill,
+        )
+    } else {
+        let fill = identity_fill(&sinks[0].op, row * width, "hawk_ss_rows", &elem)?;
+        (store, fill)
+    };
     let opened = format!("    const std::int64_t hawk_lo = (base + {r1}) / {row} * {row};\n    std::int64_t hawk_hi = (base + count + {r1}) / {row} * {row};\n    if (hawk_hi > nSamples) hawk_hi = nSamples;\n    {elem} hawk_ss_rows[{row} * {width}] = {{}};\n{fill}    std::int64_t hawk_row = 0;\n{}\n    for (std::int64_t hawk_i = hawk_lo; hawk_i < hawk_hi; ++hawk_i) {{\n        {elem}* const hawk_ss = hawk_ss_rows + (hawk_i & {r1}) * {width};\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));", store, r1 = row - 1);
     // an active-set run: a sample at or past the live count adds the identity (its row is still
     // stored)
@@ -849,18 +871,127 @@ fn sample_sum_frame(
         }
         None => opened,
     };
-    let identity = if op == "sum" {
+    let identity = if pair.is_some() {
+        nan.clone()
+    } else if mixed {
+        "hawk_ss_identity[hawk_k]".to_string()
+    } else if sinks[0].op == "sum" {
         "0".to_string()
     } else {
-        format!("hawk_abi::ssIdentity_<{code}, {elem}>()")
+        format!(
+            "hawk_abi::ssIdentity_<{}, {elem}>()",
+            op_code(&sinks[0].op)?
+        )
     };
     let skip = if live.is_some() {
         format!("\n        }} else {{\n            for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) hawk_ss[hawk_k] = {identity};\n        }}\n")
     } else {
         String::new()
     };
-    let closed = format!("{skip}        if ((hawk_i & 31) == 31 || hawk_i + 1 == hawk_hi) {{\n            hawk_row = hawk_i >> 5;\n            hawk_abi::sampleSumRow_<{width}, {code}>(hawk_ss_rows, hawk_ss_store);\n        }}\n    }}");
+    let fold = if pair.is_some() {
+        "hawk_pair_row(hawk_row << 5);".to_string()
+    } else if mixed {
+        "hawk_mixed_row();".to_string()
+    } else {
+        format!(
+            "hawk_abi::sampleSumRow_<{width}, {}>(hawk_ss_rows, hawk_ss_store);",
+            op_code(&sinks[0].op)?
+        )
+    };
+    let closed = format!("{skip}        if ((hawk_i & 31) == 31 || hawk_i + 1 == hawk_hi) {{\n            hawk_row = hawk_i >> 5;\n            {fold}\n        }}\n    }}");
     Ok((opened, closed))
+}
+
+/// The declarations and fill of a row whose columns fold differently: `hawk_ss_ops` the op code of each column and
+/// `hawk_ss_identity` the value an empty slot of it holds (0, -inf, +inf), then every slot of the row set to it.
+fn mixed_declarations(elem: &str, row: i64, codes: &[i64]) -> String {
+    let width = codes.len();
+    let list = |item: &dyn Fn(i64) -> String| {
+        codes
+            .iter()
+            .map(|&c| item(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let ops = list(&|code| code.to_string());
+    let identities = list(&|code| format!("hawk_abi::ssIdentity_<{code}, {elem}>()"));
+    format!(
+        "    const int hawk_ss_ops[{width}] = {{{ops}}};\n    const {elem} hawk_ss_identity[{width}] = {{{identities}}};\n    for (int hawk_k = 0; hawk_k < {row} * {width}; ++hawk_k) hawk_ss_rows[hawk_k] = hawk_ss_identity[hawk_k % {width}];\n"
+    )
+}
+
+/// The row fold of a unit whose columns fold differently: the pairwise tree of the row sum, each column combined by its own op
+/// (`hawk_ss_ops`: the compensated sum, or the NaN-ignoring extreme), stored through `hawk_ss_store`, slots left at their
+/// identities.
+fn mixed_row_lambda(elem: &str, width: i64, row: i64) -> String {
+    format!(
+        "    auto hawk_mixed_row = [&]() {{
+        {elem} hawk_ss_comp[{row} * {width}] = {{}};
+        for (int hawk_off = {row} / 2; hawk_off >= 1; hawk_off >>= 1)
+            for (int hawk_l = 0; hawk_l < hawk_off; ++hawk_l)
+                for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) {{
+                    const int hawk_a = hawk_l * {width} + hawk_k;
+                    const int hawk_b = (hawk_l + hawk_off) * {width} + hawk_k;
+                    if (hawk_ss_ops[hawk_k] == 0)
+                        hawk_abi::pairCombine_<0>(hawk_ss_rows[hawk_a], hawk_ss_comp[hawk_a], hawk_ss_rows[hawk_b], hawk_ss_comp[hawk_b]);
+                    else
+                        hawk_ss_rows[hawk_a] = hawk_abi::ssExtreme_(hawk_ss_ops[hawk_k], hawk_ss_rows[hawk_a], hawk_ss_rows[hawk_b]);
+                }}
+        for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) hawk_ss_store(hawk_k, hawk_ss_rows[hawk_k], hawk_ss_comp[hawk_k]);
+        for (int hawk_k = 0; hawk_k < {row} * {width}; ++hawk_k) hawk_ss_rows[hawk_k] = hawk_ss_identity[hawk_k % {width}];
+    }};"
+    )
+}
+
+/// The row fold of a unit that asks for a position: the winner of the `row` slots of each column, a pair (value, lane), through the
+/// same pairwise tree as the row sum, stored as (value, lane) by `hawk_ss_store`. A NaN never wins; equal values go to the lower lane
+/// (the lower slot); a column with no winner has the lane `nSamples`. Slots are left holding no sample (`nan`). A column wins by
+/// its own direction; when all share one, the comparison is written once.
+fn pair_row_lambda(elem: &str, width: i64, row: i64, directions: &[&str], nan: &str) -> String {
+    let uniform = directions.iter().all(|d| *d == directions[0]);
+    let (declare, beats) = if uniform {
+        let wins = if directions[0] == "max" { ">" } else { "<" };
+        (String::new(), format!("hawk_b {wins} hawk_a"))
+    } else {
+        let flags: Vec<&str> = directions
+            .iter()
+            .map(|d| if *d == "max" { "true" } else { "false" })
+            .collect();
+        (
+            format!(
+                "        const bool hawk_ss_max[{width}] = {{{}}};\n",
+                flags.join(", ")
+            ),
+            "(hawk_ss_max[hawk_k] ? hawk_b > hawk_a : hawk_b < hawk_a)".to_string(),
+        )
+    };
+    format!(
+        "    auto hawk_pair_row = [&](std::int64_t hawk_first) {{
+{declare}        {elem} hawk_ss_lane[{row} * {width}];
+        for (int hawk_l = 0; hawk_l < {row}; ++hawk_l)
+            for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) {{
+                const {elem} hawk_v = hawk_ss_rows[hawk_l * {width} + hawk_k];
+                hawk_ss_lane[hawk_l * {width} + hawk_k] =
+                    hawk_v != hawk_v ? static_cast<{elem}>(nSamples) : static_cast<{elem}>(hawk_first + hawk_l);
+            }}
+        for (int hawk_off = {row} / 2; hawk_off >= 1; hawk_off >>= 1)
+            for (int hawk_l = 0; hawk_l < hawk_off; ++hawk_l)
+                for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) {{
+                    {elem}& hawk_a = hawk_ss_rows[hawk_l * {width} + hawk_k];
+                    {elem}& hawk_al = hawk_ss_lane[hawk_l * {width} + hawk_k];
+                    const {elem} hawk_b = hawk_ss_rows[(hawk_l + hawk_off) * {width} + hawk_k];
+                    const {elem} hawk_bl = hawk_ss_lane[(hawk_l + hawk_off) * {width} + hawk_k];
+                    const bool hawk_take = hawk_a != hawk_a ? hawk_b == hawk_b
+                        : hawk_b == hawk_b && ({beats} || (hawk_b == hawk_a && hawk_bl < hawk_al));
+                    if (hawk_take) {{
+                        hawk_a = hawk_b;
+                        hawk_al = hawk_bl;
+                    }}
+                }}
+        for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) hawk_ss_store(hawk_k, hawk_ss_rows[hawk_k], hawk_ss_lane[hawk_k]);
+        for (int hawk_k = 0; hawk_k < {row} * {width}; ++hawk_k) hawk_ss_rows[hawk_k] = {nan};
+    }};"
+    )
 }
 
 /// The name of the entry that folds the companion plane of `target` into it, for the unit's entry `name`.

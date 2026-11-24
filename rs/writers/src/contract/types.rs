@@ -568,6 +568,43 @@ pub struct Unit {
     pub exports: Exports,
     /// Whether the device text is followed by its table of literals.
     pub literal_table: bool,
+    /// The functions the unit's calls name, each after the functions it calls; none when no call is made.
+    pub functions: Option<Vec<FunctionUnit>>,
+}
+
+/// A parameter of a function the unit writes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionParam {
+    /// The parameter's name in the function's text.
+    pub name: String,
+    /// The element type, as the walk spells it (`f64`).
+    pub dtype: String,
+    /// The extents, empty for a scalar.
+    pub shape: Vec<i64>,
+    /// The `Param` node the body reads the value through.
+    pub node: u32,
+}
+
+/// One function of the unit: written once as a definition, then called. Its body is a walk of its own, taken over one result sink
+/// that stands for the returned value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionUnit {
+    /// The name the calls know the function by.
+    pub name: String,
+    /// The digest that tells functions of one name apart.
+    pub digest: String,
+    /// The parameters, in the order a call passes its arguments.
+    pub params: Vec<FunctionParam>,
+    /// The element type of the result.
+    pub result: String,
+    /// The extents of the result, empty for a scalar.
+    pub result_shape: Vec<i64>,
+    /// The walk handle of the body.
+    pub walk: u32,
+    /// The result sink the body's walk is taken over.
+    pub sink: u32,
+    /// The arguments of the body's walk.
+    pub slots: Walk,
 }
 
 impl Role {

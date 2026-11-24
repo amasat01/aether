@@ -77,6 +77,10 @@ pub enum Class {
     GroupRank,
     /// The number of lanes of the lane's group.
     GroupSize,
+    /// A parameter of a function: the value its caller passes.
+    Param,
+    /// A call of a function the unit defines.
+    Call,
     /// Any other class: only its name is kept.
     Other(String),
 }
@@ -119,6 +123,8 @@ impl Class {
             "Scratch" => Class::Scratch,
             "GroupRank" => Class::GroupRank,
             "GroupSize" => Class::GroupSize,
+            "Param" => Class::Param,
+            "Call" => Class::Call,
             other => Class::Other(other.to_string()),
         }
     }
@@ -177,6 +183,8 @@ impl Class {
             Class::Scratch => "Scratch",
             Class::GroupRank => "GroupRank",
             Class::GroupSize => "GroupSize",
+            Class::Param => "Param",
+            Class::Call => "Call",
             Class::Other(name) => name,
         }
     }

@@ -221,6 +221,25 @@ pub(crate) fn warp_store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// The column of an earlier sample-sum sink over the same term as `sink` (at position `p`), in a unit that asks for a position.
+fn same_term_column(f: &mut Frame, sink: u32, p: usize) -> Result<Option<usize>, Refusal> {
+    let mut columns = vec![];
+    let mut asks = false;
+    for &q in &f.sinks().to_vec() {
+        let at = f.at(q)?;
+        if f.node(at).class == Class::SampleSum {
+            let op = text_field(f.ctx(), f.node(at).h, "op")?;
+            asks = asks || op.starts_with("arg");
+            columns.push((q, f.opp(at)[0]));
+        }
+    }
+    let term = f.opp(p)[0];
+    let here = columns.iter().position(|(q, _)| *q == sink);
+    Ok(here
+        .and_then(|k| columns[..k].iter().position(|(_, t)| *t == term))
+        .filter(|_| asks))
+}
+
 /// The sample's term into its column of the row the wrapper sums.
 pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Refusal> {
     let mut column = 0;
@@ -235,7 +254,13 @@ pub(crate) fn sample_sum(f: &mut Frame, sink: u32, p: usize) -> Result<(), Refus
     }
     let value = f.text(f.opp(p)[0]).clone();
     if !f.banded() {
-        f.emit(format!("hawk_ss[{column}] = {value};"));
+        // where a position is asked for, the minimum and its position are folded from one value per lane: a column over the same
+        // term as an earlier one copies it, so the two cannot round differently
+        if let Some(earlier) = same_term_column(f, sink, p)? {
+            f.emit(format!("hawk_ss[{column}] = hawk_ss[{earlier}];"));
+        } else {
+            f.emit(format!("hawk_ss[{column}] = {value};"));
+        }
         return Ok(());
     }
     // a banded sum adds the term to the column's accumulator; the other ops take the term as it is

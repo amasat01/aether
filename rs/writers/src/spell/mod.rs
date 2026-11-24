@@ -579,6 +579,10 @@ pub fn int_plane(dtype: &str) -> bool {
     matches!(dtype, "int32" | "uint32")
 }
 /// The C++ element type of `dtype`.
+pub fn element_type(dtype: &str) -> Result<String, Refusal> {
+    elem(dtype)
+}
+/// The C++ element type of `dtype`, as the spelling helpers take it.
 fn elem(dtype: &str) -> Result<String, Refusal> {
     if int_plane(dtype) {
         Ok(format!("std::{dtype}_t"))

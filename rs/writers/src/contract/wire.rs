@@ -183,6 +183,25 @@ record!(
     [role, name, dtype, shape, index, axes, zeroed]
 );
 record!(Axis, "axis", [label, extent]);
+record!(
+    FunctionParam,
+    "function parameter",
+    [name, dtype, shape, node]
+);
+record!(
+    FunctionUnit,
+    "function",
+    [
+        name,
+        digest,
+        params,
+        result,
+        result_shape,
+        walk,
+        sink,
+        slots
+    ]
+);
 record!(Walk, "walk", [access, finish, slots]);
 record!(Kind, "kind", [guard, lanes, sink]);
 #[rustfmt::skip]
@@ -213,7 +232,7 @@ record!(TeamShape, "team", [threads, warps]);
 record!(GivenBody, "given body", [text, draws_random]);
 #[rustfmt::skip]
 record!(Unit, "unit", [name, target, scalar, kind, form, sinks, walk, body, active, segment,
-    thread_box, one_step, rows, team, build, machine, exports, literal_table]);
+    thread_box, one_step, rows, team, build, machine, exports, literal_table, functions]);
 
 // The shapes below are irregular, so each has a short hand-written pair: a data member is a
 // one-member object `{"Name": payload}` and a member without data is its plain name.
@@ -588,6 +607,7 @@ mod tests {
             },
             exports: Exports::Sizes([1, 2, 3, 4, 5]),
             literal_table: false,
+            functions: None,
         }
     }
 

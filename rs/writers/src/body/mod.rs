@@ -6,6 +6,7 @@
 //! classes); each class of node has its own file.
 pub(crate) mod dispatch;
 pub(crate) mod frame;
+pub(crate) mod function;
 mod linalg;
 pub(crate) mod loops;
 mod ops;
@@ -197,6 +198,8 @@ pub struct Frame<'e> {
     /// The output planes a group phase writes at the lane's own element through the pointer the group hoisted for each
     /// (`spell::group::lane_pointer`), by binding.
     pub pointer_outputs: Vec<String>,
+    /// Whether the walk is a function's: its one sink is the returned value, written as `return <value>;`.
+    pub returns: bool,
     /// The banded `sincos` pairs bound so far, by the position of the shared operand: the names of the sine and the cosine.
     sincos: Vec<(usize, String, String)>,
 }
@@ -491,6 +494,8 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
             f.set_text(p, f.arg(h)?);
             Out::Bound
         }
+        Class::Param => function::param(f, p)?,
+        Class::Call => function::call(f, p)?,
         other => return Err(nib(format!("node class {other}"))),
     })
 }
@@ -549,7 +554,41 @@ pub fn render_body_over_with_needs(
         indent,
         &[],
         None,
-        Some(render::Given { sinks, phase: None }),
+        Some(render::Given {
+            sinks,
+            phase: None,
+            returns: false,
+        }),
+    )?
+    .0;
+    Ok(frame::needs::Rendered {
+        text: frame.buf.lines.join("\n"),
+        needs: frame.recorded_needs(),
+    })
+}
+
+/// The body of a function: a walk over its one result sink, written as statements ending in `return <value>;`, each led by
+/// `indent`.
+pub(crate) fn render_function_body(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+    indent: &str,
+    sink: u32,
+) -> Result<frame::needs::Rendered, Refusal> {
+    let sinks = [sink];
+    let frame = render::render_frame_over(
+        ctx,
+        walk,
+        unit,
+        indent,
+        &[],
+        None,
+        Some(render::Given {
+            sinks: &sinks,
+            phase: None,
+            returns: true,
+        }),
     )?
     .0;
     Ok(frame::needs::Rendered {
@@ -588,6 +627,7 @@ pub fn render_phase_with_needs(
         Some(render::Given {
             sinks,
             phase: Some(form),
+            returns: false,
         }),
     )?
     .0;

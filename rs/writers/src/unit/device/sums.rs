@@ -3,7 +3,7 @@
 //! lane past the launch's count still takes part in its warp's sum with zero terms.
 use super::prologue::{index_prologue, Geometry};
 use crate::contract::types::Build;
-use crate::refuse::{bad, Refusal};
+use crate::refuse::{bad, fault, Refusal};
 use crate::unit::sums::{identity_fill, op_code, store_lambda, SumSink};
 
 /// The name of the lane's terms array, which the body writes its sums into.
@@ -108,19 +108,55 @@ fn folded_rows_frame(
     Ok((opened.join("\n"), closed.join("\n")))
 }
 
+/// The refusal of sinks of different folds: the warp sum takes one fold for all its columns.
+fn refuse_mixed_folds(name: &str, sinks: &[SumSink]) -> Result<(), Refusal> {
+    if sinks.iter().any(|sink| sink.op != sinks[0].op) {
+        return Err(fault(format!(
+            "{name}: sample reductions of different folds in one kernel are not written on the device yet"
+        )));
+    }
+    Ok(())
+}
+
 /// The frame the body of a kernel with the sample-sum `sinks` sits in, as its opening and its
-/// close.
+/// close; sinks of different folds are refused by the kernel's `name`.
 pub fn frame(
+    name: &str,
     build: &Build,
     sinks: &[SumSink],
     cells: bool,
     live_count: Option<&str>,
 ) -> Result<(String, String), Refusal> {
+    refuse_mixed_folds(name, sinks)?;
     let rows = fold_rows(build, sinks.len() as i64)?;
     let store = store_lambda(sinks, rows, build.cells_row, cells)?;
     if rows > 1 {
         folded_rows_frame(sinks, rows, &store, live_count)
     } else {
         single_row_frame(sinks, &store, live_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink(op: &str) -> SumSink {
+        SumSink {
+            op: op.into(),
+            role: "out".into(),
+            name: op.into(),
+            element: "double".into(),
+        }
+    }
+
+    #[test]
+    fn sinks_of_different_folds_are_refused_by_the_kernel_name() {
+        let refusal = refuse_mixed_folds("k", &[sink("min"), sink("max")]);
+        let message = format!("{:?}", refusal.expect_err("a refusal"));
+        assert!(message.contains(
+            "k: sample reductions of different folds in one kernel are not written on the device yet"
+        ));
+        assert!(refuse_mixed_folds("k", &[sink("min"), sink("min")]).is_ok());
     }
 }

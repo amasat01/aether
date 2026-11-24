@@ -276,8 +276,13 @@ fn framed_lines(
             .active
             .as_ref()
             .map(|active| unit::active_reads(active, "0").0);
-        let (opened, closed) =
-            super::sums::frame(&unit.build, sum_sinks, mode.cells, live_count.as_deref())?;
+        let (opened, closed) = super::sums::frame(
+            &unit.name,
+            &unit.build,
+            sum_sinks,
+            mode.cells,
+            live_count.as_deref(),
+        )?;
         Ok(vec![opened, body, closed])
     }
 }

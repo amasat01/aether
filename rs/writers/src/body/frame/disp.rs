@@ -75,18 +75,24 @@ impl Frame<'_> {
                         .users(p)
                         .iter()
                         .all(|&(u, k)| k == 0 && self.node(u).class == Class::At);
-                !matches!(class, Class::Const | Class::RoleConst | Class::SampleIndex)
-                    && !matches!(role, Some("uniform" | "nsamples"))
+                !matches!(
+                    class,
+                    Class::Const | Class::RoleConst | Class::SampleIndex | Class::Param
+                ) && !matches!(role, Some("uniform" | "nsamples"))
                     && !matches!(role, Some("lookup" | "wide_in"))
                     && !crossed
                     && !proxy_read
                     && !inline
                     && (readers >= 2 || leaf_valued || self.disp(p) == Disp::Forced)
             }
-            ScopeKind::Loop => !proxy_read && !inline && (readers >= 2 || leaf_valued),
+            ScopeKind::Loop => {
+                !proxy_read && !inline && *class != Class::Param && (readers >= 2 || leaf_valued)
+            }
             ScopeKind::Case => {
-                !matches!(class, Class::Const | Class::RoleConst | Class::SampleIndex)
-                    && !matches!(role, Some("uniform" | "nsamples" | "lookup" | "wide_in"))
+                !matches!(
+                    class,
+                    Class::Const | Class::RoleConst | Class::SampleIndex | Class::Param
+                ) && !matches!(role, Some("uniform" | "nsamples" | "lookup" | "wide_in"))
                     && (readers >= 2 || leaf_valued)
             }
         })

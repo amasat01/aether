@@ -323,7 +323,7 @@ pub(crate) fn literal_of(ctx: *mut door::RxCtx, h: u32) -> Result<door::Scalar, 
 
 /// The value of a constant as the spelling takes it: a number, a flag, or the kind of anything
 /// else.
-fn held_of(scalar: &door::Scalar) -> spell::Held<'_> {
+pub(super) fn held_of(scalar: &door::Scalar) -> spell::Held<'_> {
     match scalar {
         door::Scalar::Int(v) => spell::Held::Int(*v),
         door::Scalar::Real(v) => spell::Held::Real(*v),

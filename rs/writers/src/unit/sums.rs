@@ -90,12 +90,40 @@ pub fn row_planes(
         .collect()
 }
 
+/// Whether the sink states the position of a minimum or maximum (`argmin`, `argmax`) rather than a value.
+pub fn is_position(op: &str) -> bool {
+    op.starts_with("arg")
+}
+
+/// The direction (`min` or `max`) of each column of a unit that asks for a position, or `None` when it asks for none. Such a unit
+/// folds pairs (value, lane) in every column, so every column must be a minimum, a maximum or the position of one; a sum has no
+/// lane to carry.
+pub fn pair_directions(sinks: &[SumSink]) -> Result<Option<Vec<&'static str>>, Refusal> {
+    if !sinks.iter().any(|sink| is_position(&sink.op)) {
+        return Ok(None);
+    }
+    sinks
+        .iter()
+        .map(|sink| match sink.op.trim_start_matches("arg") {
+            "min" => Ok("min"),
+            "max" => Ok("max"),
+            _ => Err(fault(
+                "a position over samples shares its kernel only with minima, maxima and their positions",
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 /// The code of the operation the row sum takes as a template argument.
 pub fn op_code(op: &str) -> Result<i64, Refusal> {
     match op {
         "sum" => Ok(0),
         "max" => Ok(1),
         "min" => Ok(2),
+        "argmin" | "argmax" => Err(fault(
+            "a position over samples is written for the host only; this target's text has no row fold of pairs",
+        )),
         other => Err(fault(format!("unknown sample-sum op {other:?}"))),
     }
 }
@@ -128,6 +156,8 @@ pub fn store_lambda(
     } else {
         ("hawk_s", "hawk_c")
     };
+    // the lanes of the winners of a unit that asks for a position are the second value of every column
+    let paired = sinks.iter().any(|sink| is_position(&sink.op));
     let mut lines =
         vec!["    auto hawk_ss_store = [&](int hawk_col, auto hawk_s, auto hawk_c) {".to_string()];
     if rows > 1 {
@@ -150,7 +180,7 @@ pub fn store_lambda(
             "            {}.data()[hawk_row] = {out};",
             binding_name(&sink.role, 0, &sink.name)?
         ));
-        if sink.op == "sum" {
+        if sink.op == "sum" || paired {
             lines.push(format!(
                 "            {}.data()[hawk_row] = {comp};",
                 binding_name(&sink.role, 0, &format!("{}_comp", sink.name))?
@@ -206,5 +236,13 @@ mod tests {
         let text = store_lambda(&sinks, 1, 0, false).unwrap();
         assert!(!text.contains("else if (hawk_col"));
         assert_eq!(text.matches("        case ").count(), 6000);
+    }
+
+    #[test]
+    fn a_position_shares_its_kernel_with_minima_and_maxima_but_not_sums() {
+        let directions = pair_directions(&[sink("argmin", "a"), sink("max", "b")]).unwrap();
+        assert_eq!(directions, Some(vec!["min", "max"]));
+        assert_eq!(pair_directions(&[sink("min", "a")]).unwrap(), None);
+        assert!(pair_directions(&[sink("argmax", "a"), sink("sum", "b")]).is_err());
     }
 }

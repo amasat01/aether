@@ -27,6 +27,7 @@ fn the_host_refuses_a_banded_unit_by_name_before_it_reads_the_graph() {
         body: String::new(),
         needs_random: false,
         needs: Default::default(),
+        functions: String::new(),
     };
     // the refusal precedes every read of the graph, so no graph is needed
     let why = render(std::ptr::null_mut(), 0, &input)

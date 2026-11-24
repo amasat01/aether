@@ -96,6 +96,7 @@ pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, Refusal> {
         machine: machine_of(spec, top.get("facts"))?,
         exports: old.exports()?,
         literal_table: old.literal_table(),
+        functions: None,
         form,
     })
 }
