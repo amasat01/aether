@@ -321,9 +321,10 @@ impl Frame<'_> {
         all.merge(&self.table.read_needs());
         all
     }
-    /// Records a run state of the text being written.
-    pub fn need_run(&self, target: &str) {
-        self.needs.borrow_mut().record_run(target)
+    /// The run state of `target` at the element text `element` for the text being written, none when the target holds the most
+    /// states a body keeps (`MAX_RUN_STATES`).
+    pub fn run_state(&self, target: &str, element: &str) -> Option<String> {
+        self.needs.borrow_mut().record_run(target, element)
     }
     /// Appends a line at the current indent.
     pub fn emit(&mut self, line: String) {

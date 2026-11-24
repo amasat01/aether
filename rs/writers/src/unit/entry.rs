@@ -313,10 +313,13 @@ pub fn needs_check(
             };
             out.push(format!("{need:?}: {side}"))
         }
-        if recorded.runs != shown.runs {
+        let states =
+            |needs: &Needs| -> Vec<String> { needs.runs.iter().map(|r| r.state.clone()).collect() };
+        if states(&recorded) != states(&shown) {
             out.push(format!(
                 "runs: recorded {:?}, text {:?}",
-                recorded.runs, shown.runs
+                states(&recorded),
+                states(&shown)
             ))
         }
         out

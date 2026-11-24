@@ -296,6 +296,17 @@ pub enum StepOp {
     ScatterCells,
 }
 
+/// One lane axis of a keyed sum whose keys do not own contiguous lane ranges.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyAxis {
+    /// The axis's extent; none for the run-time first axis.
+    pub extent: Option<i64>,
+    /// The flat-lane distance of one step along the axis.
+    pub stride: i64,
+    /// Whether the sum keeps the axis (its key moves along it); else the sum runs over it.
+    pub kept: bool,
+}
+
 /// One step of a team stage.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
@@ -311,6 +322,9 @@ pub struct Step {
     pub max_chunks: i64,
     /// The scratch planes the step uses, as (role in the step, plane name).
     pub planes: Vec<(String, String)>,
+    /// The lane axes of a keyed sum whose keys' lanes are not contiguous, all of the launch's axes from the slowest; none when
+    /// every key owns the lanes `key * rows ..`.
+    pub key_axes: Option<Vec<KeyAxis>>,
 }
 
 /// A unit that is one stage run by a team of threads instead of a loop over samples.

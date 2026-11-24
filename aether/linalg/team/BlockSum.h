@@ -25,10 +25,11 @@ namespace team {
 /**
  * @brief `g[i*Q + j] = sum_{r < count} u[row(r)*strideU + i] * v[row(r)*strideV + j]`.
  *
- * `row(r)` is `first + r`, or `index[first + r]` when `index` is not null (an active-set
- * map). With `rowsPer = M > 1` each sample owns `M` consecutive rows (`M x P` per sample, as in
- * `transpose(A) A` of a per-lane `M x P` block): `count` counts samples, sample `r` is
- * `first + r` or `index[first + r]`, and its rows `sample*M .. sample*M + M - 1` are added in
+ * `row(r)` is `rowOf(r)`: the sample of the r-th term, any callable from an ordinal to a row index, so
+ * the summed samples need not be contiguous (a sum over a leading or a middle axis of a lane grid reads
+ * them at the strides of the summed axes). With `rowsPer = M > 1` each sample owns `M` consecutive
+ * rows (`M x P` per sample, as in `transpose(A) A` of a per-lane `M x P` block): `count` counts samples, sample `r` is
+ * `rowOf(r)`, and its rows `sample*M .. sample*M + M - 1` are added in
  * order, so the sum equals the expanded row list's. `rowsPer = 1` is the plain form.
  * Rows are visited in ascending `r`. Entry `(i, j)` is written to
  * `g[i * strideGI + j * strideGJ]`; the defaults (0) mean a contiguous `P x Q` row-major block
@@ -38,11 +39,12 @@ namespace team {
  *
  * @tparam P  Width of `u` (rows of `g`).
  * @tparam Q  Width of `v` (columns of `g`); `Q = 1` gives `J^T r`.
+ * @tparam RowOf  Callable `std::size_t(std::size_t)`, callable wherever the sum runs.
  */
-template<std::size_t P, std::size_t Q = P, class T>
-AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, std::size_t first, std::size_t count,
-                                  std::size_t strideU, std::size_t strideV, const std::int32_t* index = nullptr,
-                                  std::size_t strideGI = 0, std::size_t strideGJ = 0, std::size_t rowsPer = 1)
+template<std::size_t P, std::size_t Q = P, class T, class RowOf>
+AETHER_DEVICEHOST() void blockSumRows(const Team& tm, T* g, const T* u, const T* v, std::size_t count,
+                                      const RowOf& rowOf, std::size_t strideU, std::size_t strideV,
+                                      std::size_t strideGI = 0, std::size_t strideGJ = 0, std::size_t rowsPer = 1)
 {
     static_assert(detail::supported_v<T, P> && detail::supported_v<T, Q>,
                   "aether::linalg::team: T must be float or double and 1 <= P, Q <= team::max_dim");
@@ -51,7 +53,7 @@ AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, 
         const std::size_t j = e % Q;
         T s = T(0);
         for (std::size_t r = 0; r < count; ++r) {
-            const std::size_t sample = index != nullptr ? static_cast<std::size_t>(index[first + r]) : first + r;
+            const std::size_t sample = rowOf(r);
             for (std::size_t q = 0; q < rowsPer; ++q) {
                 const std::size_t row = sample * rowsPer + q;
                 s += u[row * strideU + i] * v[row * strideV + j];
@@ -60,6 +62,21 @@ AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, 
         g[i * (strideGI != 0 ? strideGI : Q) + j * (strideGJ != 0 ? strideGJ : 1)] = s;
     }
     tm.sync();
+}
+
+/**
+ * @brief `blockSumRows` over the contiguous samples `first .. first + count - 1`, or over
+ *        `index[first .. first + count - 1]` when `index` is not null (an active-set map).
+ */
+template<std::size_t P, std::size_t Q = P, class T>
+AETHER_DEVICEHOST() void blockSum(const Team& tm, T* g, const T* u, const T* v, std::size_t first, std::size_t count,
+                                  std::size_t strideU, std::size_t strideV, const std::int32_t* index = nullptr,
+                                  std::size_t strideGI = 0, std::size_t strideGJ = 0, std::size_t rowsPer = 1)
+{
+    const auto rowOf = [=](std::size_t r) {
+        return index != nullptr ? static_cast<std::size_t>(index[first + r]) : first + r;
+    };
+    blockSumRows<P, Q>(tm, g, u, v, count, rowOf, strideU, strideV, strideGI, strideGJ, rowsPer);
 }
 
 } // namespace team

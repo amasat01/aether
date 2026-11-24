@@ -187,7 +187,8 @@ record!(Walk, "walk", [access, finish, slots]);
 record!(Kind, "kind", [guard, lanes, sink]);
 #[rustfmt::skip]
 record!(Active, "active", [map_binding, count_binding, group, map_bits, lane_set]);
-record!(Step, "step", [op, n, k, m, max_chunks, planes]);
+record!(KeyAxis, "key axis", [extent, stride, kept]);
+record!(Step, "step", [op, n, k, m, max_chunks, planes, key_axes]);
 #[rustfmt::skip]
 record!(TeamStage, "team stage", [grid, planes, reads, steps, active]);
 record!(FusedLane, "fused lane", [name, sinks]);
@@ -616,6 +617,7 @@ mod tests {
                 m: 0,
                 max_chunks: 0,
                 planes: vec![("a".into(), "p".into())],
+                key_axes: None,
             }],
             active: None,
         };

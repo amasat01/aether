@@ -972,6 +972,32 @@ TEST(LinalgTeamBlockSum, StridedOutputHoldsTheContiguousValuesToTheUlpBound)
     }
 }
 
+TEST(LinalgTeamBlockSum, RowsAtAStrideOrInAMixedRadixWalkAddAsTheGatheredRowsDo)
+{
+    constexpr std::size_t P = 4, Q = 3, lanes = 60;
+    const std::vector<double> u = randomVector<double>(lanes * P, 181), v = randomVector<double>(lanes * Q, 182);
+    // a sum over a leading axis (one progression) and over two summed axes with a kept axis between them (none)
+    const auto stride = [](std::size_t r) { return 7 + r * 5; };
+    const auto radix = [](std::size_t r) { return (r / 2) * 12 + (r % 2) * 3 + 1; };
+    const auto gathered = [&](std::size_t count, auto rowOf, int size) {
+        std::vector<double> gu(count * P), gv(count * Q);
+        for (std::size_t r = 0; r < count; ++r) {
+            std::copy_n(u.begin() + static_cast<std::ptrdiff_t>(rowOf(r) * P), P, gu.begin() + static_cast<std::ptrdiff_t>(r * P));
+            std::copy_n(v.begin() + static_cast<std::ptrdiff_t>(rowOf(r) * Q), Q, gv.begin() + static_cast<std::ptrdiff_t>(r * Q));
+        }
+        return blockSumTeam<P, Q>(gu, gv, 0, count, nullptr, size);
+    };
+    for (int size : {1, 4, 16}) {
+        std::vector<double> byStride(P * Q, -1.0), byRadix(P * Q, -1.0);
+        runTeam(size, [&](const tl::Team& t) {
+            tl::blockSumRows<P, Q>(t, byStride.data(), u.data(), v.data(), 10, stride, P, Q);
+            tl::blockSumRows<P, Q>(t, byRadix.data(), u.data(), v.data(), 8, radix, P, Q);
+        });
+        EXPECT_TRUE(bitwiseEqual(byStride, gathered(10, stride, size))) << "stride walk, team " << size;
+        EXPECT_TRUE(bitwiseEqual(byRadix, gathered(8, radix, size))) << "mixed-radix walk, team " << size;
+    }
+}
+
 TEST(LinalgTeamBlockSum, VectorPayloadAndAnActiveSetIndexMap)
 {
     constexpr std::size_t P = 33, Q = 1, rows = 120;

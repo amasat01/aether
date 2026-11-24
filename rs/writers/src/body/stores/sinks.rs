@@ -467,10 +467,10 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         ));
     }
     if operands.len() > 2 || !shape.is_empty() || !matches!(edge.as_str(), "unchecked" | "clamp") {
-        // a scalar added at several indices under no drop or wrap: the wings prove a run along the lane axes every index is
-        // invariant along, and the lanes of such a run add into one element
-        let several = operands.len() > 2
-            && shape.is_empty()
+        // a value added at several indices, or a vector or matrix added at one, under no drop or wrap: the wings prove a run along
+        // the lane axes every index is invariant along, and the lanes of such a run add into one element (each component of a
+        // value is its own element, with its own run state)
+        let several = (operands.len() > 2 || !shape.is_empty())
             && matches!(edge.as_str(), "unchecked" | "clamp");
         let run = match several {
             true => key_run_of(f, sink)?
@@ -502,14 +502,17 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
         return Ok(());
     }
     let c = if comp.is_some() { "Compensated" } else { "" };
-    let run = key_run_of(f, sink)?;
+    let run = match key_run_of(f, sink)? {
+        Some(run) => f.run_state(&target, &index).map(|state| (run, state)),
+        None => None,
+    };
     let line = match (run, &comp) {
         (None, None) => format!("hawk_abi::accum_add({target}, {index}, {value});"),
         (None, Some(cm)) => {
             f.need(Need::AccumCompensated);
             format!("hawk_abi::accum_add_compensated({target}, {cm}, {index}, {value});")
         }
-        (Some((form, width, block)), _) => {
+        (Some(((form, width, block), state)), _) => {
             let mut name = match form.as_str() {
                 "proven" => format!("add{c}<{width}>"),
                 "tested" => format!("addTested{c}"),
@@ -527,9 +530,8 @@ pub(super) fn accum_of(f: &mut Frame, sink: u32) -> Result<(), Refusal> {
                 name = "addCompensatedBlock".into();
                 args.push("aether::accum::run::blockFull(base, count)".into())
             }
-            args.push(format!("hawk_run_{target}"));
+            args.push(format!("hawk_run_{state}"));
             f.need(Need::AccumRun);
-            f.need_run(&target);
             if name.starts_with("add") && comp.is_some() {
                 f.need(Need::CompensatedRun)
             }
@@ -578,27 +580,31 @@ fn accum_at(f: &mut Frame, h: u32, operands: &[u32], at: &Addend) -> Result<(), 
         };
         let (element, test) = place(at.target)?;
         let value = component_of(at.value.to_string(), &component);
-        let add = match (at.comp, at.run) {
+        // a run state per element: the lane's other commits to this target do not flush this one's run
+        let state = match at.run {
+            Some(_) if at.contract != "or" => f.run_state(at.target, &element),
+            _ => None,
+        };
+        let run = at.run.filter(|_| state.is_some());
+        let add = match (at.comp, run) {
             _ if at.contract == "or" => {
                 f.need(Need::AccumOrAt);
                 format!("hawk_abi::accum_or_at({element}, {value});")
             }
             (Some(comp), Some(width)) => {
                 f.need(Need::AccumRun);
-                f.need_run(at.target);
                 f.need(Need::CompensatedRun);
                 let (correction, _) = place(comp)?;
                 format!(
                     "aether::accum::run::addCompensatedAt<{width}>({element}, {correction}, {value}, i, hawk_run_{});",
-                    at.target
+                    state.unwrap_or_default()
                 )
             }
             (None, Some(width)) => {
                 f.need(Need::AccumRun);
-                f.need_run(at.target);
                 format!(
                     "aether::accum::run::addAt<{width}>({element}, {value}, i, hawk_run_{});",
-                    at.target
+                    state.unwrap_or_default()
                 )
             }
             (Some(comp), None) => {

@@ -53,12 +53,13 @@ pub(super) fn block_groups(gp: &str, out: &str, groups: usize) -> Vec<String> {
 }
 
 /// The first stage of a plain ordered sum: block `hawk_lane` folds its accumulators over its run of
-/// rows (`product`: the term is the product of two factors) and stores its partial in `gp`.
-pub(super) fn block_fold(gp: &str, product: bool, groups: usize) -> Vec<String> {
+/// rows (`product`: the term is the product of two factors) and stores its partial in `gp`. `row` is
+/// the offset of row `hawk_r` from the key's first lane.
+pub(super) fn block_fold(gp: &str, product: bool, groups: usize, row: &str) -> Vec<String> {
     let term = if product {
-        format!("{BAND}({BAND}(hawk_u[hawk_r]) * {BAND}(hawk_v[hawk_r]))")
+        format!("{BAND}({BAND}(hawk_u[{row}]) * {BAND}(hawk_v[{row}]))")
     } else {
-        format!("{BAND}({BAND}(hawk_u[hawk_r]))")
+        format!("{BAND}({BAND}(hawk_u[{row}]))")
     };
     let mut lines = vec![
         format!("__shared__ {PART} hawk_sh[{BAND_LANES}];"),

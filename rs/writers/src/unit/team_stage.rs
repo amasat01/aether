@@ -5,7 +5,7 @@
 use crate::body::frame::needs::{Need, Needs, Rendered};
 #[cfg(feature = "old-contract")]
 use crate::contract::types::Form;
-use crate::contract::types::{MapBits, Scalar, Target, TeamStage, Unit};
+use crate::contract::types::{KeyAxis, MapBits, Scalar, Target, TeamStage, Unit};
 #[cfg(feature = "old-contract")]
 use crate::contract::Contract;
 use crate::ir::door::{self, RxCtx};
@@ -32,6 +32,8 @@ struct Step {
     max_chunks: i64,
     /// The (role, plane) pairs the step works on.
     planes: Vec<(String, String)>,
+    /// The lane axes of a sum whose keys' lanes are not contiguous, none when each key owns `key * rows ..`.
+    key_axes: Option<Vec<KeyAxis>>,
 }
 
 impl Step {
@@ -44,6 +46,7 @@ impl Step {
             m: step.m,
             max_chunks: step.max_chunks,
             planes: step.planes.clone(),
+            key_axes: step.key_axes.clone(),
         }
     }
     /// The scratch plane the step holds in `role`.
@@ -175,6 +178,11 @@ fn block_sum(
     banded: bool,
 ) -> Result<Vec<String>, Refusal> {
     let (p, q, per) = (step.n, step.k, step.m.max(1));
+    if step.key_axes.is_some() && active.is_some() {
+        return Err(nib(
+            "an ordered block sum over a live-row set over axes that are not the trailing ones",
+        ));
+    }
     let mut lines = strs(&[
         "const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane);",
         "const std::size_t hawk_keys = static_cast<std::size_t>(count);",
@@ -184,7 +192,18 @@ fn block_sum(
         lines.extend(live_row_edges(map, count));
     }
     let stride_v = factor_pointers(step, q, banded, &mut lines)?;
-    let call_head = format!("{TEAM}blockSum<{p}, {q}>(hawk_tm, ");
+    // the rows of a key that are not one contiguous range are named by their lanes
+    let by_lane = step.key_axes.is_some();
+    if by_lane {
+        let (first, row) = key_lanes(step)?;
+        lines.push(format!(
+            "const auto hawk_row = [&](std::size_t hawk_r) {{ return {first} + {row}; }};"
+        ));
+    }
+    let call_head = format!(
+        "{TEAM}blockSum{}<{p}, {q}>(hawk_tm, ",
+        if by_lane { "Rows" } else { "" }
+    );
     if step.has("gp") && active.is_none() {
         lines.extend(grouped_store(
             step,
@@ -205,12 +224,17 @@ fn block_sum(
             "Real* const hawk_out = {}.data();",
             scratch(step.plane("out")?)
         ));
-        let (range, map) = if active.is_some() {
-            ("hawk_edge[0], hawk_edge[1] - hawk_edge[0]", "hawk_map")
+        let out_strides = format!("{q} * hawk_keys, hawk_keys");
+        lines.push(if by_lane {
+            format!("{call_head}hawk_out + hawk_key, hawk_u, hawk_v, hawk_rows, hawk_row, {p}, {stride_v}, {out_strides}, {per});")
         } else {
-            ("hawk_key * hawk_rows, hawk_rows", "nullptr")
-        };
-        lines.push(format!("{call_head}hawk_out + hawk_key, hawk_u, hawk_v, {range}, {p}, {stride_v}, {map}, {q} * hawk_keys, hawk_keys, {per});"));
+            let (range, map) = if active.is_some() {
+                ("hawk_edge[0], hawk_edge[1] - hawk_edge[0]", "hawk_map")
+            } else {
+                ("hawk_key * hawk_rows, hawk_rows", "nullptr")
+            };
+            format!("{call_head}hawk_out + hawk_key, hawk_u, hawk_v, {range}, {p}, {stride_v}, {map}, {out_strides}, {per});")
+        });
         return Ok(lines);
     }
     let g = step.plane("g")?;
@@ -220,7 +244,11 @@ fn block_sum(
         .map(|x| x.1)
         .ok_or_else(|| unknown("a team plane without width"))?;
     lines.push(pointer(g, "g", width));
-    lines.push(format!("{call_head}hawk_g, hawk_u, hawk_v, {first}, hawk_rows, {p}, {stride_v}, nullptr, 0, 0, {per});"));
+    lines.push(if by_lane {
+        format!("{call_head}hawk_g, hawk_u, hawk_v, hawk_rows, hawk_row, {p}, {stride_v}, 0, 0, {per});")
+    } else {
+        format!("{call_head}hawk_g, hawk_u, hawk_v, {first}, hawk_rows, {p}, {stride_v}, nullptr, 0, 0, {per});")
+    });
     if step.has("out") {
         lines.push(format!(
             "Real* const hawk_out = {}.data();",
@@ -332,6 +360,43 @@ fn device_fold(term: &str, groups: usize) -> Vec<String> {
         &format!("        hawk_s += {term};"), "    hawk_sh[hawk_t] = hawk_s;", "}"])
 }
 
+/// The flat lane of coordinate-list position `index` over `axes` (slowest first): the index decomposed in the mixed radix of the axes'
+/// extents, each coordinate times its axis's stride. The run-time first axis needs no extent: it takes what the others leave.
+fn lane_of(axes: &[&KeyAxis], index: &str) -> Result<String, Refusal> {
+    let mut terms = vec![];
+    for (at, axis) in axes.iter().enumerate() {
+        let inner: i64 = axes[at + 1..]
+            .iter()
+            .map(|a| {
+                a.extent
+                    .ok_or_else(|| unknown("a run-time lane axis inside another"))
+            })
+            .product::<Result<i64, Refusal>>()?;
+        let quotient = if inner == 1 {
+            index.to_string()
+        } else {
+            format!("{index} / {inner}")
+        };
+        let coordinate = match (at, axis.extent) {
+            (0, _) | (_, None) => quotient,
+            (_, Some(extent)) => format!("({quotient}) % {extent}"),
+        };
+        terms.push(format!("({coordinate}) * {}", axis.stride));
+    }
+    Ok(terms.join(" + "))
+}
+
+/// How a block part finds the lanes of its key: the offset of the key's first lane and the lane of row `hawk_r` from it. A key that
+/// owns the lanes `key * rows ..` is the plain pair; otherwise both follow from the strides of the kept and the summed axes, the
+/// summed ones in lane order, which is the order the ordered contract adds in.
+fn key_lanes(step: &Step) -> Result<(String, String), Refusal> {
+    let Some(axes) = &step.key_axes else {
+        return Ok(("hawk_key * hawk_rows".to_string(), "hawk_r".to_string()));
+    };
+    let (kept, summed): (Vec<&KeyAxis>, Vec<&KeyAxis>) = axes.iter().partition(|a| a.kept);
+    Ok((lane_of(&kept, "hawk_key")?, lane_of(&summed, "hawk_r")?))
+}
+
 /// The first stage of a plain ordered sum: block `hawk_lane` folds its group of virtual lanes by
 /// the halving tree and writes
 /// the group's value to its cell of the partials plane.
@@ -343,30 +408,33 @@ fn block_part(
     banded: bool,
 ) -> Result<Vec<String>, Refusal> {
     let groups = groups_of(step, per_lane)?;
+    let (first, row) = key_lanes(step)?;
     let mut lines = strs(&[
         &format!("const std::size_t hawk_key = static_cast<std::size_t>(hawk_lane) / {groups};"),
         &format!("const std::size_t hawk_grp = static_cast<std::size_t>(hawk_lane) % {groups};"),
         &format!("const std::size_t hawk_keys = static_cast<std::size_t>(count) / {groups};"),
         "const std::size_t hawk_rows = static_cast<std::size_t>(nSamples) / hawk_keys;",
         &format!(
-            "const Real* const hawk_u = {}.data() + hawk_key * hawk_rows;",
+            "const Real* const hawk_u = {}.data() + {first};",
             input(step.plane("u")?, reads)
         ),
     ]);
     let term = if step.has("v") {
         lines.push(format!(
-            "const Real* const hawk_v = {}.data() + hawk_key * hawk_rows;",
+            "const Real* const hawk_v = {}.data() + {first};",
             input(step.plane("v")?, reads)
         ));
-        "hawk_u[hawk_r] * hawk_v[hawk_r]"
+        format!("hawk_u[{row}] * hawk_v[{row}]")
     } else {
-        "hawk_u[hawk_r]"
+        format!("hawk_u[{row}]")
     };
+    let term = term.as_str();
     if banded {
         lines.extend(band::block_fold(
             &scratch(step.plane("gp")?),
             step.has("v"),
             groups,
+            &row,
         ));
         return Ok(lines);
     }
@@ -742,6 +810,7 @@ mod tests {
             m: 1,
             max_chunks: 0,
             planes: vec![("gp".into(), "parts".into())],
+            key_axes: None,
         }
     }
 
@@ -756,6 +825,7 @@ mod tests {
             planes: ["a", "info", "w"]
                 .map(|role| (role.to_string(), format!("tm0_{role}")))
                 .to_vec(),
+            key_axes: None,
         }
     }
 
@@ -830,5 +900,140 @@ mod tests {
         let why = groups_of(&step(), &planes(48)).unwrap_err();
         assert!(why.reason.contains("48 groups"), "{}", why.reason);
         assert!(groups_of(&step(), &[]).is_err());
+    }
+
+    /// The lanes of a (2 summed-leading, 3 kept) grid: axis `a` of 3 runs along the stride 4, `b` of 4 is the fastest.
+    fn leading_axis_sum() -> Step {
+        let axis = |extent, stride, kept| KeyAxis {
+            extent,
+            stride,
+            kept,
+        };
+        part_step(Some(vec![axis(None, 4, false), axis(Some(4), 1, true)]))
+    }
+
+    /// The first stage of a plain sum of the plane `x` over the lanes `key_axes` states.
+    fn part_step(key_axes: Option<Vec<KeyAxis>>) -> Step {
+        Step {
+            key_axes,
+            planes: vec![("gp".into(), "parts".into()), ("u".into(), "x".into())],
+            ..step()
+        }
+    }
+
+    fn part_text(step: &Step) -> String {
+        let per_lane = [("parts".to_string(), 64)];
+        let lines = step_lines(step, &per_lane, &["x".to_string()], None, false, false).unwrap();
+        lines.join("\n")
+    }
+
+    /// A key that owns a contiguous range reads its rows from `key * rows`; a key of a leading summed axis finds its first lane
+    /// from its coordinate along the kept axis and each row's lane from the stride of the summed axis.
+    #[test]
+    fn a_leading_axis_sum_indexes_its_lanes_by_stride_and_a_trailing_one_keeps_the_contiguous_text()
+    {
+        let trailing = part_text(&part_step(None));
+        assert!(
+            trailing.contains(".data() + hawk_key * hawk_rows;"),
+            "{trailing}"
+        );
+        assert!(
+            trailing.contains("hawk_sh[hawk_t] += hawk_u[hawk_r];"),
+            "{trailing}"
+        );
+        let leading = part_text(&leading_axis_sum());
+        assert!(leading.contains(".data() + (hawk_key) * 1;"), "{leading}");
+        assert!(
+            leading.contains("hawk_sh[hawk_t] += hawk_u[(hawk_r) * 4];"),
+            "{leading}"
+        );
+    }
+
+    /// A summed axis between two kept ones is addressed by its own stride, and the kept coordinates follow the mixed radix.
+    #[test]
+    fn a_summed_middle_axis_is_decomposed_in_the_mixed_radix_of_the_kept_axes() {
+        let axis = |extent, stride, kept| KeyAxis {
+            extent,
+            stride,
+            kept,
+        };
+        let step = part_step(Some(vec![
+            axis(None, 12, true),
+            axis(Some(3), 4, false),
+            axis(Some(4), 1, true),
+        ]));
+        let text = part_text(&step);
+        assert!(
+            text.contains(".data() + (hawk_key / 4) * 12 + ((hawk_key) % 4) * 1;"),
+            "{text}"
+        );
+        assert!(text.contains("hawk_u[(hawk_r) * 4]"), "{text}");
+    }
+
+    /// A block sum of a wide term over lanes that are not a key's contiguous range reads its rows through a lane walk, and the
+    /// contiguous text is the one it always was.
+    #[test]
+    fn a_wide_block_sum_over_a_leading_or_a_middle_axis_walks_the_lanes_of_its_rows() {
+        let sum = |key_axes| Step {
+            op: "block_sum".into(),
+            n: 2,
+            k: 3,
+            key_axes,
+            planes: vec![
+                ("u".into(), "x".into()),
+                ("v".into(), "y".into()),
+                ("out".into(), "o".into()),
+            ],
+            ..step()
+        };
+        let text = |step: &Step| {
+            let lines = step_lines(step, &[], &[], None, false, false).unwrap();
+            lines.join("\n")
+        };
+        let trailing = text(&sum(None));
+        assert!(!trailing.contains("hawk_row ="), "{trailing}");
+        assert!(
+            trailing.contains("blockSum<2, 3>(hawk_tm, hawk_out + hawk_key, hawk_u, hawk_v, hawk_key * hawk_rows, hawk_rows, 2, 3, nullptr, 3 * hawk_keys, hawk_keys, 1);"),
+            "{trailing}"
+        );
+        let axis = |extent, stride, kept| KeyAxis {
+            extent,
+            stride,
+            kept,
+        };
+        let leading = text(&sum(leading_axis_sum().key_axes));
+        assert!(
+            leading.contains("return (hawk_key) * 1 + (hawk_r) * 4; };"),
+            "{leading}"
+        );
+        assert!(
+            leading.contains("blockSumRows<2, 3>(hawk_tm, hawk_out + hawk_key, hawk_u, hawk_v, hawk_rows, hawk_row, 2, 3, 3 * hawk_keys, hawk_keys, 1);"),
+            "{leading}"
+        );
+        let middle = text(&sum(Some(vec![
+            axis(None, 12, true),
+            axis(Some(3), 4, false),
+            axis(Some(4), 1, true),
+        ])));
+        assert!(
+            middle.contains("return (hawk_key / 4) * 12 + ((hawk_key) % 4) * 1 + (hawk_r) * 4; };"),
+            "{middle}"
+        );
+    }
+
+    /// The banded first stage of a plain sum takes the same lane rule as the plain one, and its trailing text is unchanged.
+    #[test]
+    fn a_banded_ordered_sum_over_a_leading_axis_indexes_its_lanes_by_stride() {
+        let text = |step: &Step| {
+            let per_lane = [("parts".to_string(), 64)];
+            step_lines(step, &per_lane, &["x".to_string()], None, true, true)
+                .unwrap()
+                .join("\n")
+        };
+        let trailing = text(&part_step(None));
+        assert!(trailing.contains("hawk_u[hawk_r]"), "{trailing}");
+        let leading = text(&leading_axis_sum());
+        assert!(leading.contains(".data() + (hawk_key) * 1;"), "{leading}");
+        assert!(leading.contains("hawk_u[(hawk_r) * 4]"), "{leading}");
     }
 }

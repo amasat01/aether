@@ -66,9 +66,26 @@ pub enum Need {
 pub struct Needs {
     /// The helpers, headers and preludes the text calls for.
     pub set: BTreeSet<Need>,
-    /// The targets the body's run commits name, once each, in order of first use.
-    pub runs: Vec<String>,
+    /// The run states of the body's run commits, once each, in order of first use.
+    pub runs: Vec<RunState>,
 }
+
+/// One open run of a commit: a lane's commits to the same element merge into it, a commit to another element flushes it. A target
+/// that is committed at several elements by one lane (the components of a vector, two indices) holds one state per element, or
+/// every commit would flush the run before it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunState {
+    /// The binding of the plane the run commits into.
+    pub target: String,
+    /// The text of the element the run commits to (what tells two states of one target apart).
+    pub element: String,
+    /// The state's name after `hawk_run_`: the target for its first element, `<target>__<n>` for the next.
+    pub state: String,
+}
+
+/// The most run states one target holds in a body. A lane that commits to more elements than this (a long vector) commits the rest
+/// without a run, so the entry's frame stays small: a state is four words.
+pub const MAX_RUN_STATES: usize = 32;
 
 /// A body's text with the needs recorded while it was written.
 #[derive(Clone, Debug, Default)]
@@ -99,10 +116,38 @@ impl Needs {
         }
     }
 
-    /// Records a run state, once, in order of first use.
-    pub fn record_run(&mut self, target: &str) {
-        if !self.runs.iter().any(|t| t == target) {
-            self.runs.push(target.to_string())
+    /// The run state of `target` at the element text `element`, recorded on first use; none when the target already holds
+    /// `MAX_RUN_STATES` (the commit then goes without a run).
+    pub fn record_run(&mut self, target: &str, element: &str) -> Option<String> {
+        if let Some(known) = self
+            .runs
+            .iter()
+            .find(|r| r.target == target && r.element == element)
+        {
+            return Some(known.state.clone());
+        }
+        let held = self.runs.iter().filter(|r| r.target == target).count();
+        if held >= MAX_RUN_STATES {
+            return None;
+        }
+        let state = if held == 0 {
+            target.to_string()
+        } else {
+            // the count leads: a target name never starts with a digit, so no other target can spell this state
+            format!("{held}_{target}")
+        };
+        self.runs.push(RunState {
+            target: target.to_string(),
+            element: element.to_string(),
+            state: state.clone(),
+        });
+        Some(state)
+    }
+
+    /// Records a state another body or the text already names, once.
+    fn push_state(&mut self, run: &RunState) {
+        if !self.runs.iter().any(|r| r.state == run.state) {
+            self.runs.push(run.clone())
         }
     }
 
@@ -114,8 +159,8 @@ impl Needs {
     /// Adds what another body needs; its run states follow this one's that are not here yet.
     pub fn merge(&mut self, other: &Needs) {
         self.set.extend(other.set.iter().copied());
-        for t in &other.runs {
-            self.record_run(t)
+        for run in &other.runs {
+            self.push_state(run)
         }
     }
 
@@ -179,7 +224,10 @@ impl Needs {
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !word.is_empty() && rest[word.len()..].starts_with(");") {
-                needs.record_run(&word)
+                needs.push_state(&RunState {
+                    state: word,
+                    ..RunState::default()
+                })
             }
         }
         needs
@@ -197,6 +245,22 @@ mod tests {
         let n = Needs::scan(text);
         assert!(n.has(Need::Blend) && n.has(Need::CompensatedRun) && n.has(Need::AccumRun));
         assert!(!n.has(Need::Rt));
-        assert_eq!(n.runs, vec!["b".to_string(), "a".to_string()]);
+        let states: Vec<&str> = n.runs.iter().map(|r| r.state.as_str()).collect();
+        assert_eq!(states, ["b", "a"]);
+    }
+
+    /// A target committed at two elements holds two states, the same element again the state it had, and a target past
+    /// `MAX_RUN_STATES` elements none: that commit goes without a run.
+    #[test]
+    fn a_state_is_kept_per_element_of_a_target_up_to_the_bound() {
+        let mut n = Needs::default();
+        assert_eq!(n.record_run("t", "t(0, k)").as_deref(), Some("t"));
+        assert_eq!(n.record_run("t", "t(1, k)").as_deref(), Some("1_t"));
+        assert_eq!(n.record_run("t", "t(0, k)").as_deref(), Some("t"));
+        assert_eq!(n.record_run("u", "u(0)").as_deref(), Some("u"));
+        for k in 2..MAX_RUN_STATES {
+            assert!(n.record_run("t", &format!("t({k}, k)")).is_some());
+        }
+        assert_eq!(n.record_run("t", "t(past, k)"), None);
     }
 }

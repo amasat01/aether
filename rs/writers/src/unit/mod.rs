@@ -3,7 +3,7 @@
 //! prelude with the helpers a body asks for, the export block, the run-commit frame and the
 //! unpacking of the entry's
 //! arguments. The host and device arms differ only in the arguments they pass here.
-use crate::body::frame::needs::{Need, Needs as BodyNeeds};
+use crate::body::frame::needs::{Need, Needs as BodyNeeds, RunState};
 use crate::contract::types::Role;
 use crate::contract::types::{Active, Axis, Exports, Scalar, Target, ThreadBox, Walk as TypedWalk};
 use crate::ir::door::RxCtx;
@@ -564,18 +564,23 @@ fn helper_block(m: &Mode, q: &str, arms: &Arms, n: &Needs) -> String {
 }
 
 /// The loop between the declarations of the run states and their closes.
-pub fn with_runs(loop_: Vec<String>, runs: &[String]) -> Vec<String> {
+pub fn with_runs(loop_: Vec<String>, runs: &[RunState]) -> Vec<String> {
     if runs.is_empty() {
         return loop_;
     }
     let open = runs
         .iter()
-        .map(|t| format!("    auto hawk_run_{t} = aether::accum::run::open({t});"))
+        .map(|r| {
+            format!(
+                "    auto hawk_run_{} = aether::accum::run::open({});",
+                r.state, r.target
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let close = runs
         .iter()
-        .map(|t| format!("    aether::accum::run::close(hawk_run_{t});"))
+        .map(|r| format!("    aether::accum::run::close(hawk_run_{});", r.state))
         .collect::<Vec<_>>()
         .join("\n");
     std::iter::once(open)

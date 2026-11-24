@@ -480,6 +480,7 @@ fn step_of(step: &Json) -> Result<Step, Refusal> {
         m: number("m")?,
         max_chunks: number("max_chunks")?,
         planes,
+        key_axes: None,
     })
 }
 
