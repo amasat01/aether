@@ -191,17 +191,9 @@ record!(
 record!(
     FunctionUnit,
     "function",
-    [
-        name,
-        digest,
-        params,
-        result,
-        result_shape,
-        walk,
-        sink,
-        slots
-    ]
+    [name, digest, params, result, result_shape, body]
 );
+record!(TracedBody, "traced function body", [walk, sink, slots]);
 record!(Walk, "walk", [access, finish, slots]);
 record!(Kind, "kind", [guard, lanes, sink]);
 #[rustfmt::skip]
@@ -312,6 +304,23 @@ impl Wire for Form {
                 ("Fused", lanes) => Ok(Form::Fused(Wire::read(lanes, "form")?)),
                 (name, _) => Err(unknown(format!("member {name} of form"))),
             },
+        }
+    }
+}
+
+/// A traced body is its walk, sink and slots; a native body is its text: `{"Traced": {...}}` or `{"Native": "..."}`.
+impl Wire for FunctionBody {
+    fn write(&self) -> Json {
+        match self {
+            FunctionBody::Traced(traced) => tag("Traced", traced.write()),
+            FunctionBody::Native(text) => tag("Native", text.write()),
+        }
+    }
+    fn read(j: &Json, _key: &str) -> Result<FunctionBody, Refusal> {
+        match tagged(j, "function body")? {
+            ("Traced", traced) => Ok(FunctionBody::Traced(Wire::read(traced, "function body")?)),
+            ("Native", text) => Ok(FunctionBody::Native(Wire::read(text, "function body")?)),
+            (name, _) => Err(unknown(format!("member {name} of function body"))),
         }
     }
 }

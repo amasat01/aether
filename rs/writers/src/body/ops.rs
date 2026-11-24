@@ -1,5 +1,5 @@
 //! Operations: scalar and tensor spellings, casts, integer calls and index clamps.
-use super::{linalg, Frame, Name, NameKind, Node, Out, Span};
+use super::{linalg, Frame, Node, Out, Span};
 use crate::body::frame::needs::Need;
 use crate::body::values::{component_index, literal_of, real_value, text_field};
 use crate::body::{Class, OpKind};
@@ -113,9 +113,6 @@ fn whole_value(
     }
     if kind == OpKind::Sum && f.node(f.opp(p)[0]).rank() == 2 {
         return matrix_sum(f, p).map(Some);
-    }
-    if kind == OpKind::RawDevice {
-        return raw_block(f, p, args).map(Some);
     }
     if matches!(
         kind,
@@ -712,44 +709,5 @@ fn ray_call(
             .map(|k| format!("{held}.v[{k}]"))
             .collect::<Vec<_>>()
             .join(", ")
-    ))
-}
-
-/// A raw block of the aether language, spliced in parenthesised. Its operands are declared as
-/// `hawk_raw_arg<k>` locals: the
-/// first block that has operands declares them in the kernel's own scope, a later one inside its
-/// own lambda so two blocks never
-/// redefine the names.
-fn raw_block(f: &mut Frame, p: usize, args: &[String]) -> Result<Out, Refusal> {
-    let h = f.node(p).h;
-    let language = text_field(f.ctx(), h, "language")?;
-    if language != "aether" {
-        return Err(nib(format!("a raw block written in {language}")));
-    }
-    let text = text_field(f.ctx(), h, "text")?;
-    let decls: Vec<(Name, &String)> = args
-        .iter()
-        .enumerate()
-        .map(|(k, arg)| (Name::new(format!("hawk_raw_arg{k}"), NameKind::RawArg), arg))
-        .collect();
-    if decls.is_empty() {
-        return Ok(Out::Value(format!("({text})"), None));
-    }
-    if !f.buf.decls.iter().any(|d| d.name.text == "hawk_raw_arg0") {
-        for (name, arg) in decls {
-            f.declare_auto(name, arg)
-        }
-        return Ok(Out::Value(format!("({text})"), None));
-    }
-    Ok(Out::Value(
-        format!(
-            "[&] {{ {} return ({text}); }}()",
-            decls
-                .iter()
-                .map(|(name, arg)| format!("const auto {} = {arg};", name.text))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        None,
     ))
 }

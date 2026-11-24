@@ -256,7 +256,7 @@ fn evaluates_freely(f: &Frame, a: u32, b: u32) -> Result<bool, Refusal> {
         }
         if matches!(
             kind_of(f.ctx(), h, &class)?,
-            Some(OpKind::RawDevice | OpKind::ComponentAt | OpKind::SetComponentAt | OpKind::AddAt)
+            Some(OpKind::ComponentAt | OpKind::SetComponentAt | OpKind::AddAt)
         ) {
             return Ok(false);
         }

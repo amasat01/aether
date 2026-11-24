@@ -49,8 +49,6 @@ pub enum NameKind {
     LeafView,
     /// A local the body names by hand (a store run's value, a clamped selector, a tape row).
     Local,
-    /// `hawk_raw_arg<k>`: an operand of a raw block.
-    RawArg,
 }
 
 /// A generated name and what it stands for.

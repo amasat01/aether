@@ -275,8 +275,6 @@ op_kinds! {
     Cast = "cast",
     /// A value placed in its plane.
     Resident = "resident",
-    /// A block of the target language spliced in as written.
-    RawDevice = "raw_device",
     /// Sum of one value over the lanes of a warp.
     WarpSum = "warp_sum",
 }

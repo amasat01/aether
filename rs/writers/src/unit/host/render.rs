@@ -645,7 +645,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
             .collect()
     });
     Ok(HostSource {
-        text: parts.join("\n").replace("HAWK_LANE_T", m.real),
+        text: crate::body::function::resume_lines(&parts.join("\n")).replace("HAWK_LANE_T", m.real),
         body: input.body.clone(),
         entry: name,
         #[cfg(feature = "shadow")]

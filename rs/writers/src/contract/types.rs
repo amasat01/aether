@@ -585,8 +585,7 @@ pub struct FunctionParam {
     pub node: u32,
 }
 
-/// One function of the unit: written once as a definition, then called. Its body is a walk of its own, taken over one result sink
-/// that stands for the returned value.
+/// One function of the unit: written once as a definition, then called.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionUnit {
     /// The name the calls know the function by.
@@ -599,6 +598,22 @@ pub struct FunctionUnit {
     pub result: String,
     /// The extents of the result, empty for a scalar.
     pub result_shape: Vec<i64>,
+    /// What the function's body is.
+    pub body: FunctionBody,
+}
+
+/// The body of a function the unit writes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionBody {
+    /// A body traced from the parameters.
+    Traced(TracedBody),
+    /// The author's text for the target being written: the statements of the body, which see the parameters only.
+    Native(String),
+}
+
+/// A traced function body: a walk of its own, taken over one result sink that stands for the returned value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TracedBody {
     /// The walk handle of the body.
     pub walk: u32,
     /// The result sink the body's walk is taken over.

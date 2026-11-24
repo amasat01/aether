@@ -190,7 +190,7 @@ fn sample_free(f: &Frame, root: u32) -> Result<bool, Refusal> {
             Class::Op => {
                 if matches!(
                     OpKind::of(f.ctx(), h)?,
-                    OpKind::RandomUniform | OpKind::RandomNormal | OpKind::RawDevice
+                    OpKind::RandomUniform | OpKind::RandomNormal
                 ) {
                     return Ok(false);
                 }

@@ -1,12 +1,31 @@
-//! Functions: a traced function is written once per unit as a `static inline` definition, and a call writes the function's
-//! name over the texts of its arguments. The body is written by the same frame as a kernel's: it is a walk over one result
-//! sink, whose value ends the body as `return <value>;`, and a parameter reads as its own name.
+//! Functions: a function is written once per unit as a `static inline` definition, and a call writes the function's name
+//! over the texts of its arguments. A traced body is written by the same frame as a kernel's: it is a walk over one result
+//! sink, whose value ends the body as `return <value>;`, and a parameter reads as its own name. A native body is the author's
+//! text for the target, placed inside the definition: it sees the parameters the signature declares and nothing else.
 use super::{Frame, Out};
 use crate::body::frame::needs::Needs;
-use crate::contract::types::{FunctionUnit, Target, Unit};
+use crate::contract::types::{FunctionBody, FunctionUnit, Target, Unit};
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{nib, not_written, Refusal};
 use crate::spell;
+
+/// The line number the directive that ends a native text carries until the unit is assembled; [`resume_lines`] puts the real one.
+const RESUME_LINE: &str = "HAWK_RESUME_LINE";
+
+/// The unit text with the line directive after each native text numbered: the line after the directive is the line the unit's own
+/// numbering gives it.
+pub(crate) fn resume_lines(unit: &str) -> String {
+    unit.split('\n')
+        .enumerate()
+        .map(|(at, line)| match line.strip_prefix("#line ") {
+            Some(rest) if rest.starts_with(RESUME_LINE) => {
+                line.replacen(RESUME_LINE, &(at + 2).to_string(), 1)
+            }
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// The name a function's definition and calls carry in the text: the function's name, made unique among functions of one
 /// name by the start of its digest.
@@ -32,13 +51,23 @@ pub(super) fn param(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
 
 /// The text of a call in a kernel body: the function's symbol over the argument texts.
 pub(super) fn call(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
-    if f.unit.target == Target::Device {
-        return Err(not_written(format!(
-            "{:?}: a call of a function is not written on the device yet",
-            f.unit.name
-        )));
-    }
     let (name, digest) = callee(f.ctx(), f.node(p).h)?;
+    if f.unit.target == Target::Device {
+        return Err(
+            match f
+                .unit
+                .functions
+                .iter()
+                .flatten()
+                .find(|u| u.name == name && u.digest == digest)
+            {
+                Some(function) => device_refusal(&f.unit.name, function),
+                None => nib(format!(
+                    "a call of the function {name:?} that the unit does not hold"
+                )),
+            },
+        );
+    }
     let args: Vec<String> = f.opp(p).iter().map(|&q| f.text(q).clone()).collect();
     Ok(Out::Value(
         format!("{}({})", symbol(&name, &digest), args.join(", ")),
@@ -46,15 +75,27 @@ pub(super) fn call(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     ))
 }
 
+/// The refusal of a function on the device, which names the function when its body is native.
+fn device_refusal(unit: &str, function: &FunctionUnit) -> Refusal {
+    match function.body {
+        FunctionBody::Native(_) => not_written(format!(
+            "{unit:?}: the native function {:?} is not written on the device yet",
+            function.name
+        )),
+        FunctionBody::Traced(_) => not_written(format!(
+            "{unit:?}: a call of a function is not written on the device yet"
+        )),
+    }
+}
+
 /// The definitions of the unit's functions, each after the functions it calls, with the helpers their text calls for.
 pub(crate) fn definitions(ctx: *mut RxCtx, unit: &Unit) -> Result<(String, Needs), Refusal> {
     let mut needs = Needs::default();
     let mut text = String::new();
-    if unit.target == Target::Device && unit.functions.is_some() {
-        return Err(not_written(format!(
-            "{:?}: a function is not written on the device yet",
-            unit.name
-        )));
+    if unit.target == Target::Device {
+        if let Some(function) = unit.functions.iter().flatten().next() {
+            return Err(device_refusal(&unit.name, function));
+        }
     }
     for function in unit.functions.iter().flatten() {
         text += &definition(ctx, unit, function, &mut needs)?;
@@ -92,18 +133,31 @@ fn definition(
             ))
         })
         .collect::<Result<Vec<_>, Refusal>>()?;
-    let mut body_unit = unit.clone();
-    body_unit.walk = Some(function.slots.clone());
-    body_unit.sinks = vec![function.sink];
-    body_unit.functions = None;
-    let rendered =
-        super::render_function_body(ctx, function.walk, &body_unit, "    ", function.sink)?;
-    needs.merge(&rendered.needs);
+    let body = match &function.body {
+        FunctionBody::Traced(traced) => {
+            let mut body_unit = unit.clone();
+            body_unit.walk = Some(traced.slots.clone());
+            body_unit.sinks = vec![traced.sink];
+            body_unit.functions = None;
+            let rendered =
+                super::render_function_body(ctx, traced.walk, &body_unit, "    ", traced.sink)?;
+            needs.merge(&rendered.needs);
+            rendered.text
+        }
+        // the text goes in byte for byte between two line directives: a compiler then reads the author's own line numbers under
+        // the function's name, and the unit's numbering resumes where the text ends (the unit's assembly fills `RESUME_LINE`)
+        FunctionBody::Native(text) => {
+            format!(
+                "#line 1 \"native function {}\"\n{text}\n#line {RESUME_LINE} __BASE_FILE__",
+                function.name
+            )
+        }
+    };
     Ok(format!(
         "static inline {} {}({})\n{{\n{}\n}}\n\n",
         type_text(&function.result, &function.result_shape, false)?,
         symbol(&function.name, &function.digest),
         params.join(", "),
-        rendered.text
+        body
     ))
 }
