@@ -585,13 +585,13 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
     let frame = if sums.is_empty() {
         None
     } else {
-        let live = active.as_ref().map(|a| active_reads(a, "0").0);
+        refuse_grouped_sum(&unit.name, active.as_ref())?;
         Some(sample_sum_frame(
             ctx,
             &sums,
             &w,
             unit.build.cells_row,
-            live,
+            active.as_ref(),
         )?)
     };
     let shape = EntryShape {
@@ -819,14 +819,22 @@ fn tiled_or(tiled: &Option<String>, plain: Vec<String>) -> Vec<String> {
 }
 
 /// The serial loop over the rows that start in the call's range, and its close, for the sample-sum
-/// sinks.
+/// sinks. A row is `row` consecutive launch positions; under an active set the position `hawk_i`
+/// runs the sample the set names (its live count bounds the positions, its map names the sample).
 fn sample_sum_frame(
     ctx: *mut RxCtx,
     sums: &[u32],
     w: &Walk,
     row: i64,
-    live: Option<String>,
+    active: Option<&Active>,
 ) -> Result<(String, String), Refusal> {
+    let live = active.map(|a| active_reads(a, "0").0);
+    // a mapped set reads the sample of the position; a prefix set and a plain run take the position itself
+    let sample_at = |position: &str| match active {
+        Some(a) if a.map_binding.is_some() => active_reads(a, position).1,
+        _ => position.to_string(),
+    };
+    let sample = sample_at("hawk_i");
     if row < 1 || row & (row - 1) != 0 {
         return Err(bad(format!(
             "the host wing's cells.row must be a power of two; it is {row}"
@@ -846,7 +854,14 @@ fn sample_sum_frame(
             "    for (int hawk_k = 0; hawk_k < {}; ++hawk_k) hawk_ss_rows[hawk_k] = {nan};\n",
             row * width
         );
-        let lambda = pair_row_lambda(&elem, width, row, directions, &nan);
+        let lambda = pair_row_lambda(
+            &elem,
+            width,
+            row,
+            directions,
+            &nan,
+            &sample_at("hawk_first + hawk_l"),
+        );
         (format!("{store}\n{lambda}"), fill)
     } else if mixed {
         let codes = sinks
@@ -862,7 +877,7 @@ fn sample_sum_frame(
         let fill = identity_fill(&sinks[0].op, row * width, "hawk_ss_rows", &elem)?;
         (store, fill)
     };
-    let opened = format!("    const std::int64_t hawk_lo = (base + {r1}) / {row} * {row};\n    std::int64_t hawk_hi = (base + count + {r1}) / {row} * {row};\n    if (hawk_hi > nSamples) hawk_hi = nSamples;\n    {elem} hawk_ss_rows[{row} * {width}] = {{}};\n{fill}    std::int64_t hawk_row = 0;\n{}\n    for (std::int64_t hawk_i = hawk_lo; hawk_i < hawk_hi; ++hawk_i) {{\n        {elem}* const hawk_ss = hawk_ss_rows + (hawk_i & {r1}) * {width};\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));", store, r1 = row - 1);
+    let opened = format!("    const std::int64_t hawk_lo = (base + {r1}) / {row} * {row};\n    std::int64_t hawk_hi = (base + count + {r1}) / {row} * {row};\n    if (hawk_hi > nSamples) hawk_hi = nSamples;\n    {elem} hawk_ss_rows[{row} * {width}] = {{}};\n{fill}    std::int64_t hawk_row = 0;\n{}\n    for (std::int64_t hawk_i = hawk_lo; hawk_i < hawk_hi; ++hawk_i) {{\n        {elem}* const hawk_ss = hawk_ss_rows + (hawk_i & {r1}) * {width};\n        const aether::SampleIndex i =\n            aether::SampleIndex::make(static_cast<std::size_t>({sample}));", store, r1 = row - 1);
     // an active-set run: a sample at or past the live count adds the identity (its row is still
     // stored)
     let opened = match &live {
@@ -946,8 +961,16 @@ fn mixed_row_lambda(elem: &str, width: i64, row: i64) -> String {
 /// The row fold of a unit that asks for a position: the winner of the `row` slots of each column, a pair (value, lane), through the
 /// same pairwise tree as the row sum, stored as (value, lane) by `hawk_ss_store`. A NaN never wins; equal values go to the lower lane
 /// (the lower slot); a column with no winner has the lane `nSamples`. Slots are left holding no sample (`nan`). A column wins by
-/// its own direction; when all share one, the comparison is written once.
-fn pair_row_lambda(elem: &str, width: i64, row: i64, directions: &[&str], nan: &str) -> String {
+/// its own direction; when all share one, the comparison is written once. The lane of a slot is `lane`, the sample its launch
+/// position `hawk_first + hawk_l` runs, so a tie goes to the lowest sample.
+fn pair_row_lambda(
+    elem: &str,
+    width: i64,
+    row: i64,
+    directions: &[&str],
+    nan: &str,
+    lane: &str,
+) -> String {
     let uniform = directions.iter().all(|d| *d == directions[0]);
     let (declare, beats) = if uniform {
         let wins = if directions[0] == "max" { ">" } else { "<" };
@@ -972,7 +995,7 @@ fn pair_row_lambda(elem: &str, width: i64, row: i64, directions: &[&str], nan: &
             for (int hawk_k = 0; hawk_k < {width}; ++hawk_k) {{
                 const {elem} hawk_v = hawk_ss_rows[hawk_l * {width} + hawk_k];
                 hawk_ss_lane[hawk_l * {width} + hawk_k] =
-                    hawk_v != hawk_v ? static_cast<{elem}>(nSamples) : static_cast<{elem}>(hawk_first + hawk_l);
+                    hawk_v != hawk_v ? static_cast<{elem}>(nSamples) : static_cast<{elem}>({lane});
             }}
         for (int hawk_off = {row} / 2; hawk_off >= 1; hawk_off >>= 1)
             for (int hawk_l = 0; hawk_l < hawk_off; ++hawk_l)

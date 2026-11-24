@@ -2,6 +2,7 @@
 //! sum calls, the code of
 //! the operation and the fill that sets a row to the operation's identity.
 use super::{element, Walk};
+use crate::contract::types::Active;
 use crate::ir::door::{self, RxCtx};
 use crate::refuse::{fault, Refusal};
 use crate::spell::binding_name;
@@ -113,6 +114,17 @@ pub fn pair_directions(sinks: &[SumSink]) -> Result<Option<Vec<&'static str>>, R
         })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
+}
+
+/// The refusal of a sum over samples under a lane set that runs its lanes in groups: the row folds count launch positions, and
+/// a group's lanes are not one position each, so the cells would not be the sum of the live samples.
+pub fn refuse_grouped_sum(name: &str, active: Option<&Active>) -> Result<(), Refusal> {
+    if active.is_some_and(|set| set.group > 1) {
+        return Err(fault(format!(
+            "{name}: a sum over samples with a lane group above 1 is not written yet"
+        )));
+    }
+    Ok(())
 }
 
 /// The code of the operation the row sum takes as a template argument.
@@ -244,5 +256,21 @@ mod tests {
         assert_eq!(directions, Some(vec!["min", "max"]));
         assert_eq!(pair_directions(&[sink("min", "a")]).unwrap(), None);
         assert!(pair_directions(&[sink("argmax", "a"), sink("sum", "b")]).is_err());
+    }
+
+    #[test]
+    fn a_sum_with_a_lane_group_above_one_is_refused_by_name() {
+        let set = |group| Active {
+            map_binding: Some("map".into()),
+            count_binding: "count".into(),
+            group,
+            map_bits: crate::contract::types::MapBits::B32,
+            lane_set: true,
+        };
+        let refusal = refuse_grouped_sum("k", Some(&set(4)));
+        assert!(format!("{:?}", refusal.expect_err("a refusal"))
+            .contains("k: a sum over samples with a lane group above 1 is not written yet"));
+        assert!(refuse_grouped_sum("k", Some(&set(1))).is_ok());
+        assert!(refuse_grouped_sum("k", None).is_ok());
     }
 }

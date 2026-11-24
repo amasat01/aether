@@ -179,7 +179,7 @@ fn unpack(ctx: *mut RxCtx, walk: u32, w: &Walk) -> Result<String, Refusal> {
 
 /// The sample-sum sinks of the unit, with the element type the mode gives their plane: a banded
 /// mode sums in accumulators,
-/// not in the plane's element type.
+/// not in the plane's element type. Sinks of different folds are refused here, where they are first known.
 fn sample_sum_sinks(
     ctx: *mut RxCtx,
     unit: &Unit,
@@ -188,6 +188,15 @@ fn sample_sum_sinks(
 ) -> Result<Vec<sums::SumSink>, Refusal> {
     let sum_nodes = sums::sample_sum_nodes(ctx, &unit.sinks)?;
     let mut sum_sinks = sums::sum_sinks(ctx, &sum_nodes, w)?;
+    super::sums::refuse_mixed_folds(&unit.name, &sum_sinks)?;
+    if !sum_sinks.is_empty() {
+        sums::refuse_grouped_sum(&unit.name, unit.active.as_ref())?;
+        super::sums::refuse_unwritten_sum_geometry(
+            &unit.name,
+            unit.active.as_ref(),
+            unit.segment.as_ref(),
+        )?;
+    }
     if mode.cells {
         let accumulator = if sum_sinks.first().is_some_and(|sink| sink.op == "sum") {
             "BandAccum"
@@ -276,13 +285,8 @@ fn framed_lines(
             .active
             .as_ref()
             .map(|active| unit::active_reads(active, "0").0);
-        let (opened, closed) = super::sums::frame(
-            &unit.name,
-            &unit.build,
-            sum_sinks,
-            mode.cells,
-            live_count.as_deref(),
-        )?;
+        let (opened, closed) =
+            super::sums::frame(&unit.build, sum_sinks, mode.cells, live_count.as_deref())?;
         Ok(vec![opened, body, closed])
     }
 }

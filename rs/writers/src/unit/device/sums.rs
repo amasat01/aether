@@ -2,7 +2,7 @@
 //! no early return, so a
 //! lane past the launch's count still takes part in its warp's sum with zero terms.
 use super::prologue::{index_prologue, Geometry};
-use crate::contract::types::Build;
+use crate::contract::types::{Active, Build, Segment};
 use crate::refuse::{bad, fault, Refusal};
 use crate::unit::sums::{identity_fill, op_code, store_lambda, SumSink};
 
@@ -108,8 +108,9 @@ fn folded_rows_frame(
     Ok((opened.join("\n"), closed.join("\n")))
 }
 
-/// The refusal of sinks of different folds: the warp sum takes one fold for all its columns.
-fn refuse_mixed_folds(name: &str, sinks: &[SumSink]) -> Result<(), Refusal> {
+/// The refusal of sinks of different folds, for every device path (plain and banded): the warp sum takes one fold for all its
+/// columns, and the band form is chosen once for all of them.
+pub(super) fn refuse_mixed_folds(name: &str, sinks: &[SumSink]) -> Result<(), Refusal> {
     if sinks.iter().any(|sink| sink.op != sinks[0].op) {
         return Err(fault(format!(
             "{name}: sample reductions of different folds in one kernel are not written on the device yet"
@@ -118,16 +119,34 @@ fn refuse_mixed_folds(name: &str, sinks: &[SumSink]) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// The frame the body of a kernel with the sample-sum `sinks` sits in, as its opening and its
-/// close; sinks of different folds are refused by the kernel's `name`.
-pub fn frame(
+/// The refusal of a sample sum whose unit does not run its samples by launch position: a mapped lane set or a segment. The
+/// warp rows here are written for a plain or a prefix launch only; a prefix lane set runs lane `t` as sample `t` and stays.
+pub(super) fn refuse_unwritten_sum_geometry(
     name: &str,
+    active: Option<&Active>,
+    segment: Option<&Segment>,
+) -> Result<(), Refusal> {
+    if active.is_some_and(|set| set.map_binding.is_some()) {
+        return Err(fault(format!(
+            "{name}: a sum over samples with a mapped lane set is not written on the device yet"
+        )));
+    }
+    if segment.is_some() {
+        return Err(fault(format!(
+            "{name}: a sum over samples in a segmented unit is not written on the device yet"
+        )));
+    }
+    Ok(())
+}
+
+/// The frame the body of a kernel with the sample-sum `sinks` sits in, as its opening and its
+/// close.
+pub fn frame(
     build: &Build,
     sinks: &[SumSink],
     cells: bool,
     live_count: Option<&str>,
 ) -> Result<(String, String), Refusal> {
-    refuse_mixed_folds(name, sinks)?;
     let rows = fold_rows(build, sinks.len() as i64)?;
     let store = store_lambda(sinks, rows, build.cells_row, cells)?;
     if rows > 1 {
@@ -158,5 +177,43 @@ mod tests {
             "k: sample reductions of different folds in one kernel are not written on the device yet"
         ));
         assert!(refuse_mixed_folds("k", &[sink("min"), sink("min")]).is_ok());
+    }
+
+    #[test]
+    fn a_sum_and_a_maximum_are_refused_in_a_banded_mode_too() {
+        let banded = |op: &str, element: &str| SumSink {
+            element: element.into(),
+            ..sink(op)
+        };
+        let sinks = [
+            banded("sum", "aether::banded::BandAccum"),
+            banded("max", "aether::banded::BandAccum"),
+        ];
+        assert!(refuse_mixed_folds("k", &sinks).is_err());
+    }
+
+    #[test]
+    fn a_sum_with_a_mapped_lane_set_or_a_segment_is_refused_by_name() {
+        let set = |map: Option<&str>| Active {
+            map_binding: map.map(str::to_string),
+            count_binding: "count".into(),
+            group: 1,
+            map_bits: crate::contract::types::MapBits::B32,
+            lane_set: true,
+        };
+        let mapped = refuse_unwritten_sum_geometry("k", Some(&set(Some("map"))), None);
+        assert!(format!("{:?}", mapped.expect_err("a refusal")).contains(
+            "k: a sum over samples with a mapped lane set is not written on the device yet"
+        ));
+        let run = Segment {
+            offsets_binding: "offsets".into(),
+            j: 0,
+        };
+        let segmented = refuse_unwritten_sum_geometry("k", None, Some(&run));
+        assert!(format!("{:?}", segmented.expect_err("a refusal")).contains(
+            "k: a sum over samples in a segmented unit is not written on the device yet"
+        ));
+        assert!(refuse_unwritten_sum_geometry("k", Some(&set(None)), None).is_ok());
+        assert!(refuse_unwritten_sum_geometry("k", None, None).is_ok());
     }
 }
