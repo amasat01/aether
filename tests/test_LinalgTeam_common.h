@@ -977,8 +977,14 @@ TEST(LinalgTeamBlockSum, RowsAtAStrideOrInAMixedRadixWalkAddAsTheGatheredRowsDo)
     constexpr std::size_t P = 4, Q = 3, lanes = 60;
     const std::vector<double> u = randomVector<double>(lanes * P, 181), v = randomVector<double>(lanes * Q, 182);
     // a sum over a leading axis (one progression) and over two summed axes with a kept axis between them (none)
-    const auto stride = [](std::size_t r) { return 7 + r * 5; };
-    const auto radix = [](std::size_t r) { return (r / 2) * 12 + (r % 2) * 3 + 1; };
+    struct Stride {
+        AETHER_DEVICEHOST() std::size_t operator()(std::size_t r) const { return 7 + r * 5; }
+    };
+    struct Radix {
+        AETHER_DEVICEHOST() std::size_t operator()(std::size_t r) const { return (r / 2) * 12 + (r % 2) * 3 + 1; }
+    };
+    const Stride stride;
+    const Radix radix;
     const auto gathered = [&](std::size_t count, auto rowOf, int size) {
         std::vector<double> gu(count * P), gv(count * Q);
         for (std::size_t r = 0; r < count; ++r) {
