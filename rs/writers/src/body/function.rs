@@ -1,13 +1,14 @@
-//! Functions: a function is written once per unit as a `static inline` definition, and a call writes the function's name
-//! over the texts of its arguments. A traced body is written by the same frame as a kernel's: it is a walk over one result
+//! Functions: a function is written once per unit as a definition (`static inline` on the host, force-inlined `__device__` on the
+//! device, where a call frame would cost registers), and a call writes the function's name over the texts of its arguments. A traced body is written by the same frame as a kernel's: it is a walk over one result
 //! sink, whose value ends the body as `return <value>;`, and a parameter reads as its own name. A native body is the author's
 //! text for the target, placed inside the definition: it sees the parameters the signature declares and nothing else.
 use super::{Frame, Out};
 use crate::body::frame::needs::Needs;
 use crate::contract::types::{FunctionBody, FunctionUnit, Target, Unit};
 use crate::ir::door::{self, RxCtx};
-use crate::refuse::{nib, not_written, Refusal};
+use crate::refuse::{nib, Refusal};
 use crate::spell;
+use crate::unit::device::prologue::QUALIFIER as DEVICE_QUALIFIER;
 
 /// The line number the directive that ends a native text carries until the unit is assembled; [`resume_lines`] puts the real one.
 const RESUME_LINE: &str = "HAWK_RESUME_LINE";
@@ -52,22 +53,6 @@ pub(super) fn param(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
 /// The text of a call in a kernel body: the function's symbol over the argument texts.
 pub(super) fn call(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     let (name, digest) = callee(f.ctx(), f.node(p).h)?;
-    if f.unit.target == Target::Device {
-        return Err(
-            match f
-                .unit
-                .functions
-                .iter()
-                .flatten()
-                .find(|u| u.name == name && u.digest == digest)
-            {
-                Some(function) => device_refusal(&f.unit.name, function),
-                None => nib(format!(
-                    "a call of the function {name:?} that the unit does not hold"
-                )),
-            },
-        );
-    }
     let args: Vec<String> = f.opp(p).iter().map(|&q| f.text(q).clone()).collect();
     Ok(Out::Value(
         format!("{}({})", symbol(&name, &digest), args.join(", ")),
@@ -75,28 +60,10 @@ pub(super) fn call(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
     ))
 }
 
-/// The refusal of a function on the device, which names the function when its body is native.
-fn device_refusal(unit: &str, function: &FunctionUnit) -> Refusal {
-    match function.body {
-        FunctionBody::Native(_) => not_written(format!(
-            "{unit:?}: the native function {:?} is not written on the device yet",
-            function.name
-        )),
-        FunctionBody::Traced(_) => not_written(format!(
-            "{unit:?}: a call of a function is not written on the device yet"
-        )),
-    }
-}
-
 /// The definitions of the unit's functions, each after the functions it calls, with the helpers their text calls for.
 pub(crate) fn definitions(ctx: *mut RxCtx, unit: &Unit) -> Result<(String, Needs), Refusal> {
     let mut needs = Needs::default();
     let mut text = String::new();
-    if unit.target == Target::Device {
-        if let Some(function) = unit.functions.iter().flatten().next() {
-            return Err(device_refusal(&unit.name, function));
-        }
-    }
     for function in unit.functions.iter().flatten() {
         text += &definition(ctx, unit, function, &mut needs)?;
     }
@@ -153,8 +120,12 @@ fn definition(
             )
         }
     };
+    let qualifier = match unit.target {
+        Target::Device => DEVICE_QUALIFIER,
+        _ => "static inline",
+    };
     Ok(format!(
-        "static inline {} {}({})\n{{\n{}\n}}\n\n",
+        "{qualifier} {} {}({})\n{{\n{}\n}}\n\n",
         type_text(&function.result, &function.result_shape, false)?,
         symbol(&function.name, &function.digest),
         params.join(", "),

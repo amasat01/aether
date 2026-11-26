@@ -369,7 +369,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         ),
         unit::prelude(&mode, QUALIFIER, &arms_of(mode.cells), &needs),
         exports,
-        String::new(),
+        input.functions.clone(),
         prologue::entry_signature(&w, &name, unit.build.launch_bounds)?,
         "{".to_string(),
         unpack(ctx, walk, &w)?,
@@ -390,7 +390,7 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
         )
     });
     parts.extend(fast);
-    let mut text = parts.join("\n");
+    let mut text = crate::body::function::resume_lines(&parts.join("\n"));
     if unit.literal_table && mode.id == "float64" {
         text = super::literals::literal_table(&text);
     }
