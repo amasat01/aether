@@ -100,7 +100,7 @@ pub fn scratch_array(name: &str, component: Option<usize>) -> String {
 }
 
 /// The C++ element type of a scratch scalar.
-fn scratch_type(dtype: &str) -> Result<&'static str, Refusal> {
+pub(crate) fn scratch_type(dtype: &str) -> Result<&'static str, Refusal> {
     match dtype {
         "f64" | "f32" => Ok("Real"),
         "i32" => Ok("std::int32_t"),

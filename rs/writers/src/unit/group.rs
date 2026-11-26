@@ -22,7 +22,7 @@ use crate::spell::group::{
 };
 
 /// The indent of the statements of the group loop.
-const GROUP_INDENT: &str = "        ";
+pub(crate) const GROUP_INDENT: &str = "        ";
 /// The indent of the statements inside a phase loop: the lane's binding and the phase's body.
 const LOOP_INDENT: &str = "            ";
 
@@ -41,7 +41,7 @@ pub fn of(ctx: *mut RxCtx, walk: u32, unit: &Unit) -> Result<Option<u32>, Refusa
 }
 
 /// One lane axis of the launch: its extent, its stride (lanes between two neighbours along it) and whether it spans a group.
-struct Axis {
+pub(crate) struct Axis {
     /// The text of the extent.
     extent: String,
     /// The text of the stride.
@@ -51,16 +51,23 @@ struct Axis {
 }
 
 /// How the lanes of a group are found.
-enum Lanes {
+pub(crate) enum Lanes {
     /// `N` consecutive lanes from `group * N`.
     Count(i64),
     /// The lanes along the spanned axes of the grid.
     Axes(Vec<Axis>),
 }
 
-/// Why a kernel's group is not written on the host.
-fn unwritten(kernel: &str, what: &str) -> Refusal {
-    not_written(format!("{kernel:?}: {what} is not written on the host yet"))
+/// Why a unit's group is not written for its backend.
+fn unwritten(unit: &Unit, what: &str) -> Refusal {
+    let backend = match unit.target {
+        Target::Host => "host",
+        Target::Device => "device",
+    };
+    not_written(format!(
+        "{:?}: {what} is not written on the {backend} yet",
+        unit.name
+    ))
 }
 
 /// The product of the texts of `factors`, `1` for none.
@@ -74,13 +81,13 @@ fn product(factors: &[&str]) -> String {
 
 /// The lane axes of an `axes` group, from the group's grid: the extents (a run-time extent is the launch's lanes over the others)
 /// and strides in lane order, and which axes span a group.
-fn grid_axes(ctx: *mut RxCtx, group: u32, kernel: &str) -> Result<(Vec<Axis>, String), Refusal> {
+fn grid_axes(ctx: *mut RxCtx, group: u32, unit: &Unit) -> Result<(Vec<Axis>, String), Refusal> {
     let grid = door::field_axes(ctx, group, "grid")?;
     let named = door::field_names(ctx, group, "axes")?.unwrap_or_default();
     let fixed: i64 = grid.iter().filter_map(|(_, e)| *e).product();
     if grid.iter().filter(|(_, e)| e.is_none()).count() > 1 {
         return Err(unwritten(
-            kernel,
+            unit,
             "a group over a launch with two run-time lane axes",
         ));
     }
@@ -112,7 +119,7 @@ fn grid_axes(ctx: *mut RxCtx, group: u32, kernel: &str) -> Result<(Vec<Axis>, St
 }
 
 /// The statements that set `hawk_base` (the lane of rank 0) and `hawk_size` for the group `hawk_g` of an `axes` group.
-fn axes_group_lines(axes: &[Axis], size: &str) -> Vec<String> {
+pub(crate) fn axes_group_lines(axes: &[Axis], size: &str) -> Vec<String> {
     let others: Vec<&Axis> = axes.iter().filter(|a| !a.spanned).collect();
     let mut terms = vec![];
     for (j, axis) in others.iter().enumerate() {
@@ -142,7 +149,7 @@ fn axes_group_lines(axes: &[Axis], size: &str) -> Vec<String> {
 
 /// The offset of the lane of place `hawk_rank` from the group's first lane: the rank itself for consecutive lanes, else the
 /// rank split over the runs of spanned axes that are neighbours in the grid.
-fn lane_offset(lanes: &Lanes) -> String {
+pub(crate) fn lane_offset(lanes: &Lanes) -> String {
     let Lanes::Axes(axes) = lanes else {
         return "hawk_rank".to_string();
     };
@@ -368,7 +375,7 @@ fn touched(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Touch, Refusal> {
 /// element, and written by the other only by accumulating (adds commute).
 fn outside_runs_after(
     ctx: *mut RxCtx,
-    kernel: &str,
+    unit: &Unit,
     body: &[u32],
     outside: &[u32],
 ) -> Result<bool, Refusal> {
@@ -384,7 +391,7 @@ fn outside_runs_after(
                 .any(|(other, adds)| other == plane && !(*adds && *accumulates));
             if rewritten || reader.read_elsewhere.contains(plane) {
                 return Err(unwritten(
-                    kernel,
+                    unit,
                     &format!("the plane '{plane}' written on one side of the group and rewritten or read at another lane by {who}"),
                 ));
             }
@@ -394,7 +401,7 @@ fn outside_runs_after(
     let writes_body_reads = beside.written.iter().any(|(p, _)| inside.read.contains(p));
     if reads_body_writes && writes_body_reads {
         return Err(unwritten(
-            kernel,
+            unit,
             "sinks beside a group that read a plane the body writes and write a plane the body reads",
         ));
     }
@@ -451,7 +458,7 @@ fn chunks(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<Vec<u32>>, Refusal> {
 }
 
 /// How far a chunk reads before and after the lane's own place: the largest negative and positive move of any scratch read.
-fn reach(ctx: *mut RxCtx, sinks: &[u32], kernel: &str) -> Result<(i64, i64), Refusal> {
+pub(crate) fn reach(ctx: *mut RxCtx, sinks: &[u32], kernel: &str) -> Result<(i64, i64), Refusal> {
     let (mut before, mut after) = (0i64, 0i64);
     for (index, _) in scratch_reads(ctx, &reachable(ctx, sinks)?)? {
         if let Place::Moved(c) = place_of(ctx, index, kernel)? {
@@ -463,7 +470,7 @@ fn reach(ctx: *mut RxCtx, sinks: &[u32], kernel: &str) -> Result<(i64, i64), Ref
 }
 
 /// The lines that bind the lane of the loop's `hawk_rank`.
-fn lane_binding(offset: &str) -> String {
+pub(crate) fn lane_binding(offset: &str) -> String {
     format!(
         "{LOOP_INDENT}const std::int64_t hawk_i = hawk_base + {offset};\n{LOOP_INDENT}const aether::SampleIndex i =\n{LOOP_INDENT}    aether::SampleIndex::make(static_cast<std::size_t>(hawk_i));\n{LOOP_INDENT}(void)hawk_i;\n{LOOP_INDENT}(void)nSamples;"
     )
@@ -538,6 +545,143 @@ fn chunk_text(
     .join("\n"))
 }
 
+/// A scratch plane of a group: its name, the value it holds one of for each lane, and the lanes a group of it holds at most.
+pub(crate) struct ScratchPlane {
+    /// The declared name.
+    pub name: String,
+    /// The element type of one scalar of the value.
+    pub dtype: String,
+    /// The extents of one value, empty for a scalar.
+    pub shape: Vec<usize>,
+    /// The size bound of a group, in lanes.
+    pub bound: i64,
+}
+
+/// One loop of lanes of a group: the sinks that run together in a phase, between the barriers that bound them.
+pub(crate) struct Run {
+    /// What the loop is, for the comment that heads it.
+    pub label: String,
+    /// The phase the loop belongs to; the sinks beside the group come after the last phase.
+    pub phase: usize,
+    /// The sinks the loop writes.
+    pub sinks: Vec<u32>,
+}
+
+/// What a group is, read once from the IR for either backend: how its lanes are found, its scratch, the planes its loops reach
+/// through hoisted pointers, and its loops in the order they run.
+pub(crate) struct Plan {
+    /// How the lanes of a group are found.
+    pub lanes: Lanes,
+    /// The text of the group's lane count.
+    pub size: String,
+    /// The scratch planes the group declares.
+    pub scratch: Vec<ScratchPlane>,
+    /// The planes the loops reach through hoisted pointers.
+    pub hoisted: Vec<HoistedPlane>,
+    /// The loops, in the order they run.
+    pub runs: Vec<Run>,
+}
+
+impl Plan {
+    /// Reads the group `group` of the unit, refusing by name what no backend writes: a group reduce or scan, a group by key, a
+    /// scratch plane in a group with no static size, and sinks beside the group that no order serves.
+    pub fn read(ctx: *mut RxCtx, walk: u32, unit: &Unit, group: u32) -> Result<Self, Refusal> {
+        let membership = door::text_field(ctx, group, "membership")?;
+        for node in door::walk_order(ctx, walk)? {
+            for (class, what) in [
+                ("GroupReduce", "a group reduce"),
+                ("GroupScan", "a group scan"),
+            ] {
+                if door::class_is(ctx, node, class)? {
+                    return Err(unwritten(unit, what));
+                }
+            }
+        }
+        let (lanes, size, bound) = match membership.as_str() {
+            "count" => {
+                let n = door::field_int(ctx, group, "count")?
+                    .ok_or_else(|| fault("a count group without its lanes"))?;
+                (Lanes::Count(n), n.to_string(), Some(n))
+            }
+            "axes" => {
+                let (axes, size) = grid_axes(ctx, group, unit)?;
+                let fixed: Option<i64> = axes
+                    .iter()
+                    .filter(|a| a.spanned)
+                    .map(|a| a.extent.parse::<i64>().ok())
+                    .product();
+                (Lanes::Axes(axes), size, fixed)
+            }
+            "key" => return Err(unwritten(unit, "a group by key")),
+            other => return Err(fault(format!("a group of membership {other}"))),
+        };
+        let body = door::field_refs(ctx, group, "body_sinks")?.unwrap_or_default();
+        let phases = door::field_ints(ctx, group, "phases")?.unwrap_or_default();
+        let mut scratch = vec![];
+        for plane in door::field_refs(ctx, group, "scratch")?.unwrap_or_default() {
+            let ty = crate::body::ty_of(ctx, plane)?;
+            let bound =
+                bound.ok_or_else(|| fault("a scratch plane in a group with no static size"))?;
+            scratch.push(ScratchPlane {
+                name: door::text_field(ctx, plane, "name")?,
+                dtype: ty.dtype,
+                shape: ty.shape,
+                bound,
+            });
+        }
+        let hoisted = hoisted_planes(ctx, &unit.sinks, group)?;
+        let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
+        let after = outside_runs_after(ctx, unit, &body, &outside)?;
+        let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
+        let mut runs: Vec<Run> = vec![];
+        if !outside.is_empty() && !after {
+            runs.push(Run {
+                label: "sinks beside the group, before its phases".to_string(),
+                phase: phase_count,
+                sinks: outside.clone(),
+            });
+        }
+        for phase in 0..phase_count {
+            let mut sinks = vec![];
+            for (&sink, &of) in body.iter().zip(&phases) {
+                if of as usize == phase && !door::class_is(ctx, sink, "Barrier")? {
+                    sinks.push(sink);
+                }
+            }
+            for chunk in chunks(ctx, &sinks)? {
+                runs.push(Run {
+                    label: format!("phase {phase}"),
+                    phase,
+                    sinks: chunk,
+                });
+            }
+        }
+        if !outside.is_empty() && after {
+            runs.push(Run {
+                label: "sinks beside the group, after its phases".to_string(),
+                phase: phase_count,
+                sinks: outside,
+            });
+        }
+        Ok(Self {
+            lanes,
+            size,
+            scratch,
+            hoisted,
+            runs,
+        })
+    }
+
+    /// The bindings of the output planes the loops write through a hoisted pointer.
+    pub fn pointer_outputs(&self) -> Result<Vec<String>, Refusal> {
+        self.hoisted
+            .iter()
+            .filter(|plane| plane.written)
+            .map(HoistedPlane::binding)
+            .collect()
+    }
+}
+
 /// The group's body: the scratch arrays, then the loop over the groups of the call with one loop per phase inside.
 pub fn group_body(
     ctx: *mut RxCtx,
@@ -545,59 +689,22 @@ pub fn group_body(
     unit: &Unit,
     group: u32,
 ) -> Result<Rendered, Refusal> {
-    let kernel = unit.name.as_str();
-    if unit.target != Target::Host {
-        return Err(unwritten(kernel, "a group body for the device target"));
-    }
-    let membership = door::text_field(ctx, group, "membership")?;
-    for node in door::walk_order(ctx, walk)? {
-        for (class, what) in [
-            ("GroupReduce", "a group reduce"),
-            ("GroupScan", "a group scan"),
-        ] {
-            if door::class_is(ctx, node, class)? {
-                return Err(unwritten(kernel, what));
-            }
-        }
-    }
-    let (lanes, size, bound) = match membership.as_str() {
-        "count" => {
-            let n = door::field_int(ctx, group, "count")?
-                .ok_or_else(|| fault("a count group without its lanes"))?;
-            (Lanes::Count(n), n.to_string(), Some(n))
-        }
-        "axes" => {
-            let (axes, size) = grid_axes(ctx, group, kernel)?;
-            let fixed: Option<i64> = axes
-                .iter()
-                .filter(|a| a.spanned)
-                .map(|a| a.extent.parse::<i64>().ok())
-                .product();
-            (Lanes::Axes(axes), size, fixed)
-        }
-        "key" => return Err(unwritten(kernel, "a group by key")),
-        other => return Err(fault(format!("a group of membership {other}"))),
-    };
-    let body = door::field_refs(ctx, group, "body_sinks")?.unwrap_or_default();
-    let phases = door::field_ints(ctx, group, "phases")?.unwrap_or_default();
+    let plan = Plan::read(ctx, walk, unit, group)?;
     let mut scratch = vec![];
-    for plane in door::field_refs(ctx, group, "scratch")?.unwrap_or_default() {
-        let ty = crate::body::ty_of(ctx, plane)?;
-        let bound = bound.ok_or_else(|| fault("a scratch plane in a group with no static size"))?;
-        let name = door::text_field(ctx, plane, "name")?;
-        scratch.extend(scratch_declare(&name, &ty.dtype, &ty.shape, bound)?);
+    for plane in &plan.scratch {
+        scratch.extend(scratch_declare(
+            &plane.name,
+            &plane.dtype,
+            &plane.shape,
+            plane.bound,
+        )?);
     }
-    let offset = lane_offset(&lanes);
-    let hoisted = hoisted_planes(ctx, &unit.sinks, group)?;
-    let outputs: Vec<String> = hoisted
-        .iter()
-        .filter(|plane| plane.written)
-        .map(HoistedPlane::binding)
-        .collect::<Result<_, _>>()?;
+    let offset = lane_offset(&plan.lanes);
+    let outputs = plan.pointer_outputs()?;
     let mut text: Vec<String> = vec![];
-    for plane in &hoisted {
+    for hoisted in &plan.hoisted {
         text.extend(
-            lane_pointer_declarations(&plane.binding()?, plane.rank, plane.written)
+            lane_pointer_declarations(&hoisted.binding()?, hoisted.rank, hoisted.written)
                 .into_iter()
                 .map(|line| format!("    {line}")),
         );
@@ -606,56 +713,20 @@ pub fn group_body(
         offset: &offset,
         outputs: &outputs,
     };
-    let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
-    let after = outside_runs_after(ctx, kernel, &body, &outside)?;
     let mut needs = Needs::default();
     let mut per_group: Vec<String> = vec![];
-    let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
-    if !outside.is_empty() && !after {
-        let label = ("sinks beside the group, before its phases", phase_count);
+    for run in &plan.runs {
         per_group.push(chunk_text(
             ctx,
             walk,
             unit,
-            &outside,
+            &run.sinks,
             &loop_lanes,
-            label,
+            (&run.label, run.phase),
             &mut needs,
         )?);
     }
-    for phase in 0..phase_count {
-        let mut sinks = vec![];
-        for (&sink, &of) in body.iter().zip(&phases) {
-            if of as usize == phase && !door::class_is(ctx, sink, "Barrier")? {
-                sinks.push(sink);
-            }
-        }
-        for chunk in chunks(ctx, &sinks)? {
-            let label = (format!("phase {phase}"), phase);
-            per_group.push(chunk_text(
-                ctx,
-                walk,
-                unit,
-                &chunk,
-                &loop_lanes,
-                (&label.0, label.1),
-                &mut needs,
-            )?);
-        }
-    }
-    if !outside.is_empty() && after {
-        let label = ("sinks beside the group, after its phases", phase_count);
-        per_group.push(chunk_text(
-            ctx,
-            walk,
-            unit,
-            &outside,
-            &loop_lanes,
-            label,
-            &mut needs,
-        )?);
-    }
-    match &lanes {
+    match &plan.lanes {
         Lanes::Count(n) => {
             text.push(group_function_open());
             text.extend(scratch.iter().map(|line| format!("{GROUP_INDENT}{line}")));
@@ -669,7 +740,7 @@ pub fn group_body(
                 "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {"
                     .to_string(),
             );
-            text.extend(axes_group_lines(axes, &size));
+            text.extend(axes_group_lines(axes, &plan.size));
             text.extend(per_group);
             text.push("    }".to_string());
         }

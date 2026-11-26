@@ -1,4 +1,5 @@
 //! The device arm: the translation unit around a rendered body, written for the device compiler.
+pub mod group;
 pub mod literals;
 pub mod prologue;
 pub mod render;

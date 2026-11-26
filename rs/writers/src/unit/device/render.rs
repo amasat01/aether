@@ -358,7 +358,12 @@ pub fn render(ctx: *mut RxCtx, walk: u32, input: &Render) -> Result<HostSource, 
     let (looped, fast) = if step {
         two_path_entry(ctx, walk, input, &w, &geometry)?
     } else {
-        let framed = framed_lines(ctx, input, &geometry, &sum_sinks, &mode)?;
+        // a group writes its own lanes: its body is the whole entry, with no lane prologue around it
+        let framed = if crate::unit::group::of(ctx, walk, unit)?.is_some() {
+            vec![input.body.clone()]
+        } else {
+            framed_lines(ctx, input, &geometry, &sum_sinks, &mode)?
+        };
         (unit::with_runs(framed, runs), vec![])
     };
     let exports = unit::exports(&unit.exports, true)?;
