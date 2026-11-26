@@ -136,7 +136,7 @@ fn emit_split(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Ref
     let buffer = f.open_buffer();
     let scope = open_split_scope(f, &head, &index)?;
     let base = scope.base;
-    let fan = body_fanout(f, &head, base, false)?;
+    let fan = body_fanout(f, &head, base)?;
     render_scope(f, &head, base, &fan, None, &[])?;
     let (next_names, flag) = declare_split_results(f, &head)?;
     f.close_loop(scope);

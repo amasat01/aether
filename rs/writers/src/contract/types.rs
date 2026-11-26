@@ -570,6 +570,9 @@ pub struct Unit {
     pub literal_table: bool,
     /// The functions the unit's calls name, each after the functions it calls; none when no call is made.
     pub functions: Option<Vec<FunctionUnit>>,
+    /// The scratch planes of the unit's group that the runtime holds instead of the unit's text: each is read through the slot
+    /// `spell::group::scratch_slot` names, at the slice of its group. Every other scratch plane is an array of the text.
+    pub planed_scratch: Vec<String>,
 }
 
 /// A parameter of a function the unit writes.

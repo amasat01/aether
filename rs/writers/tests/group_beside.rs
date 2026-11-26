@@ -38,7 +38,7 @@ extern "C" {
 }
 
 /// A unit as the contract writes it (the host, 64-bit floats), written from its walk.
-const UNIT: &str = r#"{"v":1,"name":"k","target":"Host","scalar":"Float64","kind":{"guard":{"Masks":[]},"lanes":false,"sink":"Plain"},"form":"Plain","sinks":[],"body":"Walk","segment":null,"thread_box":null,"rows":1,"team":null,"build":{"form":{"lazy_leaf_width":8,"rolled_fold_min":4,"uniform_run":2},"fold_form":"Auto","lanes":{"run_max":8,"tile":[4,64]},"cells_row":0,"blend":true,"warps":1},"machine":{"isa":"Arm64","vector_isa":"neon","exact_libm":true,"routed_pow":false,"caches":{"l1d_bytes":65536,"l2_bytes":4194304,"source":"probe"},"select_weight":{"float64":1.5}},"exports":{"Sizes":[1,2,3,4,5]},"literal_table":false}"#;
+const UNIT: &str = r#"{"v":1,"name":"k","target":"Host","scalar":"Float64","kind":{"guard":{"Masks":[]},"lanes":false,"sink":"Plain"},"form":"Plain","sinks":[],"body":"Walk","segment":null,"thread_box":null,"planed_scratch":[],"rows":1,"team":null,"build":{"form":{"lazy_leaf_width":8,"rolled_fold_min":4,"uniform_run":2},"fold_form":"Auto","lanes":{"run_max":8,"tile":[4,64]},"cells_row":0,"blend":true,"warps":1},"machine":{"isa":"Arm64","vector_isa":"neon","exact_libm":true,"routed_pow":false,"caches":{"l1d_bytes":65536,"l2_bytes":4194304,"source":"probe"},"select_weight":{"float64":1.5}},"exports":{"Sizes":[1,2,3,4,5]},"literal_table":false}"#;
 
 /// A node of the class over the operands.
 fn make(c: *mut RxCtx, class: &str, dtype: &str, ops: &[u32], fields: &str) -> u32 {

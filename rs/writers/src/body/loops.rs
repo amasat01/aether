@@ -490,7 +490,7 @@ fn emit_loop(f: &mut Frame, lp: u32) -> Result<(), Refusal> {
     let index = emit_header(f, &head)?;
     let scope = open_trip(f, &head, &locals, &index)?;
     let base = scope.base;
-    let sf = body_fanout(f, &head, base, true)?;
+    let sf = body_fanout(f, &head, base)?;
     render_trip_body(f, &head, &locals, base, &sf)?;
     super::stores::storeplan::body_sinks(f, lp)?;
     emit_results(f, &head, &locals)?;
@@ -604,14 +604,12 @@ fn open_trip(
     Ok(scope)
 }
 
-/// The fan-out of the body's slots (a primitive reads nothing of its own when `skip_primitives`),
-/// counting the carried results and the break values as readers too; the scope's outside
+/// The fan-out of the body's slots, counting the carried results and the break values as readers too; the scope's outside
 /// set is settled first.
 pub(crate) fn body_fanout(
     f: &mut Frame,
     head: &LoopHead,
     base: usize,
-    skip_primitives: bool,
 ) -> Result<Vec<usize>, Refusal> {
     let ctx = f.ctx();
     let mut roots: Vec<u32> = head
@@ -638,9 +636,6 @@ pub(crate) fn body_fanout(
         .chain(head.nexts.iter())
         .chain(head.exits.iter())
     {
-        if skip_primitives && door::is_a(ctx, h, "primitive")? {
-            continue;
-        }
         for o in door::operands(ctx, h)? {
             let q = f.pos_of(o)?;
             if q >= base {

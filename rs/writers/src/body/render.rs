@@ -15,7 +15,7 @@ struct WalkRows {
     nodes: Vec<Node>,
     /// The position of each operand of each node.
     opp: Vec<Vec<usize>>,
-    /// How many positions read each position (a primitive is not a reference).
+    /// How many positions read each position.
     fanout: Vec<usize>,
     /// The readers of each position: (position, operand index).
     users: Vec<Vec<(usize, usize)>>,
@@ -146,7 +146,8 @@ pub(super) fn render_frame_over<'e>(
 }
 
 /// Narrows `outside` to the positions the given sinks reach: the walk of a group holds the nodes of every phase, and a phase writes
-/// only what its own sinks read.
+/// only what its own sinks read. A group-wide reduce or scan that is read, and not itself one of the sinks, is a value bound
+/// by the phase that evaluated it: what its operand reads belongs to that phase.
 fn reached_only(
     ctx: *mut RxCtx,
     walk: u32,
@@ -155,12 +156,14 @@ fn reached_only(
     outside: &mut [bool],
 ) -> Result<(), Refusal> {
     let mut seen = vec![false; rows.nodes.len()];
-    let mut stack = sinks
+    let roots = sinks
         .iter()
         .map(|&s| at(ctx, walk, s))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut stack = roots.clone();
     while let Some(p) = stack.pop() {
-        if !std::mem::replace(&mut seen[p], true) {
+        let combines = matches!(rows.nodes[p].class, Class::GroupReduce | Class::GroupScan);
+        if !std::mem::replace(&mut seen[p], true) && (!combines || roots.contains(&p)) {
             stack.extend(rows.opp[p].iter());
         }
     }
@@ -222,13 +225,9 @@ fn load_rows(ctx: *mut RxCtx, walk: u32) -> Result<WalkRows, Refusal> {
             .iter()
             .map(|&o| at(ctx, walk, o))
             .collect::<Result<Vec<_>, _>>()?;
-        // a primitive is not a reference and not a referent: its forward expression reads what it
-        // reads
-        if n.class != Class::Primitive {
-            for (k, &p) in ps.iter().enumerate() {
-                fanout[p] += 1;
-                users[p].push((u, k))
-            }
+        for (k, &p) in ps.iter().enumerate() {
+            fanout[p] += 1;
+            users[p].push((u, k))
         }
         opp.push(ps);
     }
@@ -548,6 +547,10 @@ fn commit_sinks(f: &mut Frame, plans: &Plans) -> Result<(), Refusal> {
         if f.returns {
             let value = f.text(f.opp(p)[0]).clone();
             f.emit(format!("return {value};"));
+            continue;
+        }
+        if matches!(class, Class::GroupReduce | Class::GroupScan) {
+            scratch::evaluate(f, p);
             continue;
         }
         if class == Class::Loop {

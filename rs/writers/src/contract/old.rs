@@ -97,6 +97,7 @@ pub fn typed_of(contract: &Contract, target: Target) -> Result<Unit, Refusal> {
         exports: old.exports()?,
         literal_table: old.literal_table(),
         functions: None,
+        planed_scratch: vec![],
         form,
     })
 }

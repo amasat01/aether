@@ -61,8 +61,6 @@ pub enum Class {
     WarpLane,
     /// A store of a value held sliced across the lanes of a warp.
     WarpStore,
-    /// A primitive a loop body calls for its effect.
-    Primitive,
     /// An assignment to a plane or a mutable argument.
     Assign,
     /// A sum over the samples of a batch.
@@ -77,6 +75,10 @@ pub enum Class {
     GroupRank,
     /// The number of lanes of the lane's group.
     GroupSize,
+    /// The sum, minimum, maximum, any or all of a value over the lanes of the lane's group.
+    GroupReduce,
+    /// The running sum of a value over the lanes of the lane's group, in rank order.
+    GroupScan,
     /// A parameter of a function: the value its caller passes.
     Param,
     /// A call of a function the unit defines.
@@ -116,13 +118,14 @@ impl Class {
             "BoxStore" => Class::BoxStore,
             "WarpLane" => Class::WarpLane,
             "WarpStore" => Class::WarpStore,
-            "Primitive" => Class::Primitive,
             "Assign" => Class::Assign,
             "SampleSum" => Class::SampleSum,
             "Finish" => Class::Finish,
             "Scratch" => Class::Scratch,
             "GroupRank" => Class::GroupRank,
             "GroupSize" => Class::GroupSize,
+            "GroupReduce" => Class::GroupReduce,
+            "GroupScan" => Class::GroupScan,
             "Param" => Class::Param,
             "Call" => Class::Call,
             other => Class::Other(other.to_string()),
@@ -175,7 +178,6 @@ impl Class {
             Class::BoxStore => "BoxStore",
             Class::WarpLane => "WarpLane",
             Class::WarpStore => "WarpStore",
-            Class::Primitive => "Primitive",
             Class::Assign => "Assign",
             Class::SampleSum => "SampleSum",
             Class::AccumUpdate => "accumulating update",
@@ -183,6 +185,8 @@ impl Class {
             Class::Scratch => "Scratch",
             Class::GroupRank => "GroupRank",
             Class::GroupSize => "GroupSize",
+            Class::GroupReduce => "GroupReduce",
+            Class::GroupScan => "GroupScan",
             Class::Param => "Param",
             Class::Call => "Call",
             Class::Other(name) => name,

@@ -18,8 +18,10 @@ use crate::ir::door::{self, RxCtx};
 use crate::refuse::{fault, not_written, Refusal};
 use crate::spell::binding_name;
 use crate::spell::group::{
-    group_calls, group_function_open, lane_pointer_declarations, scratch_declare,
+    group_calls, group_function_open, lane_pointer_declarations, reduce_lines, scan_lines,
+    scratch_declare, scratch_slice, work_declare, Association, TREE_LANES,
 };
+use std::collections::HashMap;
 
 /// The indent of the statements of the group loop.
 pub(crate) const GROUP_INDENT: &str = "        ";
@@ -196,13 +198,22 @@ pub(crate) fn lane_offset(lanes: &Lanes) -> String {
     terms.join(" + ")
 }
 
-/// Every node the roots reach through their operands, the roots included.
-fn reachable(ctx: *mut RxCtx, roots: &[u32]) -> Result<Vec<u32>, Refusal> {
+/// Whether `node` is a group-wide reduce or scan.
+fn is_combine(ctx: *mut RxCtx, node: u32) -> Result<bool, Refusal> {
+    Ok(door::class_is(ctx, node, "GroupReduce")? || door::class_is(ctx, node, "GroupScan")?)
+}
+
+/// Every node the roots reach through their operands, the roots included. A reduce or scan that is not itself a root is a value
+/// its readers take from the phase that evaluated it: it is reached, and its operand is only when `through` is set (the planes
+/// and sinks of the whole group) and not for the loops of one phase.
+fn reachable(ctx: *mut RxCtx, roots: &[u32], through: bool) -> Result<Vec<u32>, Refusal> {
     let (mut seen, mut stack) = (vec![], roots.to_vec());
     while let Some(node) = stack.pop() {
         if !seen.contains(&node) {
             seen.push(node);
-            stack.extend(door::operands(ctx, node)?);
+            if through || roots.contains(&node) || !is_combine(ctx, node)? {
+                stack.extend(door::operands(ctx, node)?);
+            }
         }
     }
     Ok(seen)
@@ -254,7 +265,7 @@ pub fn hoisted_planes(
 /// plane with named axes (read through an index) and a uniform (loop-invariant already) keep their own reads.
 fn input_planes(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<HoistedPlane>, Refusal> {
     let mut planes: Vec<HoistedPlane> = vec![];
-    for node in reachable(ctx, sinks)? {
+    for node in reachable(ctx, sinks, true)? {
         if door::class_is(ctx, node, "Leaf")?
             && door::text_field(ctx, node, "role")? == "plane_in"
             && door::axes_declared(ctx, node)? == 0
@@ -343,7 +354,7 @@ fn touched(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Touch, Refusal> {
         }
     }
     let (mut read, mut read_elsewhere) = (vec![], vec![]);
-    for node in reachable(ctx, sinks)? {
+    for node in reachable(ctx, sinks, true)? {
         if door::class_is(ctx, node, "Leaf")? {
             read.push(door::text_field(ctx, node, "name")?);
         }
@@ -442,7 +453,7 @@ fn chunks(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<Vec<u32>>, Refusal> {
     let mut out: Vec<Vec<u32>> = vec![];
     let mut stored: Vec<String> = vec![];
     for &sink in sinks {
-        let reads = scratch_reads(ctx, &reachable(ctx, &[sink])?)?;
+        let reads = scratch_reads(ctx, &reachable(ctx, &[sink], false)?)?;
         if reads.iter().any(|(_, name)| stored.contains(name)) {
             stored.clear();
             out.push(vec![]);
@@ -460,7 +471,7 @@ fn chunks(ctx: *mut RxCtx, sinks: &[u32]) -> Result<Vec<Vec<u32>>, Refusal> {
 /// How far a chunk reads before and after the lane's own place: the largest negative and positive move of any scratch read.
 pub(crate) fn reach(ctx: *mut RxCtx, sinks: &[u32], kernel: &str) -> Result<(i64, i64), Refusal> {
     let (mut before, mut after) = (0i64, 0i64);
-    for (index, _) in scratch_reads(ctx, &reachable(ctx, sinks)?)? {
+    for (index, _) in scratch_reads(ctx, &reachable(ctx, sinks, false)?)? {
         if let Place::Moved(c) = place_of(ctx, index, kernel)? {
             before = before.max(-c);
             after = after.max(c);
@@ -482,11 +493,33 @@ struct LoopLanes<'a> {
     offset: &'a str,
     /// The bindings of the output planes the loops write through a hoisted pointer (`output_planes`).
     outputs: &'a [String],
+    /// The reduces and scans of the group: the loop that stores the operands of one is followed by its statements.
+    combines: &'a [Combine],
 }
 
-/// The text of one chunk of a phase: its loop over the interior lanes, and, when the chunk moves a scratch place, the loop over
-/// the edge lanes beside it.
+/// The text of one chunk of a phase: its loops, and, when the chunk stores the operands of reduces or scans, the statements that
+/// reduce or scan them.
 fn chunk_text(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+    sinks: &[u32],
+    lanes: &LoopLanes,
+    (label, phase): (&str, usize),
+    needs: &mut Needs,
+) -> Result<String, Refusal> {
+    let mut text = loop_text(ctx, walk, unit, sinks, lanes, (label, phase), needs)?;
+    for combine in lanes.combines.iter().filter(|c| sinks.contains(&c.node)) {
+        for line in combine.lines()? {
+            text.push_str(&format!("\n{GROUP_INDENT}{line}"));
+        }
+    }
+    Ok(text)
+}
+
+/// The text of the loops of one chunk of a phase: its loop over the interior lanes, and, when the chunk moves a scratch place, the
+/// loop over the edge lanes beside it.
+fn loop_text(
     ctx: *mut RxCtx,
     walk: u32,
     unit: &Unit,
@@ -557,6 +590,39 @@ pub(crate) struct ScratchPlane {
     pub bound: i64,
 }
 
+/// A group-wide reduce or scan of the group: its operand is stored by the lanes of one loop into a work array of the group, and the
+/// statements after that loop reduce or scan the array.
+pub(crate) struct Combine {
+    /// The node.
+    pub node: u32,
+    /// The operation (`sum`, `min`, `max`, `any` or `all`; a scan is a `sum`).
+    pub op: String,
+    /// The element type of the operand.
+    pub dtype: String,
+    /// Whether the node is a scan (else a reduce).
+    pub scan: bool,
+    /// How a reduce adds its terms.
+    pub association: Association,
+    /// The size bound of a group, in lanes: the length of the work array.
+    pub bound: i64,
+}
+
+impl Combine {
+    /// The statements after the loop that stored the operands: the reduction or the scan of the work array.
+    fn lines(&self) -> Result<Vec<String>, Refusal> {
+        if self.scan {
+            Ok(scan_lines(self.node))
+        } else {
+            reduce_lines(
+                self.node,
+                (&self.op, &self.dtype),
+                self.association,
+                self.bound,
+            )
+        }
+    }
+}
+
 /// One loop of lanes of a group: the sinks that run together in a phase, between the barriers that bound them.
 pub(crate) struct Run {
     /// What the loop is, for the comment that heads it.
@@ -576,27 +642,147 @@ pub(crate) struct Plan {
     pub size: String,
     /// The scratch planes the group declares.
     pub scratch: Vec<ScratchPlane>,
+    /// The group-wide reduces and scans of the group's body.
+    pub combines: Vec<Combine>,
     /// The planes the loops reach through hoisted pointers.
     pub hoisted: Vec<HoistedPlane>,
     /// The loops, in the order they run.
     pub runs: Vec<Run>,
 }
 
-impl Plan {
-    /// Reads the group `group` of the unit, refusing by name what no backend writes: a group reduce or scan, a group by key, a
-    /// scratch plane in a group with no static size, and sinks beside the group that no order serves.
-    pub fn read(ctx: *mut RxCtx, walk: u32, unit: &Unit, group: u32) -> Result<Self, Refusal> {
-        let membership = door::text_field(ctx, group, "membership")?;
-        for node in door::walk_order(ctx, walk)? {
-            for (class, what) in [
-                ("GroupReduce", "a group reduce"),
-                ("GroupScan", "a group scan"),
-            ] {
-                if door::class_is(ctx, node, class)? {
-                    return Err(unwritten(unit, what));
-                }
+/// The group-wide reduces and scans of the walk, each with how its text is written, refusing by name every one on the device and,
+/// on the host, a reduce no group size serves: a group with no static size has no work array to declare, and a float sum over more lanes than the runtime's in-leaf
+/// tree holds would continue with its pairwise levels, which the host text does not write (`order` any then adds in rank order).
+fn combines_of(
+    ctx: *mut RxCtx,
+    walk: u32,
+    unit: &Unit,
+    bound: Option<i64>,
+) -> Result<Vec<Combine>, Refusal> {
+    let mut combines = vec![];
+    for node in door::walk_order(ctx, walk)? {
+        let scan = door::class_is(ctx, node, "GroupScan")?;
+        if !scan && !door::class_is(ctx, node, "GroupReduce")? {
+            continue;
+        }
+        let what = if scan {
+            "a group scan"
+        } else {
+            "a group reduce"
+        };
+        // the device's group text holds no reduce or scan yet: its writer states them when it does
+        if unit.target == Target::Device {
+            return Err(unwritten(unit, what));
+        }
+        let bound = bound
+            .ok_or_else(|| unwritten(unit, &format!("{what} over a group with no static size")))?;
+        let (op, dtype) = (
+            door::text_field(ctx, node, "op")?,
+            crate::body::ty_of(ctx, node)?.dtype,
+        );
+        let tree_holds = bound <= TREE_LANES || !matches!(dtype.as_str(), "f64" | "f32");
+        let order = if scan {
+            String::new()
+        } else {
+            door::text_field(ctx, node, "order")?
+        };
+        let association = match (scan, order.as_str()) {
+            (false, "lane") => Association::Lane,
+            (false, "any") if !tree_holds => Association::Lane,
+            (false, "tree") if op == "sum" && !tree_holds => {
+                return Err(unwritten(
+                    unit,
+                    &format!("a group sum in the tree order over more than {TREE_LANES} lanes"),
+                ))
+            }
+            _ => Association::Tree,
+        };
+        if scan && !door::field_flag(ctx, node, "inclusive")?.unwrap_or(true) {
+            return Err(unwritten(unit, "an exclusive group scan"));
+        }
+        combines.push(Combine {
+            node,
+            op,
+            dtype,
+            scan,
+            association,
+            bound,
+        });
+    }
+    Ok(combines)
+}
+
+/// The reduces and scans among the operands of `root` (a body sink, or a reduce or scan whose operand is read), each not looked
+/// into: a combine reached through another is that one's operand.
+fn combines_read(ctx: *mut RxCtx, root: u32) -> Result<Vec<u32>, Refusal> {
+    let (mut found, mut seen) = (vec![], vec![]);
+    let mut stack = if is_combine(ctx, root)? {
+        door::operands(ctx, root)?
+    } else {
+        vec![root]
+    };
+    while let Some(node) = stack.pop() {
+        if seen.contains(&node) {
+            continue;
+        }
+        seen.push(node);
+        if is_combine(ctx, node)? {
+            found.push(node);
+        } else {
+            stack.extend(door::operands(ctx, node)?);
+        }
+    }
+    Ok(found)
+}
+
+/// The phase each reduce or scan is evaluated in, in the order of `combines`: the last one its readers allow. A sink reads the
+/// value in its own phase, so the operands are stored by the end of the phase before it; a reduce read by another is evaluated a
+/// phase before that one. The operand sees the scratch as the phase plan of the IR has it: a store into a scratch the operand reads
+/// comes before the first reader in the body, and so in a phase no later than the plan's own evaluation, which is no later than
+/// this one.
+fn evaluation_phases(
+    ctx: *mut RxCtx,
+    body: &[u32],
+    phases: &[i64],
+    combines: &[Combine],
+) -> Result<Vec<(u32, i64)>, Refusal> {
+    let mut latest: HashMap<u32, i64> = HashMap::new();
+    for (&sink, &phase) in body.iter().zip(phases) {
+        if door::is_a(ctx, sink, "sink")? {
+            for node in combines_read(ctx, sink)? {
+                latest
+                    .entry(node)
+                    .and_modify(|at| *at = (*at).min(phase - 1))
+                    .or_insert(phase - 1);
             }
         }
+    }
+    // a reduce whose operand holds another one is evaluated a phase after it
+    for _ in combines {
+        for known in latest.clone() {
+            for node in combines_read(ctx, known.0)? {
+                latest
+                    .entry(node)
+                    .and_modify(|at| *at = (*at).min(known.1 - 1))
+                    .or_insert(known.1 - 1);
+            }
+        }
+    }
+    combines
+        .iter()
+        .map(|c| match latest.get(&c.node) {
+            Some(&at) if at >= 0 => Ok((c.node, at)),
+            _ => Err(fault("a group reduce no phase of the body can evaluate")),
+        })
+        .collect()
+}
+
+impl Plan {
+    /// Reads the group `group` of the unit, refusing by name what no backend writes: a group by key, a scratch plane or a
+    /// reduce in a group with no static size, and sinks beside the group that no order serves; and, on the device, a reduce or
+    /// scan.
+    pub fn read(ctx: *mut RxCtx, walk: u32, unit: &Unit, group: u32) -> Result<Self, Refusal> {
+        let membership = door::text_field(ctx, group, "membership")?;
         let (lanes, size, bound) = match membership.as_str() {
             "count" => {
                 let n = door::field_int(ctx, group, "count")?
@@ -629,10 +815,12 @@ impl Plan {
                 bound,
             });
         }
+        let combines = combines_of(ctx, walk, unit, bound)?;
         let hoisted = hoisted_planes(ctx, &unit.sinks, group)?;
         let outside: Vec<u32> = unit.sinks.iter().copied().filter(|&s| s != group).collect();
         let after = outside_runs_after(ctx, unit, &body, &outside)?;
         let phase_count = phases.iter().max().map_or(0, |m| *m as usize + 1);
+        let evaluation = evaluation_phases(ctx, &body, &phases, &combines)?;
         let mut runs: Vec<Run> = vec![];
         if !outside.is_empty() && !after {
             runs.push(Run {
@@ -655,6 +843,19 @@ impl Plan {
                     sinks: chunk,
                 });
             }
+            // a reduce or scan ends the phase that evaluates it: its operands are stored after every sink of the phase
+            let evaluated: Vec<u32> = evaluation
+                .iter()
+                .filter(|&&(_, at)| at as usize == phase)
+                .map(|&(node, _)| node)
+                .collect();
+            if !evaluated.is_empty() {
+                runs.push(Run {
+                    label: format!("phase {phase}: the group reduces and scans it ends"),
+                    phase,
+                    sinks: evaluated,
+                });
+            }
         }
         if !outside.is_empty() && after {
             runs.push(Run {
@@ -667,6 +868,7 @@ impl Plan {
             lanes,
             size,
             scratch,
+            combines,
             hoisted,
             runs,
         })
@@ -690,14 +892,31 @@ pub fn group_body(
     group: u32,
 ) -> Result<Rendered, Refusal> {
     let plan = Plan::read(ctx, walk, unit, group)?;
-    let mut scratch = vec![];
+    // the group's own index, as each of the two group loops spells it: a count group's function is given its first lane
+    let group_index = match &plan.lanes {
+        Lanes::Count(n) => format!("(hawk_base / {n})"),
+        Lanes::Axes(_) => "hawk_g".to_string(),
+    };
+    let (mut scratch, mut slices) = (vec![], vec![]);
+    for combine in &plan.combines {
+        scratch.push(work_declare(combine.node, &combine.dtype, combine.bound)?);
+    }
     for plane in &plan.scratch {
-        scratch.extend(scratch_declare(
-            &plane.name,
-            &plane.dtype,
-            &plane.shape,
-            plane.bound,
-        )?);
+        if unit.planed_scratch.contains(&plane.name) {
+            slices.extend(scratch_slice(
+                &plane.name,
+                &plane.dtype,
+                &plane.shape,
+                (plane.bound, &group_index),
+            )?);
+        } else {
+            scratch.extend(scratch_declare(
+                &plane.name,
+                &plane.dtype,
+                &plane.shape,
+                plane.bound,
+            )?);
+        }
     }
     let offset = lane_offset(&plan.lanes);
     let outputs = plan.pointer_outputs()?;
@@ -712,6 +931,7 @@ pub fn group_body(
     let loop_lanes = LoopLanes {
         offset: &offset,
         outputs: &outputs,
+        combines: &plan.combines,
     };
     let mut needs = Needs::default();
     let mut per_group: Vec<String> = vec![];
@@ -730,6 +950,7 @@ pub fn group_body(
         Lanes::Count(n) => {
             text.push(group_function_open());
             text.extend(scratch.iter().map(|line| format!("{GROUP_INDENT}{line}")));
+            text.extend(slices.iter().map(|line| format!("{GROUP_INDENT}{line}")));
             text.extend(per_group);
             text.push("    };".to_string());
             text.extend(group_calls(*n));
@@ -740,6 +961,7 @@ pub fn group_body(
                 "    for (std::int64_t hawk_g = base; hawk_g < base + count; ++hawk_g) {"
                     .to_string(),
             );
+            text.extend(slices.iter().map(|line| format!("{GROUP_INDENT}{line}")));
             text.extend(axes_group_lines(axes, &plan.size));
             text.extend(per_group);
             text.push("    }".to_string());

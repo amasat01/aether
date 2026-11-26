@@ -224,7 +224,7 @@ record!(TeamShape, "team", [threads, warps]);
 record!(GivenBody, "given body", [text, draws_random]);
 #[rustfmt::skip]
 record!(Unit, "unit", [name, target, scalar, kind, form, sinks, walk, body, active, segment,
-    thread_box, one_step, rows, team, build, machine, exports, literal_table, functions]);
+    thread_box, one_step, rows, team, build, machine, exports, literal_table, functions, planed_scratch]);
 
 // The shapes below are irregular, so each has a short hand-written pair: a data member is a
 // one-member object `{"Name": payload}` and a member without data is its plain name.
@@ -617,6 +617,7 @@ mod tests {
             exports: Exports::Sizes([1, 2, 3, 4, 5]),
             literal_table: false,
             functions: None,
+            planed_scratch: vec![],
         }
     }
 

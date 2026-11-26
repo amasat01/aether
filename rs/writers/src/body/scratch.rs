@@ -8,7 +8,10 @@ use super::{Class, Frame, OpKind, Out};
 use crate::body::values::literal_of;
 use crate::ir::door::{self, RxCtx, Scalar};
 use crate::refuse::{nib, Refusal};
-use crate::spell::group::{scratch_cell, scratch_read, Fold, GROUP_EXTENT, GROUP_RANK, GROUP_SIZE};
+use crate::spell::group::{
+    reduce_value, scan_value, scratch_cell, scratch_read, work_store, Fold, GROUP_EXTENT,
+    GROUP_RANK, GROUP_SIZE,
+};
 
 /// Where a scratch element is: the lane's place moved by a whole number, or a place that does not depend on the lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,4 +141,24 @@ pub(crate) fn store(f: &mut Frame, p: usize) -> Result<(), Refusal> {
         ));
     }
     Ok(())
+}
+
+/// The value of a group-wide reduce or scan read in a phase after the one that evaluates it: the reduce's one value for the whole
+/// group (bound by the unit writer after the reduction), the scan's prefix of the lane's own place.
+pub(crate) fn combined(f: &Frame, p: usize) -> Out {
+    let node = f.node(p);
+    let text = if node.class == Class::GroupScan {
+        scan_value(node.h)
+    } else {
+        reduce_value(node.h)
+    };
+    Out::Value(text, None)
+}
+
+/// The evaluation of a group-wide reduce or scan: each lane stores its operand at its place of the node's work array, which the
+/// unit writer then reduces or scans.
+pub(crate) fn evaluate(f: &mut Frame, p: usize) {
+    let (node, operand) = (f.node(p).h, f.opp(p)[0]);
+    let value = f.text(operand).clone();
+    f.emit(work_store(node, &value));
 }

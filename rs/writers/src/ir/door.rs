@@ -251,21 +251,8 @@ extern "C" {
         nops: usize,
         out: *mut u32,
     ) -> c_int;
-    /// The node a value passes through.
-    pub fn rx_through(ctx: *mut RxCtx, node: u32, out: *mut u32) -> c_int;
     /// Whether two index nodes are the same index.
     pub fn rx_same_index(ctx: *mut RxCtx, a: u32, b: u32, out: *mut c_int) -> c_int;
-}
-
-/// The node a value passes through (the node itself when it has none).
-pub fn through(ctx: impl Into<CtxPtr>, h: u32) -> Result<u32, Refusal> {
-    let ctx = ctx.into().raw();
-    let mut out = h;
-    let st = unsafe { rx_through(ctx, h, &mut out) };
-    if st != RX_OK {
-        return Err(failed(ctx, st));
-    }
-    Ok(out)
 }
 
 /// Whether two indexed accesses are at the same index.

@@ -368,7 +368,7 @@ fn emit_cut(f: &mut Frame, cuts: &mut Vec<CutLoop>, lp: u32) -> Result<(), Refus
     };
     let scope = open_cut_scope(f, &head, &t, &index)?;
     let base = scope.base;
-    let fan = body_fanout(f, &head, base, false)?;
+    let fan = body_fanout(f, &head, base)?;
     t.flag = f.names.exit_flag(pos).text;
     t.nexts = (0..t.names.len())
         .map(|j| f.names.next(pos, j).text)

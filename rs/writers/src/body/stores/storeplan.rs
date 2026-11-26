@@ -12,7 +12,7 @@ use crate::body::values::{component_index, literal_of, text_field};
 use crate::body::{placed, Frame, Out};
 use crate::body::{Class, Name, NameKind};
 use crate::ir::door::Scalar;
-use crate::ir::door::{self, same_index, through, RxCtx};
+use crate::ir::door::{self, same_index, RxCtx};
 use crate::kind::OpKind;
 use crate::refuse::{fault, nib, Refusal};
 use crate::spell::carry_type;
@@ -87,7 +87,6 @@ fn number(ctx: *mut RxCtx, h: u32) -> Result<f64, Refusal> {
 /// The bounds of an index-valued node from its clamps and constant offsets alone; unknown is
 /// unbounded.
 fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), Refusal> {
-    let h = through(ctx, h)?;
     let class = Class::of(ctx, h)?;
     if class == Class::Const {
         let v = number(ctx, h)?;
@@ -126,10 +125,10 @@ fn interval(ctx: *mut RxCtx, h: u32) -> Result<(f64, f64), Refusal> {
 
 /// `(base, offset)` of `key = base + constants`; the base is none when the key is all constant.
 fn split_key(ctx: *mut RxCtx, key: u32) -> Result<(Option<u32>, i64), Refusal> {
-    let (mut key, mut offset) = (through(ctx, key)?, 0i64);
+    let (mut key, mut offset) = (key, 0i64);
     while OpKind::of_op(ctx, key)? == Some(OpKind::Add) {
         let operands = door::operands(ctx, key)?;
-        let (a, b) = (through(ctx, operands[0])?, through(ctx, operands[1])?);
+        let (a, b) = (operands[0], operands[1]);
         if door::class_is(ctx, b, "Const")? {
             key = a;
             offset += number(ctx, b)? as i64
@@ -182,10 +181,8 @@ impl Plan {
     }
 
     /// Records that `by` reads `child`.
-    fn use_of(&mut self, ctx: *mut RxCtx, child: u32, by: u32) -> Result<(), Refusal> {
-        let child = through(ctx, child)?;
+    fn use_of(&mut self, child: u32, by: u32) {
         self.uses.entry(child).or_default().push(by);
-        Ok(())
     }
 
     /// The use graph and scopes; the stores found, in the walk's order.
@@ -204,18 +201,18 @@ impl Plan {
                 stores.push(h)
             }
             for child in door::operands(ctx, h)? {
-                self.use_of(ctx, child, h)?
+                self.use_of(child, h)
             }
             if door::class_is(ctx, h, "Loop")? {
                 let mut roots = door::field_refs(ctx, h, "nexts")?.unwrap_or_default();
                 roots.extend(door::field_refs(ctx, h, "exit_values")?.unwrap_or_default());
                 roots.extend(door::field_refs(ctx, h, "exit_cond")?.unwrap_or_default());
                 for root in roots {
-                    self.use_of(ctx, root, h)?
+                    self.use_of(root, h)
                 }
                 for sink in door::field_refs(ctx, h, "body_sinks")?.unwrap_or_default() {
                     for operand in door::operands(ctx, sink)? {
-                        self.use_of(ctx, operand, sink)?
+                        self.use_of(operand, sink)
                     }
                 }
                 let mut body = door::body_nodes(ctx, h)?;
@@ -232,7 +229,7 @@ impl Plan {
         let (mut chain, mut base) = (false, node);
         while OpKind::of_op(f.ctx(), base)? == Some(OpKind::AddAt) && one_index(f.ctx(), base)? {
             chain = true;
-            base = through(f.ctx(), door::operands(f.ctx(), base)?[0])?;
+            base = door::operands(f.ctx(), base)?[0];
         }
         Ok(chain
             && matches!(
@@ -290,11 +287,7 @@ impl Plan {
     fn link(&self, f: &Frame, node: u32) -> Result<Link, Refusal> {
         let ctx = f.ctx();
         let operands = door::operands(ctx, node)?;
-        let (base, key, mut value) = (
-            through(ctx, operands[0])?,
-            through(ctx, operands[1])?,
-            through(ctx, operands[2])?,
-        );
+        let (base, key, mut value) = (operands[0], operands[1], operands[2]);
         let mut acc = OpKind::of_op(f.ctx(), node)? == Some(OpKind::AddAt);
         let (mut read, mut add) = (None, None);
         if !acc {
@@ -355,16 +348,15 @@ impl Plan {
         }
         let operands = door::operands(ctx, value)?;
         for (read, x) in [(operands[0], operands[1]), (operands[1], operands[0])] {
-            let read = through(ctx, read)?;
             if !(door::class_is(ctx, read, "Op")?
                 && self.users(read) == [value]
-                && through(ctx, door::operands(ctx, read)?[0])? == base)
+                && door::operands(ctx, read)?[0] == base)
             {
                 continue;
             }
             let kind = OpKind::of(f.ctx(), read)?;
             let same = if kind == OpKind::ComponentAt {
-                same_index(ctx, through(ctx, door::operands(ctx, read)?[1])?, key)?
+                same_index(ctx, door::operands(ctx, read)?[1], key)?
             } else if kind == OpKind::Component && door::class_is(ctx, key, "Const")? {
                 let wanted = number(ctx, key)?;
                 matches!(component_index(ctx, read)?.as_slice(), [only] if *only as f64 == wanted)
@@ -372,7 +364,7 @@ impl Plan {
                 false
             };
             if same {
-                return Ok(Some((through(ctx, x)?, read, value)));
+                return Ok(Some((x, read, value)));
             }
         }
         Ok(None)
@@ -403,7 +395,7 @@ impl Plan {
             links.iter().enumerate().map(|(i, l)| (l.node, i)).collect();
         let mut below: HashMap<u32, u32> = HashMap::new();
         for link in &links {
-            let base = through(ctx, door::operands(ctx, link.node)?[0])?;
+            let base = door::operands(ctx, link.node)?[0];
             if by_node.contains_key(&base)
                 && self.sole(base, link)
                 && self.scope.get(&base) == self.scope.get(&link.node)
@@ -434,7 +426,7 @@ impl Plan {
             }
             let mut run = vec![link.clone()];
             loop {
-                let base = through(ctx, door::operands(ctx, run[0].node)?[0])?;
+                let base = door::operands(ctx, run[0].node)?[0];
                 match by_node.get(&base) {
                     Some(&i) if below.get(&base) == Some(&run[0].node) => {
                         run.insert(0, links[i].clone())
@@ -639,7 +631,7 @@ pub(crate) fn store(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
 fn emit_run(f: &mut Frame, p: usize, run: &[Link]) -> Result<Out, Refusal> {
     let ctx = f.ctx();
     let ty = f.node(p).ty.clone();
-    let base = through(ctx, door::operands(ctx, run[0].node)?[0])?;
+    let base = door::operands(ctx, run[0].node)?[0];
     let token_name = f.names.store_copy();
     let token = token_name.text.clone();
     let held = f.arg(base)?;

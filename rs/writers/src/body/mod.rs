@@ -461,6 +461,7 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
         Class::Select => values::select(f, p)?,
         Class::GroupRank => scratch::rank(),
         Class::GroupSize => scratch::size(),
+        Class::GroupReduce | Class::GroupScan => scratch::combined(f, p),
         // a scratch plane is a name for its arrays; only the reads and stores of it write text
         Class::Scratch => {
             f.set_text(p, String::new());
@@ -485,15 +486,6 @@ pub(crate) fn node_out(f: &mut Frame, p: usize) -> Result<Out, Refusal> {
             Out::Bound
         }
         Class::WarpLane => Out::Value(crate::spell::WARP_LANE.to_string(), None),
-        // an extension primitive stands for its forward expression
-        Class::Primitive => {
-            let forward = door::field_refs(f.ctx(), f.node(p).h, "forward")?.unwrap_or_default();
-            let h = *forward
-                .first()
-                .ok_or_else(|| nib("a primitive with no forward expression"))?;
-            f.set_text(p, f.arg(h)?);
-            Out::Bound
-        }
         Class::Param => function::param(f, p)?,
         Class::Call => function::call(f, p)?,
         other => return Err(nib(format!("node class {other}"))),
