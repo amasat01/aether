@@ -63,7 +63,7 @@ pub fn group_body(
     unit: &Unit,
     group: u32,
 ) -> Result<Rendered, Refusal> {
-    let plan = Plan::read(ctx, walk, unit, group)?;
+    let plan = Plan::read(ctx, unit, group)?;
     let outputs = plan.pointer_outputs()?;
     let offset = lane_offset(&plan.lanes);
     let mut text = carve(&plan.scratch)?;

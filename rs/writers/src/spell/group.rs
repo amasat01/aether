@@ -132,12 +132,22 @@ pub fn scratch_slot(name: &str) -> String {
     format!("group_scratch_{name}")
 }
 
+/// The declaration of the pointer `array` to `element`s held by the runtime in the plane bound as `plane`: group `group` (an index
+/// expression) starts `stride` elements in and the array `first` elements after that. `__restrict` states what the arrays are:
+/// disjoint ranges, so the compiler vectorises the loops over them as it does over local arrays. The plane's view has the walk's
+/// element type (`Int` for a whole number) and the plane its own width, so the pointer is taken from the view's address as the
+/// element type of the array.
+fn plane_slice(array: &str, element: &str, plane: &str, offset: (&str, i64, i64)) -> String {
+    let (group, stride, first) = offset;
+    format!(
+        "{element}* __restrict {array} = reinterpret_cast<{element}*>({plane}.data()) + {group} * {stride} + {first};"
+    )
+}
+
 /// The declarations of the arrays of the scratch plane `name` held by the runtime, for a group of at most `bound` lanes: one
 /// per component of a value, each the same name and element type as the local array of `scratch_declare`, so the phases address
 /// both alike. The plane holds the arrays of group `group` (an index expression) one after another, `bound` elements each,
-/// `bound` times the components apart from the next group's. `__restrict` states what the arrays are: disjoint ranges, so the
-/// compiler vectorises the phase loops as it does over local arrays. The plane's view has the walk's element type (`Int` for a
-/// whole number) and the plane its own width, so the pointer is taken from the view's address as the scratch's element type.
+/// `bound` times the components apart from the next group's.
 pub fn scratch_slice(
     name: &str,
     dtype: &str,
@@ -151,10 +161,7 @@ pub fn scratch_slice(
     Ok((0..components)
         .map(|k| {
             let array = scratch_array(name, (!shape.is_empty()).then_some(k));
-            let first = k as i64 * bound;
-            format!(
-                "{element}* __restrict {array} = reinterpret_cast<{element}*>({plane}.data()) + {group} * {stride} + {first};"
-            )
+            plane_slice(&array, element, &plane, (group, stride, k as i64 * bound))
         })
         .collect())
 }
@@ -181,7 +188,8 @@ pub enum Association {
     Lane,
 }
 
-/// The array that holds the operand of the group-wide reduce or scan node `node`, one element per lane of the group.
+/// The array that holds the operand of the group-wide reduce or scan node `node`, one element per lane of the group. The name is
+/// also the one of the work entry the unit's group record states for the array.
 pub fn work_array(node: u32) -> String {
     format!("hawk_work_{node}")
 }
@@ -202,6 +210,20 @@ pub fn work_declare(node: u32, dtype: &str, bound: i64) -> Result<String, Refusa
         "{} {}[{bound}];",
         scratch_type(dtype)?,
         work_array(node)
+    ))
+}
+
+/// The declaration of the work array of `node` held by the runtime, for a group of at most `bound` lanes: the same name and
+/// element type as the local array of `work_declare`, so the reduction and the scan address both alike. The slot is the one the
+/// record's work entry of the array names (`work_array`), and group `group` (an index expression) starts `bound` elements after the
+/// previous one.
+pub fn work_slice(node: u32, dtype: &str, (bound, group): (i64, &str)) -> Result<String, Refusal> {
+    let plane = binding_name("lookup", 0, &scratch_slot(&work_array(node)))?;
+    Ok(plane_slice(
+        &work_array(node),
+        scratch_type(dtype)?,
+        &plane,
+        (group, bound, 0),
     ))
 }
 
@@ -361,6 +383,21 @@ mod tests {
                 "std::int32_t scr_v_1[8];",
                 "std::int32_t scr_v_2[8];"
             ]
+        );
+    }
+
+    /// Oracle: the declarations by hand. A work array of 8 lanes is `hawk_work_5` in both realisations: a local array, or the slice
+    /// of group `g` in the runtime's plane, which starts `g * 8` elements in; the loops that reduce and scan it name it alike.
+    #[test]
+    fn a_planed_work_array_is_the_same_array_at_the_slice_of_its_group() {
+        assert_eq!(work_declare(5, "f64", 8).unwrap(), "Real hawk_work_5[8];");
+        assert_eq!(
+            work_slice(5, "f64", (8, "hawk_g")).unwrap(),
+            "Real* __restrict hawk_work_5 = reinterpret_cast<Real*>(lut_group_scratch_hawk_work_5.data()) + hawk_g * 8 + 0;"
+        );
+        assert_eq!(
+            work_slice(2, "bool", (4, "(hawk_base / 4)")).unwrap(),
+            "bool* __restrict hawk_work_2 = reinterpret_cast<bool*>(lut_group_scratch_hawk_work_2.data()) + (hawk_base / 4) * 4 + 0;"
         );
     }
 

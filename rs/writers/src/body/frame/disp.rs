@@ -36,8 +36,12 @@ impl Frame<'_> {
                     | Class::TapeWrite
             ) && !(matches!(class, Class::AccumUpdate | Class::StoreUpdate)
                 && super::super::stores::sinks::returns_old(self, h).unwrap_or(false));
+            // a group reduce or scan is a value its readers take, except in the loop that evaluates it: there it is a sink
+            // whose operand is stored, and rendering its value would read the total before it is declared
+            let evaluated_here =
+                matches!(class, Class::GroupReduce | Class::GroupScan) && self.sinks().contains(&h);
             let disp = Disp::of(
-                committed_at_end,
+                committed_at_end || evaluated_here,
                 placed::is_absorbed(self, p) && !literal,
                 self.stores.skip.contains(&h),
                 per_part.get(p) == Some(&true),
